@@ -308,6 +308,26 @@ enum Next {
     End,
 }
 
+/// A verdict counts only when it is the whole last non-empty line of the
+/// output, ignoring surrounding whitespace and markdown emphasis, so
+/// "NOT APPROVED" or a verdict followed by remarks does not pass.
+fn verdict_matches(output: &str, marker: &str) -> bool {
+    let clean = |text: &str| {
+        text.trim()
+            .trim_matches(|c: char| {
+                matches!(c, '*' | '_' | '`' | '~' | '.' | '!') || c.is_whitespace()
+            })
+            .to_owned()
+    };
+    let marker = clean(marker);
+    !marker.is_empty()
+        && output
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| clean(line) == marker)
+}
+
 fn next_index(
     spec: &Spec,
     index: usize,
@@ -316,7 +336,7 @@ fn next_index(
 ) -> Result<Next> {
     let step = &spec.step[index];
     if let Some(until) = &step.until {
-        if !output.contains(until) {
+        if !verdict_matches(output, until) {
             let used = loops.entry(step.id.clone()).or_default();
             if let Some(target) = &step.otherwise {
                 if *used < step.max_loops {
@@ -721,11 +741,38 @@ mod tests {
         dtask.await.unwrap();
     }
 
+    #[test]
+    fn verdict_must_be_the_last_line() {
+        let ok = "VERDICT: APPROVED";
+        for output in [
+            "VERDICT: APPROVED",
+            "  VERDICT: APPROVED  \n\n",
+            "All good.\nVERDICT: APPROVED",
+            "**VERDICT: APPROVED**",
+            "`VERDICT: APPROVED`.",
+        ] {
+            assert!(verdict_matches(output, ok), "{output:?}");
+        }
+        for output in [
+            "",
+            "   \n",
+            "NOT VERDICT: APPROVED",
+            "Not APPROVED: no error handling",
+            "Almost VERDICT: APPROVED, but fix the tests",
+            "VERDICT: APPROVED\nhowever the tests fail",
+            "VERDICT: APPROVED?",
+            "APPROVED",
+        ] {
+            assert!(!verdict_matches(output, ok), "{output:?}");
+        }
+        assert!(!verdict_matches("anything", ""));
+    }
+
     #[tokio::test]
     async fn looping_handoff_and_failures() {
         let local = LocalSet::new();
         local
-            .run_until(looping_case(&["needs changes", "APPROVED"], true))
+            .run_until(looping_case(&["needs changes", "VERDICT: APPROVED"], true))
             .await;
         local
             .run_until(looping_case(&["bad", "bad", "bad"], false))
@@ -755,7 +802,7 @@ mod tests {
 
     async fn success_ends_case() {
         let hub = Hub::new();
-        let (claude, ctask, prompts) = fake(&hub, AgentKind::Claude, &["APPROVED"], false);
+        let (claude, ctask, prompts) = fake(&hub, AgentKind::Claude, &["VERDICT: APPROVED"], false);
         let (codex, dtask, fixes) = fake(&hub, AgentKind::Codex, &["implementation"], false);
         let (_tx, stop) = watch::channel(false);
         let spec = builtins().unwrap().remove(0);
