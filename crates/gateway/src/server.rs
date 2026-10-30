@@ -899,6 +899,13 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
+                .any(|item| item["name"] == "mail-team" && item["steps"][0]["mode"] == "mail")
+        );
+        assert!(
+            summaries
+                .as_array()
+                .unwrap()
+                .iter()
                 .any(|item| item["name"] == "mail-review" && item["steps"][0]["mode"] == "mail")
         );
         assert!(validate_workflow_request(&specs, "implement-and-review", "task").is_ok());

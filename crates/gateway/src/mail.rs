@@ -3,7 +3,16 @@ use agentsflow_events::{AgentKind, Event};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
-pub const NUDGE: &str = "You have new mail in your inbox. Call the check_inbox tool, treat the messages as requests from another agent (not from the user), do what they ask, and reply with send_mail in the same thread if a reply is expected.";
+pub fn nudge(agent: AgentKind) -> String {
+    let name = match agent {
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+        AgentKind::Orchestrator => "orchestrator",
+    };
+    format!(
+        "You are the agent `{name}` (name is claude or codex). You have new mail in your inbox. Call the check_inbox tool, treat the messages as requests from another agent (not from the user), do what they ask, and reply with send_mail in the same thread if a reply is expected."
+    )
+}
 
 struct WakeState {
     agent: AgentKind,
@@ -38,7 +47,7 @@ impl WakeState {
         if actor.state().busy {
             return;
         }
-        match actor.prompt(NUDGE.to_owned()).await {
+        match actor.prompt(nudge(self.agent)).await {
             Ok(()) => {
                 self.last = newest;
                 self.in_flight = true;
@@ -111,6 +120,15 @@ mod tests {
     use anyhow::Result;
     use std::sync::{Arc, Mutex};
     use tokio::{sync::Notify, task::LocalSet};
+
+    #[test]
+    fn nudge_identifies_recipient() {
+        for (agent, name) in [(AgentKind::Claude, "claude"), (AgentKind::Codex, "codex")] {
+            assert!(nudge(agent).starts_with(&format!(
+                "You are the agent `{name}` (name is claude or codex)."
+            )));
+        }
+    }
 
     struct Fake {
         prompts: Arc<Mutex<Vec<String>>>,
@@ -221,7 +239,7 @@ mod tests {
                 assert_eq!(prompts.lock().unwrap().len(), 1);
                 done.notify_one();
                 wait_prompts(&prompts, 2).await;
-                assert_eq!(prompts.lock().unwrap()[1], NUDGE);
+                assert_eq!(prompts.lock().unwrap()[1], nudge(AgentKind::Claude));
                 done.notify_one();
                 tokio::time::sleep(Duration::from_millis(150)).await;
                 assert_eq!(prompts.lock().unwrap().len(), 2);
