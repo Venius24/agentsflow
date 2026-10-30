@@ -6,9 +6,10 @@ pub use codex_codes::SandboxMode;
 use codex_codes::{
     AppServerBuilder, AskForApproval, AsyncClient, CommandExecutionStatus, McpToolCallStatus,
     Notification, PatchApplyStatus, RequestId, ServerMessage, ServerRequest, ThreadItemPayload,
-    ThreadStartParams, TurnStartParams, TurnStatus, UserInput,
+    ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus, UserInput,
 };
 use serde_json::json;
+use tokio::sync::mpsc;
 
 pub fn map_message(message: &ServerMessage) -> Vec<Event> {
     match message {
@@ -205,6 +206,10 @@ pub struct CodexSession {
     client: AsyncClient,
     thread_id: String,
     pending: HashMap<String, RequestId>,
+    /// The turn `turn/interrupt` has to name; set by `send`, cleared when it completes.
+    turn_id: Option<String>,
+    interrupt_tx: mpsc::UnboundedSender<()>,
+    interrupt_rx: mpsc::UnboundedReceiver<()>,
 }
 
 impl CodexSession {
@@ -271,15 +276,21 @@ impl CodexSession {
                 return Err(error.into());
             }
         };
+        let (interrupt_tx, interrupt_rx) = mpsc::unbounded_channel();
         Ok(Self {
             client,
             thread_id: thread.thread.id,
             pending: HashMap::new(),
+            turn_id: None,
+            interrupt_tx,
+            interrupt_rx,
         })
     }
 
     pub async fn send(&mut self, prompt: &str) -> Result<()> {
-        self.client
+        while self.interrupt_rx.try_recv().is_ok() {}
+        let turn = self
+            .client
             .turn_start(&TurnStartParams {
                 thread_id: self.thread_id.clone(),
                 input: vec![UserInput::Text {
@@ -289,15 +300,26 @@ impl CodexSession {
                 ..Default::default()
             })
             .await?;
+        self.turn_id = Some(turn.turn.id);
         Ok(())
     }
 
+    /// Interrupt requests are served here, between reads of the app-server:
+    /// `next_message` keeps a partial frame when it is dropped, and
+    /// `turn/interrupt` buffers whatever arrives before its response.
     pub async fn next_events(&mut self) -> Result<Vec<Event>> {
-        let message = self
-            .client
-            .next_message()
-            .await?
-            .context("codex app-server closed")?;
+        let message = loop {
+            tokio::select! {
+                biased;
+                _ = self.interrupt_rx.recv() => self.interrupt_turn().await?,
+                message = self.client.next_message() => {
+                    break message?.context("codex app-server closed")?;
+                }
+            }
+        };
+        if let ServerMessage::Notification(Notification::TurnCompleted(_)) = &message {
+            self.turn_id = None;
+        }
         if let ServerMessage::Request { id, request } = &message {
             if !matches!(
                 request,
@@ -315,6 +337,33 @@ impl CodexSession {
             self.pending.insert(key, id.clone());
         }
         Ok(map_message(&message))
+    }
+
+    /// A JSON-RPC refusal means the turn is already over, its `turn/completed`
+    /// is on the way; a broken connection is an error of the session.
+    async fn interrupt_turn(&mut self) -> Result<()> {
+        let Some(turn_id) = self.turn_id.clone() else {
+            return Ok(());
+        };
+        let params = TurnInterruptParams {
+            thread_id: self.thread_id.clone(),
+            turn_id,
+        };
+        match self.client.turn_interrupt(&params).await {
+            Err(codex_codes::Error::JsonRpc { code, message }) => {
+                eprintln!("codex turn/interrupt refused ({code}): {message}");
+                Ok(())
+            }
+            result => Ok(result.map(drop)?),
+        }
+    }
+
+    pub fn interrupter(&self) -> crate::Interrupter {
+        let tx = self.interrupt_tx.clone();
+        crate::Interrupter::new(move || {
+            tx.send(())
+                .map_err(|_| anyhow::anyhow!("codex session closed"))
+        })
     }
 
     pub async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
@@ -346,6 +395,9 @@ impl crate::Agent for CodexSession {
     }
     async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
         Self::respond(self, request_id, allow).await
+    }
+    fn interrupter(&self) -> crate::Interrupter {
+        Self::interrupter(self)
     }
     async fn shutdown(self) -> Result<()> {
         Self::shutdown(self).await

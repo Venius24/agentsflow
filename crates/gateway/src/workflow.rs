@@ -570,6 +570,9 @@ async fn wait_turn(
             } => output = text,
             Event::Error { message } => last_error = Some(message),
             Event::Done { reason } => {
+                if reason == "interrupted" {
+                    bail!("interrupted");
+                }
                 if reason == "error" {
                     bail!("{}", last_error.unwrap_or(reason));
                 }
@@ -1391,6 +1394,33 @@ mod tests {
             }
         });
         (actor, task, saved)
+    }
+
+    #[tokio::test]
+    async fn interrupted_turn_fails_workflow() {
+        LocalSet::new().run_until(async {
+            let hub = Hub::new();
+            let (actor, task) = crate::hub::spawn(hub.clone(), AgentId::from("main"), true, || async {
+                Ok(crate::testing::Silent::new(1, false))
+            });
+            let agents = HashMap::from([(AgentId::from("main"), actor.clone())]);
+            let spec = Spec::parse("name='named'\n[[step]]\nid='work'\nagent='main'\nprompt='{task}'").unwrap();
+            let (_tx, stop) = watch::channel(false);
+            let interrupter = actor.clone();
+            let interrupt_task = tokio::task::spawn_local(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while !interrupter.state().busy { tokio::task::yield_now().await; }
+                    interrupter.interrupt().await.unwrap();
+                }).await.unwrap();
+            });
+            assert!(!execute(&hub, &agents, &spec, "hello", "id", stop).await);
+            interrupt_task.await.unwrap();
+            assert!(hub.subscribe().0.iter().any(|e| matches!(&e.event,
+                Event::Workflow { status: WorkflowStatus::Failed, detail, .. } if detail == "interrupted"
+            )));
+            actor.shutdown().await;
+            task.await.unwrap();
+        }).await;
     }
 
     #[tokio::test]

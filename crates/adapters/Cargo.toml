@@ -11,7 +11,7 @@ anyhow.workspace = true
 claude-codes.workspace = true
 codex-codes.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process", "sync", "rt"] }
 
 [lints]
 workspace = true

@@ -8,10 +8,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use agentsflow_adapters::Agent;
+use agentsflow_adapters::{Agent, Interrupter};
 use agentsflow_events::{AgentId, Envelope, Event, Role, WorkflowStatus};
 use anyhow::Result;
 use serde::Serialize;
@@ -487,6 +487,7 @@ impl Hub {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubError {
     Busy,
+    NotBusy,
     NotFound,
     Closed,
 }
@@ -506,6 +507,7 @@ type Reply = oneshot::Sender<std::result::Result<(), HubError>>;
 enum Command {
     Prompt(String, Reply),
     Respond(String, bool, Reply),
+    Interrupt(Reply),
     Shutdown(Reply),
 }
 
@@ -547,6 +549,21 @@ impl Actor {
         }
         rx.await.unwrap_or(Err(HubError::Closed))
     }
+    /// Asks the agent to stop the turn it is working on; the turn then ends
+    /// with a `done` event whose reason is "interrupted".
+    pub async fn interrupt(&self) -> std::result::Result<(), HubError> {
+        let (tx, rx) = oneshot::channel();
+        {
+            let state = self.state.lock().unwrap();
+            if !state.busy {
+                return Err(HubError::NotBusy);
+            }
+            if self.tx.send(Command::Interrupt(tx)).is_err() {
+                return Err(HubError::Closed);
+            }
+        }
+        rx.await.unwrap_or(Err(HubError::Closed))
+    }
     pub async fn shutdown(&self) {
         // Interrupts a turn that is blocked in `next_events`, which cannot
         // observe the command channel; the session is discarded anyway.
@@ -558,7 +575,25 @@ impl Actor {
     }
 }
 
+/// How long an interrupted turn may take to end before its session is dropped.
+const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
+
 pub fn spawn<A, F, Fut>(hub: Hub, agent: AgentId, yes: bool, factory: F) -> (Actor, JoinHandle<()>)
+where
+    A: Agent + 'static,
+    F: Fn() -> Fut + 'static,
+    Fut: Future<Output = Result<A>> + 'static,
+{
+    spawn_with(hub, agent, yes, factory, INTERRUPT_GRACE)
+}
+
+fn spawn_with<A, F, Fut>(
+    hub: Hub,
+    agent: AgentId,
+    yes: bool,
+    factory: F,
+    grace: Duration,
+) -> (Actor, JoinHandle<()>)
 where
     A: Agent + 'static,
     F: Fn() -> Fut + 'static,
@@ -575,7 +610,9 @@ where
         stop: Arc::new(stop_tx),
         state: state.clone(),
     };
-    let task = tokio::task::spawn_local(run_actor(hub, agent, yes, factory, state, rx, stop_rx));
+    let task = tokio::task::spawn_local(run_actor(
+        hub, agent, yes, factory, grace, state, rx, stop_rx,
+    ));
     (actor, task)
 }
 
@@ -587,11 +624,47 @@ async fn close<A: Agent>(session: &mut Option<A>) {
     }
 }
 
+enum Turn {
+    Finished,
+    /// The session cannot go on (interrupt never completed): drop it, keep the actor.
+    Discard,
+    Shutdown,
+}
+
+fn request_interrupt(
+    interrupter: &Interrupter,
+    interrupted: &mut Option<tokio::time::Instant>,
+    grace: Duration,
+) -> std::result::Result<(), HubError> {
+    if interrupted.is_some() {
+        return Ok(());
+    }
+    match interrupter.interrupt() {
+        Ok(()) => {
+            *interrupted = Some(tokio::time::Instant::now() + grace);
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("agent interrupt: {error:#}");
+            Err(HubError::Closed)
+        }
+    }
+}
+
+async fn grace_elapsed(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_actor<A, F, Fut>(
     hub: Hub,
     agent: AgentId,
     yes: bool,
     factory: F,
+    grace: Duration,
     state: Arc<Mutex<AgentState>>,
     mut rx: mpsc::UnboundedReceiver<Command>,
     mut stop: watch::Receiver<bool>,
@@ -618,32 +691,77 @@ async fn run_actor<A, F, Fut>(
                     },
                 );
                 let _ = reply.send(Ok(()));
+                let mut interrupted = None;
                 let result = async {
                     if session.is_none() {
                         session = Some(factory().await?);
                     }
                     let active = session.as_mut().expect("session was created");
                     active.send(&prompt).await?;
+                    let interrupter = active.interrupter();
                     loop {
-                        let events = tokio::select! {
-                            biased;
-                            _ = stop.wait_for(|stopped| *stopped) => return Ok(true),
-                            events = active.next_events() => events?,
+                        // `next_events` is not cancel-safe: once started it is only
+                        // dropped together with the session (shutdown, stuck interrupt).
+                        let events = {
+                            let mut next = std::pin::pin!(active.next_events());
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    _ = stop.wait_for(|stopped| *stopped) => return Ok(Turn::Shutdown),
+                                    command = rx.recv() => match command {
+                                        Some(Command::Interrupt(reply)) => {
+                                            let _ = reply.send(request_interrupt(&interrupter, &mut interrupted, grace));
+                                        }
+                                        Some(Command::Prompt(_, reply)) => {
+                                            let _ = reply.send(Err(HubError::Busy));
+                                        }
+                                        Some(Command::Respond(_, _, reply)) => {
+                                            let _ = reply.send(Err(HubError::NotFound));
+                                        }
+                                        Some(Command::Shutdown(reply)) => {
+                                            let _ = reply.send(Ok(()));
+                                            return Ok(Turn::Shutdown);
+                                        }
+                                        None => return Ok(Turn::Shutdown),
+                                    },
+                                    _ = grace_elapsed(interrupted) => {
+                                        hub.publish(
+                                            agent.clone(),
+                                            &session_id,
+                                            Event::Done { reason: "interrupted".into() },
+                                        );
+                                        return Ok(Turn::Discard);
+                                    }
+                                    events = &mut next => break events?,
+                                }
+                            }
                         };
                         for event in events {
+                            if interrupted.is_some() && matches!(event, Event::Error { .. }) {
+                                continue;
+                            }
+                            let event = match event {
+                                Event::Done { .. } if interrupted.is_some() => Event::Done {
+                                    reason: "interrupted".into(),
+                                },
+                                event => event,
+                            };
                             let done = matches!(event, Event::Done { .. });
                             let permission = match &event {
                                 Event::PermissionRequest { id, .. } => Some(id.clone()),
                                 _ => None,
                             };
                             if let Some(id) = &permission {
-                                if !yes {
+                                if !yes && interrupted.is_none() {
                                     state.lock().unwrap().pending.push(id.clone());
                                 }
                             }
                             hub.publish(agent.clone(), &session_id, event);
                             if let Some(id) = permission {
-                                let (allow, response) = if yes {
+                                let mut interrupt_reply = None;
+                                let (allow, response) = if interrupted.is_some() {
+                                    (false, None)
+                                } else if yes {
                                     (true, None)
                                 } else {
                                     loop {
@@ -659,16 +777,23 @@ async fn run_actor<A, F, Fut>(
                                             Some(Command::Prompt(_, reply)) => {
                                                 let _ = reply.send(Err(HubError::Busy));
                                             }
+                                            // The pending request is denied below, then
+                                            // the interrupt is passed on to the agent.
+                                            Some(Command::Interrupt(reply)) => {
+                                                interrupt_reply = Some(reply);
+                                                break (false, None);
+                                            }
                                             Some(Command::Shutdown(reply)) => {
                                                 let _ = reply.send(Ok(()));
-                                                return Ok(true);
+                                                return Ok(Turn::Shutdown);
                                             }
-                                            None => return Ok(true),
+                                            None => return Ok(Turn::Shutdown),
                                         }
                                     }
                                 };
                                 match active.respond(&id, allow).await {
                                     Ok(()) => {
+                                        state.lock().unwrap().pending.retain(|open| open != &id);
                                         hub.publish(
                                             agent.clone(),
                                             &session_id,
@@ -676,6 +801,13 @@ async fn run_actor<A, F, Fut>(
                                         );
                                         if let Some(reply) = response {
                                             let _ = reply.send(Ok(()));
+                                        }
+                                        if let Some(reply) = interrupt_reply {
+                                            let _ = reply.send(request_interrupt(
+                                                &interrupter,
+                                                &mut interrupted,
+                                                grace,
+                                            ));
                                         }
                                     }
                                     Err(error) => {
@@ -687,21 +819,7 @@ async fn run_actor<A, F, Fut>(
                                 }
                             }
                             if done {
-                                return Ok(false);
-                            }
-                        }
-                        while let Ok(command) = rx.try_recv() {
-                            match command {
-                                Command::Shutdown(reply) => {
-                                    let _ = reply.send(Ok(()));
-                                    return Ok(true);
-                                }
-                                Command::Prompt(_, reply) => {
-                                    let _ = reply.send(Err(HubError::Busy));
-                                }
-                                Command::Respond(_, _, reply) => {
-                                    let _ = reply.send(Err(HubError::NotFound));
-                                }
+                                return Ok(Turn::Finished);
                             }
                         }
                     }
@@ -709,12 +827,25 @@ async fn run_actor<A, F, Fut>(
                 .await;
                 state.lock().unwrap().pending.clear();
                 match result {
-                    Ok(true) => {
+                    Ok(Turn::Shutdown) => {
                         close(&mut session).await;
                         state.lock().unwrap().busy = false;
                         return;
                     }
-                    Ok(false) => {}
+                    Ok(Turn::Finished) => {}
+                    Ok(Turn::Discard) => close(&mut session).await,
+                    // A failure after an accepted interrupt is part of stopping the turn.
+                    Err(error) if interrupted.is_some() => {
+                        eprintln!("agent error after interrupt: {error:#}");
+                        hub.publish(
+                            agent.clone(),
+                            &session_id,
+                            Event::Done {
+                                reason: "interrupted".into(),
+                            },
+                        );
+                        close(&mut session).await;
+                    }
                     Err(error) => {
                         eprintln!("agent error: {error:#}");
                         hub.publish(
@@ -738,6 +869,9 @@ async fn run_actor<A, F, Fut>(
             }
             Command::Respond(_, _, reply) => {
                 let _ = reply.send(Err(HubError::NotFound));
+            }
+            Command::Interrupt(reply) => {
+                let _ = reply.send(Err(HubError::NotBusy));
             }
             Command::Shutdown(reply) => {
                 close(&mut session).await;
@@ -1197,6 +1331,228 @@ mod tests {
                 )
                 .await;
                 assert_eq!(starts.load(Ordering::SeqCst), 2);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+
+    async fn wait_idle(actor: &Actor) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while actor.state().busy {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("agent must become idle");
+    }
+    fn is_done(reason: &'static str) -> impl Fn(&Event) -> bool {
+        move |event| matches!(event, Event::Done { reason: found } if found == reason)
+    }
+    #[tokio::test]
+    async fn interrupt_ends_a_silent_turn_and_session_stays_usable() {
+        use crate::testing::Silent;
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let starts = Arc::new(AtomicUsize::new(0));
+                let interrupts = Arc::new(AtomicUsize::new(0));
+                let (count, seen) = (starts.clone(), interrupts.clone());
+                let (actor, task) = spawn(hub, AgentId::from("claude"), false, move || {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    let seen = seen.clone();
+                    async move { Ok(Silent::new(1, false).probes(Default::default(), seen)) }
+                });
+                assert_eq!(actor.interrupt().await, Err(HubError::NotBusy));
+                actor.prompt("one".into()).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                assert!(actor.state().busy);
+                actor.interrupt().await.unwrap();
+                wait_event(&mut rx, is_done("interrupted")).await;
+                wait_idle(&actor).await;
+                assert_eq!(interrupts.load(Ordering::SeqCst), 1);
+                assert_eq!(actor.interrupt().await, Err(HubError::NotBusy));
+                actor.prompt("two".into()).await.unwrap();
+                wait_event(&mut rx, is_done("ok")).await;
+                wait_idle(&actor).await;
+                assert_eq!(starts.load(Ordering::SeqCst), 1);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    #[tokio::test]
+    async fn interrupt_denies_a_pending_permission() {
+        use crate::testing::Silent;
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let answers = Arc::new(Mutex::new(Vec::new()));
+                let copy = answers.clone();
+                let (actor, task) = spawn(hub, AgentId::from("claude"), false, move || {
+                    let answers = copy.clone();
+                    async move { Ok(Silent::new(1, true).probes(answers, Default::default())) }
+                });
+                actor.prompt("one".into()).await.unwrap();
+                wait_event(&mut rx, |e| matches!(e, Event::PermissionRequest { .. })).await;
+                assert_eq!(actor.state().pending, vec!["p"]);
+                actor.interrupt().await.unwrap();
+                assert_eq!(
+                    wait_event(&mut rx, |e| matches!(e, Event::PermissionResolved { .. })).await,
+                    Event::PermissionResolved {
+                        id: "p".into(),
+                        allow: false
+                    }
+                );
+                wait_event(&mut rx, is_done("interrupted")).await;
+                wait_idle(&actor).await;
+                assert_eq!(*answers.lock().unwrap(), vec![false]);
+                assert!(actor.state().pending.is_empty());
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    #[tokio::test]
+    async fn interrupt_with_auto_approval_ends_the_turn() {
+        use crate::testing::Silent;
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let answers = Arc::new(Mutex::new(Vec::new()));
+                let copy = answers.clone();
+                // With --yes the request is allowed at once; the interrupt then
+                // ends the silent remainder of the turn.
+                let (actor, task) = spawn(hub, AgentId::from("claude"), true, move || {
+                    let answers = copy.clone();
+                    async move { Ok(Silent::new(1, true).probes(answers, Default::default())) }
+                });
+                actor.prompt("one".into()).await.unwrap();
+                wait_event(&mut rx, |e| matches!(e, Event::PermissionResolved { .. })).await;
+                actor.interrupt().await.unwrap();
+                wait_event(&mut rx, is_done("interrupted")).await;
+                wait_idle(&actor).await;
+                assert_eq!(*answers.lock().unwrap(), vec![true]);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    struct Stuck(Arc<AtomicUsize>);
+    impl Agent for Stuck {
+        async fn send(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn next_events(&mut self) -> Result<Vec<Event>> {
+            std::future::pending().await
+        }
+        async fn respond(&mut self, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn interrupter(&self) -> agentsflow_adapters::Interrupter {
+            agentsflow_adapters::Interrupter::new(|| Ok(()))
+        }
+        async fn shutdown(self) -> Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn interrupt_that_never_ends_drops_the_session() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let closed = Arc::new(AtomicUsize::new(0));
+                let copy = closed.clone();
+                let (actor, task) = spawn_with(
+                    hub,
+                    AgentId::from("claude"),
+                    false,
+                    move || {
+                        let copy = copy.clone();
+                        async move { Ok(Stuck(copy)) }
+                    },
+                    Duration::from_millis(100),
+                );
+                actor.prompt("one".into()).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                actor.interrupt().await.unwrap();
+                wait_event(&mut rx, is_done("interrupted")).await;
+                wait_idle(&actor).await;
+                assert_eq!(closed.load(Ordering::SeqCst), 1);
+                actor.prompt("two".into()).await.unwrap();
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    #[tokio::test]
+    async fn interrupt_without_support_reports_closed() {
+        LocalSet::new()
+            .run_until(async {
+                let closed = Arc::new(AtomicUsize::new(0));
+                let copy = closed.clone();
+                let (actor, task) = spawn(Hub::new(), AgentId::from("claude"), false, move || {
+                    let copy = copy.clone();
+                    async move { Ok(Hangs(copy)) }
+                });
+                actor.prompt("one".into()).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                assert_eq!(actor.interrupt().await, Err(HubError::Closed));
+                assert!(actor.state().busy);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    struct Dies {
+        signal: mpsc::UnboundedSender<()>,
+        interrupted: mpsc::UnboundedReceiver<()>,
+    }
+    impl Agent for Dies {
+        async fn send(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn next_events(&mut self) -> Result<Vec<Event>> {
+            self.interrupted.recv().await;
+            Err(anyhow::anyhow!("connection closed"))
+        }
+        async fn respond(&mut self, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn interrupter(&self) -> agentsflow_adapters::Interrupter {
+            let signal = self.signal.clone();
+            agentsflow_adapters::Interrupter::new(move || {
+                signal.send(()).map_err(|_| anyhow::anyhow!("closed"))
+            })
+        }
+        async fn shutdown(self) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn failure_after_interrupt_still_ends_interrupted() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let (actor, task) = spawn(hub, AgentId::from("claude"), false, || async {
+                    let (signal, interrupted) = mpsc::unbounded_channel();
+                    Ok(Dies {
+                        signal,
+                        interrupted,
+                    })
+                });
+                actor.prompt("one".into()).await.unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                actor.interrupt().await.unwrap();
+                wait_event(&mut rx, is_done("interrupted")).await;
+                wait_idle(&actor).await;
+                actor.prompt("two".into()).await.unwrap();
                 actor.shutdown().await;
                 task.await.unwrap();
             })
