@@ -8,7 +8,7 @@
   :root {
     color-scheme: light dark;
     --bg: #f6f6f4; --panel: #ffffff; --panel-2: #f0f0ed; --border: #dcdcd6;
-    --text: #1c1c1a; --muted: #6b6b64; --claude: #c2570c; --codex: #0f766e;
+    --text: #1c1c1a; --muted: #6b6b64; --claude: #c2570c; --codex: #0f766e; --orch: #5b4bc4;
     --ok: #15803d; --err: #b91c1c; --warn: #a16207;
     --add-bg: #e3f6e8; --add-fg: #14532d; --del-bg: #fde7e7; --del-fg: #7f1d1d; --hunk: #1d4ed8;
     --user-bg: #e8ecf3;
@@ -17,7 +17,7 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #121211; --panel: #1b1b19; --panel-2: #242421; --border: #34342f;
-      --text: #ecece6; --muted: #9a9a90; --claude: #f08a3c; --codex: #3cc4b4;
+      --text: #ecece6; --muted: #9a9a90; --claude: #f08a3c; --codex: #3cc4b4; --orch: #a594ff;
       --ok: #4ade80; --err: #f87171; --warn: #facc15;
       --add-bg: #12301c; --add-fg: #9be8b1; --del-bg: #3a1717; --del-fg: #f5b5b5; --hunk: #8ab4ff;
       --user-bg: #232a38;
@@ -40,7 +40,7 @@
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.on { background: var(--ok); }
   .dot.bad { background: var(--err); }
-  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px 16px; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr minmax(300px, .85fr); gap: 12px; padding: 12px 16px; }
   .col {
     min-height: 0; display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
@@ -94,6 +94,30 @@
   form.composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--panel); }
   form.composer textarea { flex: 1; resize: none; height: 52px; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; background: var(--bg); color: var(--text); font: inherit; }
   form.composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .msg .from { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .orch-controls { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+  .orch-controls select, .orch-controls textarea { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; background: var(--bg); color: var(--text); font: inherit; }
+  .orch-controls textarea { resize: vertical; min-height: 62px; }
+  .orch-controls textarea:focus, .orch-controls select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .orch-controls .steps { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .orch-controls .row { display: flex; gap: 8px; }
+  .wfline { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+  .wfline .ic { width: 1.2em; text-align: center; flex: none; }
+  .wfline.ok .ic { color: var(--ok); }
+  .wfline.bad { color: var(--err); }
+  .wfline .det { color: var(--muted); overflow-wrap: anywhere; }
+  .handoff { border: 1px solid var(--accent); border-radius: 8px; padding: 6px 10px; background: var(--panel); }
+  .handoff .hh { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 12px; flex-wrap: wrap; }
+  .handoff .hh .a-claude { color: var(--claude); }
+  .handoff .hh .a-codex { color: var(--codex); }
+  .handoff .hh .step { margin-left: auto; font-weight: 400; color: var(--muted); font-family: var(--mono); }
+  .handoff .ht { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; max-height: 7.5em; overflow: hidden; }
+  .handoff.open .ht { max-height: none; }
+  .handoff .more { background: none; border: none; padding: 0; color: var(--muted); font-size: 11px; cursor: pointer; text-decoration: underline; }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr 1fr; overflow-y: auto; grid-auto-rows: minmax(70vh, auto); }
+    .col.orch { grid-column: 1 / -1; min-height: 50vh; }
+  }
   @media (max-width: 820px) {
     main { grid-template-columns: 1fr; grid-auto-rows: minmax(60vh, 1fr); overflow-y: auto; }
     header .meta { max-width: 40vw; }
@@ -149,8 +173,7 @@ function preview(input, max = 90) {
 }
 function fmtInput(v) {
   if (v && typeof v === "object" && typeof v.command === "string") {
-    return "$ " + v.command + (typeof v.cwd === "string" ? "
-# cwd: " + v.cwd : "");
+    return "$ " + v.command + (typeof v.cwd === "string" ? "\n# cwd: " + v.cwd : "");
   }
   return pretty(v);
 }
@@ -238,13 +261,20 @@ function renderDiff(path, patch) {
 }
 
 function handle(env) {
+  if (env.agent === "orchestrator") { handleOrch(env.event); return; }
   const p = panes[env.agent];
   if (!p) return;
   const ev = env.event;
   switch (ev.type) {
     case "message": {
       if (ev.role === "user") { p.busy = true; }
-      push(p, el("div", "msg " + (ev.role === "user" ? "user" : "assistant"), ev.text));
+      const m = el("div", "msg " + (ev.role === "user" ? "user" : "assistant"));
+      if (ev.role === "user" && p.handoff && p.handoff.text === ev.text) {
+        m.append(el("span", "from", "← " + p.handoff.from + " · " + p.handoff.step));
+        p.handoff = null;
+      }
+      m.append(document.createTextNode(ev.text));
+      push(p, m);
       break;
     }
     case "tool_call": {
@@ -319,6 +349,103 @@ function handle(env) {
   refreshStatus(p);
 }
 
+
+const orch = { running: false, workflows: [] };
+function buildOrch() {
+  const col = el("section", "col orch");
+  col.style.setProperty("--accent", "var(--orch)");
+  const head = el("div", "col-head");
+  head.append(el("h2", "", "Оркестратор"));
+  orch.chip = el("span", "chip", "idle");
+  head.append(orch.chip);
+  const ctl = el("div", "orch-controls");
+  orch.select = el("select");
+  orch.steps = el("div", "steps");
+  orch.task = el("textarea");
+  orch.task.placeholder = "Задача для workflow";
+  const row = el("div", "row");
+  orch.run = el("button", "send", "Запустить");
+  orch.stop = el("button", "", "Стоп");
+  orch.stop.disabled = true;
+  row.append(orch.run, orch.stop);
+  ctl.append(orch.select, orch.steps, orch.task, row);
+  orch.log = el("div", "log");
+  orch.empty = el("div", "empty", "Выберите workflow и задайте задачу: агенты будут передавать друг другу результаты.");
+  orch.log.append(orch.empty);
+  col.append(head, ctl, orch.log);
+  $("#panes").append(col);
+
+  orch.select.addEventListener("change", showSteps);
+  orch.run.addEventListener("click", async () => {
+    const task = orch.task.value.trim();
+    if (!task || !orch.select.value) return;
+    orch.run.disabled = true;
+    try { await post("/api/workflow/run", { name: orch.select.value, task }); }
+    catch (err) { addError(orch, "Не удалось запустить: " + err.message); }
+    finally { refreshOrch(); }
+  });
+  orch.stop.addEventListener("click", async () => {
+    try { await post("/api/workflow/stop", {}); }
+    catch (err) { addError(orch, "Не удалось остановить: " + err.message); }
+  });
+  refreshOrch();
+}
+function showSteps() {
+  const w = orch.workflows.find(x => x.name === orch.select.value);
+  orch.steps.textContent = w ? w.steps.map(s => s.id + "(" + s.agent + ")").join(" → ") : "";
+  orch.steps.title = (w && w.description) || "";
+}
+function refreshOrch() {
+  orch.chip.className = "chip" + (orch.running ? " working" : "");
+  orch.chip.textContent = orch.running ? "выполняется" : "idle";
+  orch.run.disabled = orch.running || !orch.workflows.length;
+  orch.stop.disabled = !orch.running;
+  orch.select.disabled = orch.running;
+}
+async function loadWorkflows() {
+  try {
+    const r = await fetch(api("/api/workflows"));
+    if (!r.ok) return;
+    orch.workflows = await r.json();
+    orch.select.replaceChildren(...orch.workflows.map(w => { const o = el("option", "", w.name); o.value = w.name; return o; }));
+    showSteps(); refreshOrch();
+  } catch (_) {}
+}
+function wfLine(cls, icon, title, detail) {
+  const d = el("div", "wfline " + cls);
+  d.append(el("span", "ic", icon), el("span", "", title));
+  if (detail) d.append(el("span", "det", "— " + detail));
+  return d;
+}
+function handleOrch(ev) {
+  if (ev.type === "workflow") {
+    const step = ev.step || "";
+    switch (ev.status) {
+      case "started": orch.running = true; push(orch, wfLine("", "▶", "Запуск «" + ev.name + "»", ev.detail)); break;
+      case "step_started": push(orch, wfLine("", "•", "шаг " + step)); break;
+      case "step_done": push(orch, wfLine("ok", "✓", "шаг " + step, ev.detail)); break;
+      case "looped": push(orch, wfLine("", "↻", "возврат из " + step, ev.detail)); break;
+      case "finished": orch.running = false; push(orch, wfLine("ok", "■", "Завершён", ev.detail)); break;
+      case "failed": orch.running = false; push(orch, wfLine("bad", "✕", "Ошибка", ev.detail)); break;
+    }
+    refreshOrch();
+  } else if (ev.type === "handoff") {
+    const to = panes[ev.to];
+    if (to) to.handoff = { from: ev.from, step: ev.step, text: ev.text };
+    const card = el("div", "handoff");
+    const hh = el("div", "hh");
+    hh.append(el("span", "a-" + ev.from, ev.from), el("span", "", "→"), el("span", "a-" + ev.to, ev.to), el("span", "step", ev.step));
+    card.append(hh, el("div", "ht", ev.text));
+    if (ev.text.length > 220 || ev.text.split("\n").length > 5) {
+      const more = el("button", "more", "показать полностью");
+      more.type = "button";
+      more.onclick = () => { card.classList.toggle("open"); more.textContent = card.classList.contains("open") ? "свернуть" : "показать полностью"; };
+      card.append(more);
+    }
+    push(orch, card);
+  }
+}
+
 let lastSeq = 0, es = null;
 function setConn(state, text) {
   $("#conn-dot").className = "dot " + (state === "on" ? "on" : state === "bad" ? "bad" : "");
@@ -354,7 +481,9 @@ async function loadState() {
 }
 
 AGENTS.forEach(buildPane);
+buildOrch();
 loadState();
+loadWorkflows();
 connect();
 </script>
 </body>
