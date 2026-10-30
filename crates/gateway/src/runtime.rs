@@ -20,7 +20,13 @@ pub struct RuntimeOptions {
     pub yes: bool,
     pub log: Option<PathBuf>,
     pub mail: Option<agentsflow_adapters::MailConfig>,
+    pub mail_agent_tokens: MailAgentTokens,
     pub mail_thread_limit: usize,
+}
+#[derive(Clone, Default)]
+pub struct MailAgentTokens {
+    pub claude: Option<String>,
+    pub codex: Option<String>,
 }
 impl Default for RuntimeOptions {
     fn default() -> Self {
@@ -35,6 +41,7 @@ impl Default for RuntimeOptions {
             yes: false,
             log: None,
             mail: None,
+            mail_agent_tokens: MailAgentTokens::default(),
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
         }
     }
@@ -55,6 +62,12 @@ impl Runtime {
             mail.thread_limit = options.mail_thread_limit;
             mail
         });
+        if mail.is_some()
+            && ((options.claude && options.mail_agent_tokens.claude.is_none())
+                || (options.codex && options.mail_agent_tokens.codex.is_none()))
+        {
+            anyhow::bail!("personal mail token is missing for an enabled agent");
+        }
         hub.set_mail_enabled(mail.is_some());
         hub.set_mail_thread_limit(
             mail.as_ref()
@@ -64,7 +77,14 @@ impl Runtime {
         let claude = if options.claude {
             let cwd = cwd.clone();
             let model = options.claude_model;
-            let mail = mail.clone();
+            let mail = mail.clone().map(|mut config| {
+                config.token = options
+                    .mail_agent_tokens
+                    .claude
+                    .clone()
+                    .expect("enabled agent has a mail token");
+                config
+            });
             let (actor, task) =
                 crate::hub::spawn(hub.clone(), AgentKind::Claude, options.yes, move || {
                     ClaudeSession::start(ClaudeOptions {
@@ -83,7 +103,14 @@ impl Runtime {
             let model = options.codex_model;
             let sandbox = options.sandbox;
             let bin = options.codex_bin;
-            let mail = mail.clone();
+            let mail = mail.clone().map(|mut config| {
+                config.token = options
+                    .mail_agent_tokens
+                    .codex
+                    .clone()
+                    .expect("enabled agent has a mail token");
+                config
+            });
             let (actor, task) =
                 crate::hub::spawn(hub.clone(), AgentKind::Codex, options.yes, move || {
                     CodexSession::start(CodexOptions {
