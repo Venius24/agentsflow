@@ -37,6 +37,9 @@
   header h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: .2px; }
   header .spacer { flex: 1; }
   header .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50vw; }
+  .export { display: flex; align-items: center; gap: 5px; font-size: 12px; flex: none; }
+  .export button { font-size: 12px; padding: 3px 8px; }
+  .export-error { color: var(--err); font-size: 12px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.on { background: var(--ok); }
   .dot.bad { background: var(--err); }
@@ -161,6 +164,7 @@
   <span class="dot" id="conn-dot"></span>
   <h1>agentsflow</h1>
   <span id="conn-text" class="chip">подключение…</span>
+  <div class="export"><span>Экспорт:</span><button type="button" id="export-md">Markdown</button><button type="button" id="export-jsonl">JSONL</button><span class="export-error" id="export-error" role="alert"></span></div>
   <span class="spacer"></span>
   <span class="meta" id="cwd"></span>
 </header>
@@ -183,6 +187,27 @@ function el(tag, cls, text) {
   return n;
 }
 function api(path) { return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN); }
+async function downloadExport(format) {
+  const error = $("#export-error");
+  error.textContent = "";
+  try {
+    const response = await fetch(api("/api/export?format=" + encodeURIComponent(format)));
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename="(agentsflow-[0-9]+\.(?:md|jsonl))"/);
+    link.href = url;
+    link.download = match ? match[1] : "agentsflow." + (format === "md" ? "md" : "jsonl");
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  } catch (err) { error.textContent = "Ошибка экспорта: " + err.message; }
+}
+$("#export-md").addEventListener("click", () => downloadExport("md"));
+$("#export-jsonl").addEventListener("click", () => downloadExport("jsonl"));
 async function post(path, body) {
   const r = await fetch(api(path), {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
