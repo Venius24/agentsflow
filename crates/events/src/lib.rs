@@ -49,6 +49,18 @@ pub enum Event {
         id: String,
         allow: bool,
     },
+    Mail {
+        id: String,
+        thread: String,
+        from: AgentKind,
+        to: AgentKind,
+        subject: String,
+        body: String,
+    },
+    MailRead {
+        agent: AgentKind,
+        ids: Vec<String>,
+    },
     Handoff {
         from: AgentKind,
         to: AgentKind,
@@ -122,6 +134,18 @@ mod tests {
             Event::PermissionResolved {
                 id: "2".into(),
                 allow: true,
+            },
+            Event::Mail {
+                id: "1".into(),
+                thread: "t".into(),
+                from: AgentKind::Claude,
+                to: AgentKind::Codex,
+                subject: "s".into(),
+                body: "b".into(),
+            },
+            Event::MailRead {
+                agent: AgentKind::Codex,
+                ids: vec!["1".into()],
             },
             Event::Handoff {
                 from: AgentKind::Claude,

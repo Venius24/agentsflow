@@ -154,6 +154,7 @@ pub struct CodexOptions {
     pub cwd: Option<PathBuf>,
     pub sandbox: Option<SandboxMode>,
     pub bin: Option<PathBuf>,
+    pub mail: Option<crate::MailConfig>,
 }
 
 fn choose_binary(
@@ -215,9 +216,36 @@ impl CodexSession {
             .to_str()
             .context("working directory is not valid Unicode")?
             .to_owned();
-        let builder = AppServerBuilder::new()
+        let mut builder = AppServerBuilder::new()
             .command(find_binary(opts.bin))
             .working_directory(&cwd);
+        if let Some(mail) = opts.mail {
+            let exe = mail
+                .exe
+                .to_str()
+                .context("mail executable path is not valid Unicode")?;
+            for (key, value) in [
+                ("mcp_servers.mail.command", json!(exe).to_string()),
+                (
+                    "mcp_servers.mail.args",
+                    json!(["mail-mcp", "--as", "codex"]).to_string(),
+                ),
+                (
+                    "mcp_servers.mail.env.AGENTSFLOW_URL",
+                    json!(mail.url).to_string(),
+                ),
+                (
+                    "mcp_servers.mail.env.AGENTSFLOW_TOKEN",
+                    json!(mail.token).to_string(),
+                ),
+                (
+                    "mcp_servers.mail.default_tools_approval_mode",
+                    json!("approve").to_string(),
+                ),
+            ] {
+                builder = builder.config_override(key, value);
+            }
+        }
         let mut client = AsyncClient::start_with(builder).await?;
         let thread = client
             .thread_start(&ThreadStartParams {
