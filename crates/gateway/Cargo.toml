@@ -1,0 +1,16 @@
+[package]
+name = "agentsflow-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "agentsflow"
+path = "src/main.rs"
+
+[dependencies]
+agentsflow-events = { path = "../events" }
+
+[lints]
+workspace = true

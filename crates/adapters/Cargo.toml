@@ -1,0 +1,12 @@
+[package]
+name = "agentsflow-adapters"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+agentsflow-events = { path = "../events" }
+
+[lints]
+workspace = true
