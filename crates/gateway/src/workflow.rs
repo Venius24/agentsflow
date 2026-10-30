@@ -172,7 +172,7 @@ fn render(
                     .with_context(|| format!("step {id} has not run"))?
             };
             text.push_str(output);
-            from = Some(agent.clone());
+            from = Some(*agent);
         }
         rest = &rest[end + 1..];
     }
@@ -431,7 +431,7 @@ async fn run_step(
             context.id,
             Event::Handoff {
                 from,
-                to: agent.clone(),
+                to: agent,
                 step: step.id.clone(),
                 text: prompt.clone(),
             },
@@ -481,7 +481,7 @@ async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool
         let step = &context.spec.step[index];
         let outcome = run_step(context, step, &outputs, previous.as_ref(), stop).await?;
         let detail = outcome.output.chars().take(200).collect::<String>();
-        previous = Some((outcome.output.clone(), outcome.agent.clone()));
+        previous = Some((outcome.output.clone(), outcome.agent));
         outputs.insert(step.id.clone(), (outcome.output.clone(), outcome.agent));
         publish(
             context.hub,

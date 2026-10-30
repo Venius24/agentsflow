@@ -47,6 +47,8 @@ cargo run -p agentsflow-gateway -- serve --cwd path/to/project
 
 Диффы Codex приходят из его `fileChange`; для Claude патч синтезируется из `Write`/`Edit`/`MultiEdit` и показывается раньше запроса разрешения.
 
+При запуске `serve --log FILE` события дописываются в JSONL-файл; после перезапуска восстанавливаются последние 5000 событий. Всё, что прошлый запуск не успел закончить (запрос разрешения, ход агента, workflow), закрывается событиями с пометкой `interrupted: server restarted`, чтобы страница не показывала мёртвые карточки.
+
 ## HTTP API
 
 Все `/api/*` требуют токен: query `?token=…` или заголовок `x-agentsflow-token`.

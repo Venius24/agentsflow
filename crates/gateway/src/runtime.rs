@@ -18,6 +18,7 @@ pub struct RuntimeOptions {
     pub sandbox: Option<SandboxMode>,
     pub codex_bin: Option<PathBuf>,
     pub yes: bool,
+    pub log: Option<PathBuf>,
 }
 impl Default for RuntimeOptions {
     fn default() -> Self {
@@ -30,6 +31,7 @@ impl Default for RuntimeOptions {
             sandbox: None,
             codex_bin: None,
             yes: false,
+            log: None,
         }
     }
 }
@@ -43,7 +45,7 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(options: RuntimeOptions) -> Result<Self> {
         let cwd = std::path::absolute(options.cwd)?;
-        let hub = Hub::new();
+        let hub = options.log.as_deref().map_or_else(Hub::new, Hub::with_log);
         let mut tasks = Vec::new();
         let claude = if options.claude {
             let cwd = cwd.clone();
