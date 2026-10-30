@@ -356,6 +356,10 @@ struct Prompt {
     text: String,
 }
 #[derive(Deserialize)]
+struct Interrupt {
+    agent: String,
+}
+#[derive(Deserialize)]
 struct Permission {
     agent: String,
     id: String,
@@ -457,6 +461,9 @@ async fn inbox(
 fn failure(error: HubError) -> Response {
     match error {
         HubError::Busy => (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response(),
+        HubError::NotBusy => {
+            (StatusCode::CONFLICT, Json(json!({"error":"not busy"}))).into_response()
+        }
         HubError::NotFound => StatusCode::NOT_FOUND.into_response(),
         HubError::Closed => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
@@ -470,6 +477,15 @@ async fn prompt(State(state): State<AppState>, Json(input): Json<Prompt>) -> Res
     };
     match actor.prompt(input.text).await {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
+        Err(error) => failure(error),
+    }
+}
+async fn interrupt(State(state): State<AppState>, Json(input): Json<Interrupt>) -> Response {
+    let Some(actor) = state.actor(&input.agent) else {
+        return unknown_agent(&state, &input.agent, StatusCode::NOT_FOUND);
+    };
+    match actor.interrupt().await {
+        Ok(()) => Json(json!({"ok":true})).into_response(),
         Err(error) => failure(error),
     }
 }
@@ -553,6 +569,7 @@ fn app(state: AppState) -> Router {
         .route("/api/events", get(events))
         .route("/api/export", get(export))
         .route("/api/prompt", post(prompt))
+        .route("/api/agent/interrupt", post(interrupt))
         .route("/api/permission", post(permission))
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/inbox", post(inbox))
@@ -668,6 +685,7 @@ mod tests {
         }
         for (method, path) in [
             (axum::http::Method::POST, "/api/prompt"),
+            (axum::http::Method::POST, "/api/agent/interrupt"),
             (axum::http::Method::GET, "/api/state"),
             (axum::http::Method::GET, "/api/export"),
             (axum::http::Method::POST, "/api/permission"),
@@ -706,6 +724,63 @@ mod tests {
         async fn shutdown(self) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn interrupt_statuses() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (actor, task) =
+                    crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
+                        Ok(crate::testing::Silent::new(1, false))
+                    });
+                let agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
+                let team = Team::preset("pair").unwrap();
+                let manager = Manager::new(hub.clone(), agents.clone(), team.clone());
+                let (_shutdown, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub,
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::default(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents,
+                    team,
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                let request = |agent: &str| {
+                    Json(Interrupt {
+                        agent: agent.into(),
+                    })
+                };
+                let response = interrupt(State(state.clone()), request("missing")).await;
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                let response = interrupt(State(state.clone()), request("claude")).await;
+                assert_eq!(response.status(), StatusCode::CONFLICT);
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap(),
+                    json!({"error":"not busy"})
+                );
+                actor.prompt("hello".into()).await.unwrap();
+                let response = interrupt(State(state), request("claude")).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap(),
+                    json!({"ok":true})
+                );
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
     }
 
     #[tokio::test]

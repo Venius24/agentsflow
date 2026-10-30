@@ -6,6 +6,8 @@ mod mail_mcp;
 mod runtime;
 mod server;
 mod team;
+#[cfg(test)]
+mod testing;
 mod workflow;
 
 use std::process::ExitCode;

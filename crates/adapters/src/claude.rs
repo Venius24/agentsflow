@@ -1,12 +1,22 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use agentsflow_events::{Event, Role};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use claude_codes::{
-    AsyncClient, ClaudeCliBuilder, ClaudeInput, ClaudeOutput, ContentBlock, ControlRequestPayload,
-    ControlResponse, PermissionResult, ToolResultContent,
+    ClaudeCliBuilder, ClaudeInput, ClaudeOutput, ContentBlock, ControlRequestMessage,
+    ControlRequestPayload, ControlResponse, ControlResponseMessage, ControlResponsePayload,
+    PermissionResult, Protocol, ToolResultContent,
 };
 use serde_json::Value;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Child,
+    sync::mpsc,
+};
 
 pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
     match out {
@@ -130,9 +140,41 @@ pub struct ClaudeOptions {
     pub effort: Option<String>,
 }
 
+const STDOUT_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+static INIT_ID: AtomicU64 = AtomicU64::new(1);
+static INTERRUPT_ID: AtomicU64 = AtomicU64::new(1);
+
+type Lines = mpsc::UnboundedReceiver<std::io::Result<String>>;
+
+/// The CLI is driven through two tasks: stdout lines arrive over a channel
+/// (receiving from it is cancel-safe, a half-read line is never lost) and
+/// every stdin write is queued, so an interrupt can be sent while
+/// `next_events` is still waiting.
 pub struct ClaudeSession {
-    client: AsyncClient,
+    child: Child,
+    stdin: mpsc::UnboundedSender<String>,
+    lines: Lines,
     pending: HashMap<String, Value>,
+}
+
+fn enqueue(stdin: &mpsc::UnboundedSender<String>, line: String) -> Result<()> {
+    stdin
+        .send(line)
+        .map_err(|_| anyhow::anyhow!("claude stdin closed"))
+}
+
+fn interrupt_line(request_id: &str) -> Result<String> {
+    Ok(Protocol::serialize(&ClaudeInput::interrupt(request_id))?)
+}
+
+fn parse_line(line: &str) -> Result<ClaudeOutput> {
+    ClaudeOutput::parse_json_tolerant(line)
+        .map_err(claude_codes::Error::from)
+        .map_err(Into::into)
+}
+
+async fn next_line(lines: &mut Lines) -> Result<String> {
+    Ok(lines.recv().await.context("claude closed")??)
 }
 
 impl ClaudeSession {
@@ -154,26 +196,89 @@ impl ClaudeSession {
         if let Some(effort) = opts.effort {
             command.arg("--effort").arg(effort);
         }
-        let mut client = AsyncClient::new(command.spawn()?)?;
-        if let Err(error) = client.enable_tool_approval().await {
-            let _ = client.shutdown().await;
-            return Err(error.into());
-        }
-        Ok(Self {
-            client,
+        let mut child = command.spawn()?;
+        let (Some(mut input), Some(output), Some(mut errors)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
+            let _ = child.kill().await;
+            anyhow::bail!("claude stdio is not piped");
+        };
+        tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut errors, &mut tokio::io::sink()).await;
+        });
+        let (stdin, mut queue) = mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Some(line) = queue.recv().await {
+                if input.write_all(line.as_bytes()).await.is_err() || input.flush().await.is_err() {
+                    break;
+                }
+            }
+        });
+        let (sender, lines) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let mut output = BufReader::with_capacity(STDOUT_BUFFER_SIZE, output);
+            loop {
+                let mut line = String::new();
+                match output.read_line(&mut line).await {
+                    Ok(0) => break,
+                    Ok(_) if line.trim().is_empty() => {}
+                    Ok(_) => {
+                        if sender.send(Ok(line.trim().to_owned())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+        let mut session = Self {
+            child,
+            stdin,
+            lines,
             pending: HashMap::new(),
-        })
+        };
+        if let Err(error) = session.initialize().await {
+            let _ = session.shutdown().await;
+            return Err(error);
+        }
+        Ok(session)
+    }
+
+    /// Tool approval handshake: the CLI asks for permissions only after it.
+    async fn initialize(&mut self) -> Result<()> {
+        let request_id = format!("init-{}", INIT_ID.fetch_add(1, Ordering::Relaxed));
+        enqueue(
+            &self.stdin,
+            Protocol::serialize(&ControlRequestMessage::initialize(&request_id))?,
+        )?;
+        loop {
+            let line = next_line(&mut self.lines).await?;
+            if let ClaudeOutput::ControlResponse(response) = parse_line(&line)? {
+                match response.response {
+                    ControlResponsePayload::Success { request_id: id, .. } if id == request_id => {
+                        return Ok(());
+                    }
+                    ControlResponsePayload::Error { error, .. } => {
+                        bail!("tool approval initialization failed: {error}");
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     pub async fn send(&mut self, prompt: &str) -> Result<()> {
-        self.client
-            .send(&ClaudeInput::user_message_without_session(prompt))
-            .await?;
-        Ok(())
+        enqueue(
+            &self.stdin,
+            Protocol::serialize(&ClaudeInput::user_message_without_session(prompt))?,
+        )
     }
 
     pub async fn next_events(&mut self) -> Result<Vec<Event>> {
-        let output = self.client.receive().await?;
+        let output = parse_line(&next_line(&mut self.lines).await?)?;
         if let ClaudeOutput::ControlRequest(request) = &output {
             if let ControlRequestPayload::CanUseTool(tool) = &request.request {
                 self.pending
@@ -196,15 +301,28 @@ impl ClaudeSession {
         } else {
             PermissionResult::deny("denied by user")
         };
-        self.client
-            .send_control_response(ControlResponse::from_result(request_id, result))
-            .await?;
+        enqueue(
+            &self.stdin,
+            Protocol::serialize(&ControlResponseMessage::from(ControlResponse::from_result(
+                request_id, result,
+            )))?,
+        )?;
         self.pending.remove(request_id);
         Ok(())
     }
 
-    pub async fn shutdown(self) -> Result<()> {
-        self.client.shutdown().await?;
+    /// Asks the CLI to end the current turn; the session stays usable and the
+    /// turn finishes with a `result` frame.
+    pub fn interrupter(&self) -> crate::Interrupter {
+        let stdin = self.stdin.clone();
+        crate::Interrupter::new(move || {
+            let id = format!("interrupt-{}", INTERRUPT_ID.fetch_add(1, Ordering::Relaxed));
+            enqueue(&stdin, interrupt_line(&id)?)
+        })
+    }
+
+    pub async fn shutdown(mut self) -> Result<()> {
+        self.child.kill().await?;
         Ok(())
     }
 }
@@ -218,6 +336,9 @@ impl crate::Agent for ClaudeSession {
     }
     async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
         Self::respond(self, request_id, allow).await
+    }
+    fn interrupter(&self) -> crate::Interrupter {
+        Self::interrupter(self)
     }
     async fn shutdown(self) -> Result<()> {
         Self::shutdown(self).await
@@ -380,6 +501,16 @@ mod tests {
         );
         assert!(map(json!({"type":"stream_event", "event":{"type":"future_event"}, "uuid":"u", "session_id":"s"})).is_empty());
         assert!(map(assistant(json!([{ "type":"future_block", "value":1 }]))).is_empty());
+    }
+
+    #[test]
+    fn interrupt_is_a_control_request() {
+        let line = interrupt_line("interrupt-1").unwrap();
+        assert!(line.ends_with('\n'));
+        let frame: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(frame["type"], "control_request");
+        assert_eq!(frame["request_id"], "interrupt-1");
+        assert_eq!(frame["request"]["subtype"], "interrupt");
     }
 
     #[tokio::test]

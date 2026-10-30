@@ -268,7 +268,11 @@ function buildPane(a, enabled = true) {
   heading.append(title, subtitle);
   head.append(heading);
   const chip = el("span", "chip", "idle");
-  head.append(chip);
+  const stop = el("button", "deny", "Стоп");
+  stop.type = "button";
+  head.append(chip, stop);
+  const stopError = el("div", "export-error");
+  stopError.setAttribute("role", "alert");
   const log = el("div", "log");
   const empty = el("div", "empty", "Событий пока нет. Отправьте промпт ниже.");
   log.append(empty);
@@ -277,14 +281,29 @@ function buildPane(a, enabled = true) {
   const btn = el("button", "send", "Отправить");
   btn.type = "submit";
   form.append(input, btn);
-  col.append(head, log, form);
+  col.append(head, stopError, log, form);
   $("#panes").insertBefore(col, orch.col || null);
 
-  const p = { a, col, name, lead, subtitle, chip, log, empty, input, btn, busy: false, enabled, pending: new Set(),
+  const p = { a, col, name, lead, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
               tools: new Map(), perms: new Map() };
   panes[a.id] = p;
   updatePaneInfo(p, a);
   watchSticky(p);
+
+  stop.addEventListener("click", async () => {
+    if (!p.enabled || !p.busy || p.stopping) return;
+    stopError.textContent = "";
+    p.stopping = true;
+    refreshStatus(p);
+    try {
+      await post("/api/agent/interrupt", { agent: a.id });
+    } catch (err) {
+      stopError.textContent = "Не удалось остановить: " + err.message;
+    } finally {
+      p.stopping = false;
+      refreshStatus(p);
+    }
+  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -311,6 +330,7 @@ function refreshStatus(p) {
   else if (p.busy) { label = "работает"; cls += " working"; }
   p.chip.className = cls; p.chip.textContent = label;
   p.btn.disabled = !p.enabled || p.busy;
+  p.stop.disabled = !p.enabled || !p.busy || p.stopping;
   p.input.disabled = !p.enabled;
   p.btn.title = p.busy ? "Агент занят" : "";
 }
