@@ -1,6 +1,8 @@
 mod cli;
 mod hub;
+mod runtime;
 mod server;
+mod workflow;
 
 use std::process::ExitCode;
 
@@ -11,9 +13,35 @@ async fn main() -> ExitCode {
         println!("agentsflow {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
+    if args.first().is_some_and(|arg| arg == "flow") {
+        let command = match cli::FlowCommand::parse(&args[1..]) {
+            Ok(command) => command,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                return ExitCode::from(2);
+            }
+        };
+        return match command.run().await {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let result = if args.first().is_some_and(|arg| arg == "serve") {
         match server::ServeOptions::parse(&args[1..]) {
-            Some(options) => server::serve(options).await,
+            Some(options) => {
+                let workflows = match options.workflows() {
+                    Ok(workflows) => workflows,
+                    Err(error) => {
+                        eprintln!("[error] {error:#}");
+                        return ExitCode::from(2);
+                    }
+                };
+                server::serve(options, workflows).await
+            }
             None => {
                 eprintln!("{}", cli::USAGE);
                 return ExitCode::from(2);

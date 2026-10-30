@@ -9,7 +9,7 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--yes]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow --version";
+pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--yes]\n       agentsflow flow FILE --task <text> --yes [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();
@@ -21,7 +21,7 @@ fn truncate(text: &str) -> String {
     }
 }
 
-fn format_event(agent: &str, event: &Event) -> String {
+pub fn format_event(agent: &str, event: &Event) -> String {
     match event {
         Event::Message { text, .. } => format!("{agent}> {text}"),
         Event::ToolCall { name, input, .. } => {
@@ -44,6 +44,47 @@ fn format_event(agent: &str, event: &Event) -> String {
         Event::Done { reason } => format!("[done] {reason}"),
         Event::Error { message } => format!("[error] {message}"),
         Event::Diff { path, patch } => format!("[diff] {path}\n{patch}"),
+        Event::Handoff {
+            from,
+            to,
+            step,
+            text,
+        } => format!(
+            "[handoff] {} -> {} ({step}): {text}",
+            agent_label(from),
+            agent_label(to)
+        ),
+        Event::Workflow {
+            name,
+            step,
+            status,
+            detail,
+        } => format!(
+            "[workflow] {name} {} {} {detail}",
+            step.as_deref().unwrap_or("-"),
+            serde_json::to_value(status).unwrap().as_str().unwrap()
+        ),
+    }
+}
+
+fn agent_label(agent: &agentsflow_events::AgentKind) -> &'static str {
+    match agent {
+        agentsflow_events::AgentKind::Claude => "claude",
+        agentsflow_events::AgentKind::Codex => "codex",
+        agentsflow_events::AgentKind::Orchestrator => "orchestrator",
+    }
+}
+
+fn print_flow_event(envelope: &agentsflow_events::Envelope) {
+    let label = agent_label(&envelope.agent);
+    let formatted = format_event(label, &envelope.event);
+    if matches!(
+        &envelope.event,
+        Event::Message { .. } | Event::Handoff { .. } | Event::Workflow { .. }
+    ) {
+        println!("{formatted}");
+    } else {
+        println!("[{label}] {formatted}");
     }
 }
 
@@ -161,6 +202,109 @@ async fn drive_turn<A: Agent>(session: &mut A, agent: &str, prompt: &str, yes: b
         }
     }
     Ok(())
+}
+
+pub struct FlowCommand {
+    spec: crate::workflow::Spec,
+    task: String,
+    options: crate::runtime::RuntimeOptions,
+}
+impl FlowCommand {
+    pub fn parse(args: &[String]) -> anyhow::Result<Self> {
+        let file = args
+            .first()
+            .filter(|s| !s.starts_with("--"))
+            .ok_or_else(|| anyhow::anyhow!("flow requires a workflow file"))?;
+        let mut rest = args[1..].iter();
+        let mut task = None;
+        let mut yes = false;
+        let mut serve_args = Vec::new();
+        while let Some(arg) = rest.next() {
+            match arg.as_str() {
+                "--yes" => {
+                    yes = true;
+                    serve_args.push(arg.clone());
+                }
+                "--task" => {
+                    task = Some(
+                        rest.next()
+                            .ok_or_else(|| anyhow::anyhow!("--task requires text"))?
+                            .clone(),
+                    );
+                }
+                "--cwd" | "--agents" | "--claude-model" | "--codex-model" | "--sandbox"
+                | "--codex-bin" => {
+                    serve_args.push(arg.clone());
+                    serve_args.push(
+                        rest.next()
+                            .ok_or_else(|| anyhow::anyhow!("{arg} requires a value"))?
+                            .clone(),
+                    );
+                }
+                _ => anyhow::bail!("unknown flow option: {arg}"),
+            }
+        }
+        if !yes {
+            anyhow::bail!("--yes is required: headless mode cannot answer permission requests");
+        }
+        let task = task
+            .filter(|t| !t.trim().is_empty() && !t.starts_with("--"))
+            .ok_or_else(|| anyhow::anyhow!("--task requires nonempty text"))?;
+        let options = crate::server::ServeOptions::parse(&serve_args)
+            .ok_or_else(|| anyhow::anyhow!("invalid flow options"))?
+            .runtime_options();
+        let spec = crate::workflow::Spec::load(std::path::Path::new(file))?;
+        Ok(Self {
+            spec,
+            task,
+            options,
+        })
+    }
+    pub async fn run(self) -> Result<bool> {
+        tokio::task::LocalSet::new()
+            .run_until(async move {
+                let runtime = crate::runtime::Runtime::new(self.options)?;
+                let (_, mut events) = runtime.hub.subscribe();
+                let (stop, receiver) = tokio::sync::watch::channel(false);
+                let id = uuid::Uuid::new_v4().to_string();
+                let success = {
+                    let execution = crate::workflow::execute(
+                        &runtime.hub,
+                        runtime.claude.as_ref(),
+                        runtime.codex.as_ref(),
+                        &self.spec,
+                        &self.task,
+                        &id,
+                        receiver,
+                    );
+                    tokio::pin!(execution);
+                    let mut interrupted = false;
+                    loop {
+                        tokio::select! {
+                            signal = tokio::signal::ctrl_c(), if !interrupted => {
+                                if let Err(error) = signal { eprintln!("signal: {error}"); }
+                                interrupted = true;
+                                let _ = stop.send(true);
+                            }
+                            event = events.recv() => {
+                                if let Ok(event) = event {
+                                    print_flow_event(&event);
+                                }
+                            }
+                            result = &mut execution => {
+                                while let Ok(event) = events.try_recv() {
+                                    print_flow_event(&event);
+                                }
+                                break result;
+                            }
+                        }
+                    }
+                };
+                runtime.shutdown().await;
+                Ok(success)
+            })
+            .await
+    }
 }
 
 #[cfg(test)]

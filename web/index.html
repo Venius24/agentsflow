@@ -105,6 +105,7 @@
   .wfline .ic { width: 1.2em; text-align: center; flex: none; }
   .wfline.ok .ic { color: var(--ok); }
   .wfline.bad { color: var(--err); }
+  .wfline .t { white-space: nowrap; flex: none; }
   .wfline .det { color: var(--muted); overflow-wrap: anywhere; }
   .handoff { border: 1px solid var(--accent); border-radius: 8px; padding: 6px 10px; background: var(--panel); }
   .handoff .hh { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 12px; flex-wrap: wrap; }
@@ -205,6 +206,7 @@ function buildPane(a) {
   const p = { a, col, chip, log, empty, input, btn, busy: false, enabled: true, pending: new Set(),
               tools: new Map(), perms: new Map() };
   panes[a.id] = p;
+  watchSticky(p);
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -235,11 +237,20 @@ function refreshStatus(p) {
   p.btn.title = p.busy ? "Агент занят" : "";
 }
 
+function watchSticky(p) {
+  p.sticky = true;
+  p.log.addEventListener("scroll", () => {
+    p.sticky = p.log.scrollTop + p.log.clientHeight >= p.log.scrollHeight - 40;
+  });
+}
 function push(p, node) {
   if (p.empty && p.empty.isConnected) p.empty.remove();
-  const stick = p.log.scrollTop + p.log.clientHeight >= p.log.scrollHeight - 40;
   p.log.append(node);
-  if (stick) p.log.scrollTop = p.log.scrollHeight;
+  if (p.sticky !== false) {
+    const down = () => { p.log.scrollTop = p.log.scrollHeight; };
+    down();
+    requestAnimationFrame(down);
+  }
 }
 function addError(p, text) { push(p, el("div", "errline", text)); }
 
@@ -372,6 +383,7 @@ function buildOrch() {
   orch.log = el("div", "log");
   orch.empty = el("div", "empty", "Выберите workflow и задайте задачу: агенты будут передавать друг другу результаты.");
   orch.log.append(orch.empty);
+  watchSticky(orch);
   col.append(head, ctl, orch.log);
   $("#panes").append(col);
 
@@ -413,7 +425,7 @@ async function loadWorkflows() {
 }
 function wfLine(cls, icon, title, detail) {
   const d = el("div", "wfline " + cls);
-  d.append(el("span", "ic", icon), el("span", "", title));
+  d.append(el("span", "ic", icon), el("span", "t", title));
   if (detail) d.append(el("span", "det", "— " + detail));
   return d;
 }

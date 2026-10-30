@@ -1,0 +1,23 @@
+name = "implement-and-review"
+description = "Реализация и проверка с циклом исправлений"
+max_steps = 20
+
+[[step]]
+id = "implement"
+agent = "codex"
+prompt = "{task}"
+
+[[step]]
+id = "review"
+agent = "claude"
+prompt = "Ты ревьюер. Исходная задача:\n{task}\n\nОтчёт исполнителя:\n{prev.output}\n\nПроверь результат в рабочей папке (читай файлы, при необходимости запускай проверки). Если всё верно — ответь одной строкой APPROVED. Иначе перечисли конкретные проблемы."
+until = "APPROVED"
+otherwise = "fix"
+max_loops = 2
+next = "end"
+
+[[step]]
+id = "fix"
+agent = "codex"
+prompt = "Исходная задача:\n{task}\n\nЗамечания ревьюера:\n{review.output}\n\nИсправь их."
+next = "review"

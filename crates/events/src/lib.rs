@@ -15,6 +15,7 @@ pub struct Envelope {
 pub enum AgentKind {
     Claude,
     Codex,
+    Orchestrator,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,12 +49,35 @@ pub enum Event {
         id: String,
         allow: bool,
     },
+    Handoff {
+        from: AgentKind,
+        to: AgentKind,
+        step: String,
+        text: String,
+    },
+    Workflow {
+        name: String,
+        step: Option<String>,
+        status: WorkflowStatus,
+        detail: String,
+    },
     Done {
         reason: String,
     },
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStatus {
+    Started,
+    StepStarted,
+    StepDone,
+    Looped,
+    Finished,
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +123,18 @@ mod tests {
                 id: "2".into(),
                 allow: true,
             },
+            Event::Handoff {
+                from: AgentKind::Claude,
+                to: AgentKind::Codex,
+                step: "fix".into(),
+                text: "hello".into(),
+            },
+            Event::Workflow {
+                name: "flow".into(),
+                step: Some("fix".into()),
+                status: WorkflowStatus::StepStarted,
+                detail: String::new(),
+            },
             Event::Done {
                 reason: "completed".into(),
             },
@@ -124,6 +160,28 @@ mod tests {
             json!({
                 "type": "message", "role": "user", "text": "hello", "delta": false
             })
+        );
+    }
+
+    #[test]
+    fn workflow_status_roundtrip() {
+        for status in [
+            WorkflowStatus::Started,
+            WorkflowStatus::StepStarted,
+            WorkflowStatus::StepDone,
+            WorkflowStatus::Looped,
+            WorkflowStatus::Finished,
+            WorkflowStatus::Failed,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(
+                serde_json::from_str::<WorkflowStatus>(&json).unwrap(),
+                status
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&AgentKind::Orchestrator).unwrap(),
+            "\"orchestrator\""
         );
     }
 }

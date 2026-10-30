@@ -18,6 +18,7 @@ axum = "0.8.9"
 futures-util = "0.3.34"
 tokio-stream = "0.1.19"
 uuid = { version = "1.26.1", features = ["v4"] }
+toml = "1.1.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 
 [workspace.lints.rust]

@@ -17,3 +17,6 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Check web script syntax
+        shell: bash
+        run: node -e "const s=require('fs').readFileSync('web/index.html','utf8');new Function(s.match(/<script>([\s\S]*)<\/script>/)[1])"

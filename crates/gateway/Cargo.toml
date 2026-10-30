@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["signal", "sync", "time", "net", "fs"] }
 tokio-stream.workspace = true
+toml.workspace = true
 uuid.workspace = true
 
 [lints]

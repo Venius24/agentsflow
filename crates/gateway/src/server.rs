@@ -1,11 +1,11 @@
 use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Duration};
 
 use crate::hub::{Actor, Hub, HubError};
-use agentsflow_adapters::{
-    claude::{ClaudeOptions, ClaudeSession},
-    codex::{CodexOptions, CodexSession, SandboxMode},
+use crate::{
+    runtime::{Runtime, RuntimeOptions},
+    workflow::{self, Manager, Spec},
 };
-use agentsflow_events::AgentKind;
+use agentsflow_adapters::codex::SandboxMode;
 use anyhow::Result;
 use axum::{
     Json, Router,
@@ -34,6 +34,7 @@ pub struct ServeOptions {
     sandbox: Option<SandboxMode>,
     codex_bin: Option<PathBuf>,
     yes: bool,
+    workflows: Vec<PathBuf>,
 }
 impl ServeOptions {
     pub fn parse(args: &[String]) -> Option<Self> {
@@ -47,6 +48,7 @@ impl ServeOptions {
             sandbox: None,
             codex_bin: None,
             yes: false,
+            workflows: Vec::new(),
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -59,6 +61,7 @@ impl ServeOptions {
                 return None;
             }
             match arg.as_str() {
+                "--workflow" => options.workflows.push(value.into()),
                 "--port" => options.port = value.parse().ok()?,
                 "--cwd" => options.cwd = PathBuf::from(value),
                 "--agents" => {
@@ -87,6 +90,31 @@ impl ServeOptions {
         }
         Some(options)
     }
+    pub fn workflows(&self) -> Result<Vec<Spec>> {
+        let mut specs = workflow::builtins()?;
+        for path in &self.workflows {
+            specs.push(Spec::load(path)?);
+        }
+        let mut names = std::collections::HashSet::new();
+        for spec in &specs {
+            if !names.insert(&spec.name) {
+                anyhow::bail!("duplicate workflow name: {}", spec.name);
+            }
+        }
+        Ok(specs)
+    }
+    pub fn runtime_options(&self) -> RuntimeOptions {
+        RuntimeOptions {
+            cwd: self.cwd.clone(),
+            claude: self.claude,
+            codex: self.codex,
+            claude_model: self.claude_model.clone(),
+            codex_model: self.codex_model.clone(),
+            sandbox: self.sandbox.clone(),
+            codex_bin: self.codex_bin.clone(),
+            yes: self.yes,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -98,6 +126,8 @@ struct AppState {
     claude: Option<Actor>,
     codex: Option<Actor>,
     shutdown: watch::Receiver<bool>,
+    workflows: Vec<Spec>,
+    manager: Manager,
 }
 impl AppState {
     fn actor(&self, agent: &str) -> Option<&Actor> {
@@ -235,9 +265,55 @@ async fn permission(State(state): State<AppState>, Json(input): Json<Permission>
 async fn get_state(State(state): State<AppState>) -> Json<Value> {
     let info = |actor: &Option<Actor>| actor.as_ref().map(Actor::state).unwrap_or_default();
     Json(
-        json!({"cwd":state.cwd, "agents":{"claude":info(&state.claude),"codex":info(&state.codex)}}),
+        json!({"cwd":state.cwd, "agents":{"claude":info(&state.claude),"codex":info(&state.codex)}, "workflow":state.manager.state()}),
     )
 }
+#[derive(Deserialize)]
+struct RunWorkflow {
+    name: String,
+    task: String,
+}
+fn validate_workflow_request<'a>(
+    specs: &'a [Spec],
+    name: &str,
+    task: &str,
+) -> Result<&'a Spec, StatusCode> {
+    if task.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    specs
+        .iter()
+        .find(|spec| spec.name == name)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+async fn list_workflows(State(state): State<AppState>) -> Json<Value> {
+    Json(json!(
+        state
+            .workflows
+            .iter()
+            .map(Spec::summary)
+            .collect::<Vec<_>>()
+    ))
+}
+async fn run_workflow(State(state): State<AppState>, Json(input): Json<RunWorkflow>) -> Response {
+    let spec = match validate_workflow_request(&state.workflows, &input.name, &input.task) {
+        Ok(spec) => spec,
+        Err(status) => return status.into_response(),
+    };
+    match state.manager.start(spec.clone(), input.task) {
+        Ok(id) => (StatusCode::ACCEPTED, Json(json!({"ok":true,"run":id}))).into_response(),
+        Err("busy") => (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response(),
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+async fn stop_workflow(State(state): State<AppState>) -> Response {
+    if state.manager.stop() {
+        Json(json!({"ok":true})).into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
@@ -245,64 +321,47 @@ fn app(state: AppState) -> Router {
         .route("/api/prompt", post(prompt))
         .route("/api/permission", post(permission))
         .route("/api/state", get(get_state))
+        .route("/api/workflows", get(list_workflows))
+        .route("/api/workflow/run", post(run_workflow))
+        .route("/api/workflow/stop", post(stop_workflow))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
 
-pub async fn serve(options: ServeOptions) -> Result<()> {
-    LocalSet::new().run_until(serve_local(options)).await
+pub async fn serve(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
+    LocalSet::new().run_until(serve_local(options, specs)).await
 }
-async fn serve_local(options: ServeOptions) -> Result<()> {
-    let cwd = std::path::absolute(options.cwd)?;
+async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, options.port)).await?;
     let port = listener.local_addr()?.port();
     let token = Uuid::new_v4().simple().to_string();
-    let hub = Hub::new();
-    let mut tasks = Vec::new();
-    let claude = if options.claude {
-        let cwd = cwd.clone();
-        let model = options.claude_model.clone();
-        let (actor, task) =
-            crate::hub::spawn(hub.clone(), AgentKind::Claude, options.yes, move || {
-                ClaudeSession::start(ClaudeOptions {
-                    cwd: Some(cwd.clone()),
-                    model: model.clone(),
-                })
-            });
-        tasks.push(task);
-        Some(actor)
-    } else {
-        None
-    };
-    let codex = if options.codex {
-        let cwd = cwd.clone();
-        let model = options.codex_model.clone();
-        let sandbox = options.sandbox.clone();
-        let bin = options.codex_bin.clone();
-        let (actor, task) =
-            crate::hub::spawn(hub.clone(), AgentKind::Codex, options.yes, move || {
-                CodexSession::start(CodexOptions {
-                    cwd: Some(cwd.clone()),
-                    model: model.clone(),
-                    sandbox: sandbox.clone(),
-                    bin: bin.clone(),
-                })
-            });
-        tasks.push(task);
-        Some(actor)
-    } else {
-        None
-    };
+    let runtime = Runtime::new(RuntimeOptions {
+        cwd: options.cwd,
+        claude: options.claude,
+        codex: options.codex,
+        claude_model: options.claude_model,
+        codex_model: options.codex_model,
+        sandbox: options.sandbox,
+        codex_bin: options.codex_bin,
+        yes: options.yes,
+    })?;
+    let manager = Manager::new(
+        runtime.hub.clone(),
+        runtime.claude.clone(),
+        runtime.codex.clone(),
+    );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = AppState {
-        hub,
+        hub: runtime.hub.clone(),
         token: token.clone(),
         port,
-        cwd: cwd.to_string_lossy().into_owned(),
-        claude: claude.clone(),
-        codex: codex.clone(),
+        cwd: runtime.cwd.to_string_lossy().into_owned(),
+        claude: runtime.claude.clone(),
+        codex: runtime.codex.clone(),
         shutdown: shutdown_rx,
+        workflows: specs,
+        manager: manager.clone(),
     };
     println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
     let result = axum::serve(listener, app(state))
@@ -313,15 +372,11 @@ async fn serve_local(options: ServeOptions) -> Result<()> {
             let _ = shutdown_tx.send(true);
         })
         .await;
-    if let Some(actor) = claude {
-        actor.shutdown().await;
+    manager.stop();
+    while manager.state().running {
+        tokio::task::yield_now().await;
     }
-    if let Some(actor) = codex {
-        actor.shutdown().await;
-    }
-    for task in tasks {
-        let _ = task.await;
-    }
+    runtime.shutdown().await;
     result?;
     Ok(())
 }
@@ -357,5 +412,18 @@ mod tests {
         assert!(!opts.claude && opts.codex);
         assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
         assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
+    }
+    #[test]
+    fn workflow_request_validation() {
+        let specs = workflow::builtins().unwrap();
+        assert!(validate_workflow_request(&specs, "implement-and-review", "task").is_ok());
+        assert_eq!(
+            validate_workflow_request(&specs, "implement-and-review", " \n").unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            validate_workflow_request(&specs, "missing", "task").unwrap_err(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

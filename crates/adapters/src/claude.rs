@@ -14,18 +14,24 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
             .message
             .content
             .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text(text) => Some(Event::Message {
+            .flat_map(|block| match block {
+                ContentBlock::Text(text) => vec![Event::Message {
                     role: Role::Assistant,
                     text: text.text.clone(),
                     delta: false,
-                }),
-                ContentBlock::ToolUse(tool) => Some(Event::ToolCall {
-                    id: tool.id.clone(),
-                    name: tool.name.clone(),
-                    input: tool.input.clone(),
-                }),
-                _ => None,
+                }],
+                ContentBlock::ToolUse(tool) => {
+                    let mut events = vec![Event::ToolCall {
+                        id: tool.id.clone(),
+                        name: tool.name.clone(),
+                        input: tool.input.clone(),
+                    }];
+                    if let Some(diff) = tool_diff(&tool.name, &tool.input) {
+                        events.push(diff);
+                    }
+                    events
+                }
+                _ => vec![],
             })
             .collect(),
         ClaudeOutput::User(message) => message
@@ -75,6 +81,45 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
         }],
         _ => vec![],
     }
+}
+
+fn tool_diff(name: &str, input: &Value) -> Option<Event> {
+    let path = input.get("file_path")?.as_str()?;
+    let lines = |text: &str, prefix: char| {
+        text.lines()
+            .map(|line| format!("{prefix}{line}\n"))
+            .collect::<String>()
+    };
+    let patch = match name {
+        "Write" => format!(
+            "--- /dev/null\n+++ {path}\n@@ new file @@\n{}",
+            lines(input.get("content")?.as_str()?, '+')
+        ),
+        "Edit" => format!(
+            "--- {path}\n+++ {path}\n@@ edit @@\n{}{}",
+            lines(input.get("old_string")?.as_str()?, '-'),
+            lines(input.get("new_string")?.as_str()?, '+')
+        ),
+        "MultiEdit" => {
+            let mut patch = format!("--- {path}\n+++ {path}\n");
+            for (i, edit) in input.get("edits")?.as_array()?.iter().enumerate() {
+                let old = edit.get("old_string")?.as_str()?;
+                let new = edit.get("new_string")?.as_str()?;
+                patch.push_str(&format!(
+                    "@@ edit {} @@\n{}{}",
+                    i + 1,
+                    lines(old, '-'),
+                    lines(new, '+')
+                ));
+            }
+            patch
+        }
+        _ => return None,
+    };
+    Some(Event::Diff {
+        path: path.into(),
+        patch,
+    })
 }
 
 #[derive(Debug, Default)]
@@ -199,6 +244,48 @@ mod tests {
                     input: json!({"path":"a"})
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn tool_diffs_and_invalid_inputs() {
+        let cases = [
+            (
+                "Write",
+                json!({"file_path":"a", "content":"one\ntwo\n"}),
+                "--- /dev/null\n+++ a\n@@ new file @@\n+one\n+two\n",
+            ),
+            (
+                "Edit",
+                json!({"file_path":"a", "old_string":"old", "new_string":"new"}),
+                "--- a\n+++ a\n@@ edit @@\n-old\n+new\n",
+            ),
+            (
+                "MultiEdit",
+                json!({"file_path":"a", "edits":[{"old_string":"a","new_string":"b"},{"old_string":"c","new_string":"d"}]}),
+                "--- a\n+++ a\n@@ edit 1 @@\n-a\n+b\n@@ edit 2 @@\n-c\n+d\n",
+            ),
+        ];
+        for (name, input, patch) in cases {
+            let events = map(assistant(
+                json!([{"type":"tool_use", "id":"i", "name":name, "input":input}]),
+            ));
+            assert!(matches!(&events[0], Event::ToolCall { .. }));
+            assert_eq!(
+                events[1],
+                Event::Diff {
+                    path: "a".into(),
+                    patch: patch.into()
+                }
+            );
+        }
+        assert!(tool_diff("Write", &json!({"file_path":"a"})).is_none());
+        assert!(
+            tool_diff(
+                "MultiEdit",
+                &json!({"file_path":"a","edits":[{"old_string":"x"}]})
+            )
+            .is_none()
         );
     }
 
