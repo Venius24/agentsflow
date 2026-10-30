@@ -20,4 +20,14 @@
 
 Путь к Codex можно задать через `--codex-bin` или переменную `CODEX_BIN`.
 Флаг `--yes` автоматически разрешает запросы инструментов; без него требуется подтверждение.
-Статус: **stage 2** — оба агента выводят события в консоль; сервер ещё не реализован.
+## Локальный сервер
+
+Запуск: `cargo run -p agentsflow-gateway -- serve --port 7878`.
+Откройте в браузере URL с токеном, напечатанный сервером. `--port 0` выбирает свободный порт.
+Доступны `--cwd`, `--agents claude,codex`, `--claude-model`, `--codex-model`, `--sandbox`, `--codex-bin` и `--yes`.
+`GET /api/events` отдаёт историю и новые события через SSE; `GET /api/state` возвращает состояние агентов.
+`POST /api/prompt` принимает `agent` и `text`; `POST /api/permission` — `agent`, `id` и `allow`.
+Все API требуют токен в query `token` или заголовке `x-agentsflow-token`.
+Сервер слушает только 127.0.0.1, проверяет Host, Origin для POST и защищает API токеном.
+
+Статус: **stage 3** — локальный сервер для Claude Code и Codex.

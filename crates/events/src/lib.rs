@@ -44,6 +44,10 @@ pub enum Event {
         tool: String,
         input: Value,
     },
+    PermissionResolved {
+        id: String,
+        allow: bool,
+    },
     Done {
         reason: String,
     },
@@ -90,6 +94,10 @@ mod tests {
                 id: "2".into(),
                 tool: "write".into(),
                 input: json!({"path": "a"}),
+            },
+            Event::PermissionResolved {
+                id: "2".into(),
+                allow: true,
             },
             Event::Done {
                 reason: "completed".into(),

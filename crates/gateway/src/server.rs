@@ -1,0 +1,361 @@
+use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Duration};
+
+use crate::hub::{Actor, Hub, HubError};
+use agentsflow_adapters::{
+    claude::{ClaudeOptions, ClaudeSession},
+    codex::{CodexOptions, CodexSession, SandboxMode},
+};
+use agentsflow_events::AgentKind;
+use anyhow::Result;
+use axum::{
+    Json, Router,
+    extract::{DefaultBodyLimit, Query, Request, State},
+    http::{StatusCode, header},
+    middleware::{self, Next},
+    response::{
+        Html, IntoResponse, Response,
+        sse::{Event as SseEvent, KeepAlive, Sse},
+    },
+    routing::{get, post},
+};
+use futures_util::{StreamExt, stream};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tokio::{net::TcpListener, sync::watch, task::LocalSet};
+use uuid::Uuid;
+
+pub struct ServeOptions {
+    port: u16,
+    cwd: PathBuf,
+    claude: bool,
+    codex: bool,
+    claude_model: Option<String>,
+    codex_model: Option<String>,
+    sandbox: Option<SandboxMode>,
+    codex_bin: Option<PathBuf>,
+    yes: bool,
+}
+impl ServeOptions {
+    pub fn parse(args: &[String]) -> Option<Self> {
+        let mut options = Self {
+            port: 7878,
+            cwd: std::env::current_dir().ok()?,
+            claude: true,
+            codex: true,
+            claude_model: None,
+            codex_model: None,
+            sandbox: None,
+            codex_bin: None,
+            yes: false,
+        };
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            if arg == "--yes" {
+                options.yes = true;
+                continue;
+            }
+            let value = args.next()?;
+            if value.is_empty() || value.starts_with("--") {
+                return None;
+            }
+            match arg.as_str() {
+                "--port" => options.port = value.parse().ok()?,
+                "--cwd" => options.cwd = PathBuf::from(value),
+                "--agents" => {
+                    options.claude = false;
+                    options.codex = false;
+                    for name in value.split(',') {
+                        match name {
+                            "claude" if !options.claude => options.claude = true,
+                            "codex" if !options.codex => options.codex = true,
+                            _ => return None,
+                        }
+                    }
+                }
+                "--claude-model" => options.claude_model = Some(value.clone()),
+                "--codex-model" => options.codex_model = Some(value.clone()),
+                "--codex-bin" => options.codex_bin = Some(value.into()),
+                "--sandbox" => {
+                    options.sandbox = Some(match value.as_str() {
+                        "read-only" => SandboxMode::Read_only,
+                        "workspace-write" => SandboxMode::Workspace_write,
+                        _ => return None,
+                    })
+                }
+                _ => return None,
+            }
+        }
+        Some(options)
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    hub: Hub,
+    token: String,
+    port: u16,
+    cwd: String,
+    claude: Option<Actor>,
+    codex: Option<Actor>,
+    shutdown: watch::Receiver<bool>,
+}
+impl AppState {
+    fn actor(&self, agent: &str) -> Option<&Actor> {
+        match agent {
+            "claude" => self.claude.as_ref(),
+            "codex" => self.codex.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+fn verify_token(expected: &str, supplied: &str) -> bool {
+    let a = expected.as_bytes();
+    let b = supplied.as_bytes();
+    let mut diff = a.len() ^ b.len();
+    for (i, byte) in a.iter().enumerate() {
+        diff |= usize::from(byte ^ b.get(i).copied().unwrap_or(0));
+    }
+    diff == 0
+}
+fn host_allowed(host: &str, port: u16) -> bool {
+    host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+}
+fn origin_allowed(origin: &str, host: &str) -> bool {
+    origin == format!("http://{host}")
+}
+
+async fn guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !host_allowed(host, state.port) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if request.method() == axum::http::Method::POST {
+        if let Some(origin) = request.headers().get(header::ORIGIN) {
+            if !origin
+                .to_str()
+                .ok()
+                .is_some_and(|value| origin_allowed(value, host))
+            {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+        }
+    }
+    if request.uri().path().starts_with("/api/") {
+        let header_token = request
+            .headers()
+            .get("x-agentsflow-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let query = Query::<HashMap<String, String>>::try_from_uri(request.uri()).ok();
+        let query_token = query
+            .as_ref()
+            .and_then(|q| q.get("token"))
+            .map(String::as_str)
+            .unwrap_or("");
+        if !verify_token(&state.token, header_token) && !verify_token(&state.token, query_token) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+    next.run(request).await
+}
+
+async fn index() -> Html<&'static str> {
+    Html(include_str!("../../../web/index.html"))
+}
+fn sse_event(envelope: agentsflow_events::Envelope) -> std::result::Result<SseEvent, Infallible> {
+    Ok(SseEvent::default()
+        .id(envelope.seq.to_string())
+        .data(serde_json::to_string(&envelope).expect("event serializes")))
+}
+async fn events(State(state): State<AppState>) -> impl IntoResponse {
+    let (snapshot, receiver) = state.hub.subscribe();
+    let live = stream::unfold(
+        (receiver, state.shutdown),
+        |(mut receiver, mut shutdown)| async move {
+            tokio::select! {
+                biased;
+                _ = shutdown.changed() => None,
+                item = receiver.recv() => match item { Ok(item) => Some((sse_event(item), (receiver, shutdown))), Err(_) => None },
+            }
+        },
+    );
+    let stream = stream::iter(snapshot.into_iter().map(sse_event)).chain(live);
+    let mut response = Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    response
+}
+#[derive(Deserialize)]
+struct Prompt {
+    agent: String,
+    text: String,
+}
+#[derive(Deserialize)]
+struct Permission {
+    agent: String,
+    id: String,
+    allow: bool,
+}
+fn failure(error: HubError) -> Response {
+    match error {
+        HubError::Busy => (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response(),
+        HubError::NotFound => StatusCode::NOT_FOUND.into_response(),
+        HubError::Closed => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+}
+async fn prompt(State(state): State<AppState>, Json(input): Json<Prompt>) -> Response {
+    if input.text.trim().is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let Some(actor) = state.actor(&input.agent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match actor.prompt(input.text).await {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
+        Err(error) => failure(error),
+    }
+}
+async fn permission(State(state): State<AppState>, Json(input): Json<Permission>) -> Response {
+    let Some(actor) = state.actor(&input.agent) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match actor.respond(input.id, input.allow).await {
+        Ok(()) => Json(json!({"ok":true})).into_response(),
+        Err(error) => failure(error),
+    }
+}
+async fn get_state(State(state): State<AppState>) -> Json<Value> {
+    let info = |actor: &Option<Actor>| actor.as_ref().map(Actor::state).unwrap_or_default();
+    Json(
+        json!({"cwd":state.cwd, "agents":{"claude":info(&state.claude),"codex":info(&state.codex)}}),
+    )
+}
+fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/", get(index))
+        .route("/api/events", get(events))
+        .route("/api/prompt", post(prompt))
+        .route("/api/permission", post(permission))
+        .route("/api/state", get(get_state))
+        .layer(DefaultBodyLimit::max(256 * 1024))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .with_state(state)
+}
+
+pub async fn serve(options: ServeOptions) -> Result<()> {
+    LocalSet::new().run_until(serve_local(options)).await
+}
+async fn serve_local(options: ServeOptions) -> Result<()> {
+    let cwd = std::path::absolute(options.cwd)?;
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, options.port)).await?;
+    let port = listener.local_addr()?.port();
+    let token = Uuid::new_v4().simple().to_string();
+    let hub = Hub::new();
+    let mut tasks = Vec::new();
+    let claude = if options.claude {
+        let cwd = cwd.clone();
+        let model = options.claude_model.clone();
+        let (actor, task) =
+            crate::hub::spawn(hub.clone(), AgentKind::Claude, options.yes, move || {
+                ClaudeSession::start(ClaudeOptions {
+                    cwd: Some(cwd.clone()),
+                    model: model.clone(),
+                })
+            });
+        tasks.push(task);
+        Some(actor)
+    } else {
+        None
+    };
+    let codex = if options.codex {
+        let cwd = cwd.clone();
+        let model = options.codex_model.clone();
+        let sandbox = options.sandbox.clone();
+        let bin = options.codex_bin.clone();
+        let (actor, task) =
+            crate::hub::spawn(hub.clone(), AgentKind::Codex, options.yes, move || {
+                CodexSession::start(CodexOptions {
+                    cwd: Some(cwd.clone()),
+                    model: model.clone(),
+                    sandbox: sandbox.clone(),
+                    bin: bin.clone(),
+                })
+            });
+        tasks.push(task);
+        Some(actor)
+    } else {
+        None
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let state = AppState {
+        hub,
+        token: token.clone(),
+        port,
+        cwd: cwd.to_string_lossy().into_owned(),
+        claude: claude.clone(),
+        codex: codex.clone(),
+        shutdown: shutdown_rx,
+    };
+    println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
+    let result = axum::serve(listener, app(state))
+        .with_graceful_shutdown(async move {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                eprintln!("signal: {error}");
+            }
+            let _ = shutdown_tx.send(true);
+        })
+        .await;
+    if let Some(actor) = claude {
+        actor.shutdown().await;
+    }
+    if let Some(actor) = codex {
+        actor.shutdown().await;
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    result?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn security_checks() {
+        assert!(verify_token("012345", "012345"));
+        assert!(!verify_token("012345", "012346"));
+        assert!(!verify_token("012345", "0123456"));
+        assert!(host_allowed("127.0.0.1:7878", 7878));
+        assert!(host_allowed("localhost:7878", 7878));
+        assert!(!host_allowed("localhost:80", 7878));
+        assert!(!host_allowed("evil:7878", 7878));
+        assert!(origin_allowed("http://localhost:7878", "localhost:7878"));
+        assert!(!origin_allowed("http://127.0.0.1:7878", "localhost:7878"));
+    }
+    #[test]
+    fn parse_serve_options() {
+        let args = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let opts = ServeOptions::parse(&args(&[
+            "--port",
+            "0",
+            "--agents",
+            "codex",
+            "--sandbox",
+            "workspace-write",
+        ]))
+        .unwrap();
+        assert_eq!(opts.port, 0);
+        assert!(!opts.claude && opts.codex);
+        assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
+        assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
+    }
+}
