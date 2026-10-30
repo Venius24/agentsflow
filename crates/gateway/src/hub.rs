@@ -1,6 +1,9 @@
 use std::{
     collections::VecDeque,
+    fs::{File, OpenOptions},
     future::Future,
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -9,7 +12,7 @@ use std::{
 };
 
 use agentsflow_adapters::Agent;
-use agentsflow_events::{AgentKind, Envelope, Event, Role};
+use agentsflow_events::{AgentKind, Envelope, Event, Role, WorkflowStatus};
 use anyhow::Result;
 use serde::Serialize;
 use tokio::{
@@ -26,9 +29,122 @@ struct Inner {
     seq: AtomicU64,
     data: Mutex<Data>,
     tx: broadcast::Sender<Envelope>,
+    log: Option<LogWriter>,
 }
 struct Data {
     history: VecDeque<Envelope>,
+}
+
+const HISTORY_LIMIT: usize = 5000;
+
+struct LogWriter {
+    tx: Option<std::sync::mpsc::Sender<Envelope>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for LogWriter {
+    fn drop(&mut self) {
+        self.tx.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl LogWriter {
+    fn start(path: &Path) -> Self {
+        let path = path.to_owned();
+        let (tx, rx) = std::sync::mpsc::channel::<Envelope>();
+        let thread = std::thread::spawn(move || {
+            let result = (|| -> std::io::Result<()> {
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .read(true)
+                    .open(path)?;
+                if file.metadata()?.len() > 0 {
+                    file.seek(SeekFrom::End(-1))?;
+                    let mut last = [0];
+                    file.read_exact(&mut last)?;
+                    if last[0] != b'\n' {
+                        file.write_all(b"\n")?;
+                    }
+                }
+                for envelope in rx {
+                    let mut line = serde_json::to_vec(&envelope)?;
+                    line.push(b'\n');
+                    file.write_all(&line)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("event log write failed: {error}");
+            }
+        });
+        Self {
+            tx: Some(tx),
+            thread: Some(thread),
+        }
+    }
+}
+
+/// Events that close whatever a previous run left open (permission requests,
+/// agent turns, workflows), so a replayed history does not show them as live.
+fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> {
+    const REASON: &str = "interrupted: server restarted";
+    let mut permissions: Vec<(AgentKind, String, String)> = Vec::new();
+    let mut turns: Vec<(AgentKind, String, bool)> = Vec::new();
+    let mut workflows: Vec<(String, String)> = Vec::new();
+    for envelope in history {
+        let agent = envelope.agent;
+        match &envelope.event {
+            Event::PermissionRequest { id, .. } => {
+                permissions.push((agent, envelope.session.clone(), id.clone()));
+            }
+            Event::PermissionResolved { id, .. } => permissions.retain(|(_, _, open)| open != id),
+            Event::Workflow { name, status, .. } => match status {
+                WorkflowStatus::Started => workflows.push((name.clone(), envelope.session.clone())),
+                WorkflowStatus::Finished | WorkflowStatus::Failed => {
+                    workflows.retain(|(open, _)| open != name);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        if agent != AgentKind::Orchestrator {
+            let done = matches!(envelope.event, Event::Done { .. });
+            match turns.iter_mut().find(|(known, _, _)| *known == agent) {
+                Some(turn) => *turn = (agent, envelope.session.clone(), done),
+                None => turns.push((agent, envelope.session.clone(), done)),
+            }
+        }
+    }
+    let mut closers = Vec::new();
+    for (agent, session, id) in permissions {
+        let event = Event::PermissionResolved { id, allow: false };
+        closers.push((agent, session, event));
+    }
+    for (agent, session, done) in turns {
+        if !done {
+            closers.push((
+                agent,
+                session,
+                Event::Done {
+                    reason: REASON.into(),
+                },
+            ));
+        }
+    }
+    for (name, session) in workflows {
+        let event = Event::Workflow {
+            name,
+            step: None,
+            status: WorkflowStatus::Failed,
+            detail: REASON.into(),
+        };
+        closers.push((AgentKind::Orchestrator, session, event));
+    }
+    closers
 }
 
 impl Hub {
@@ -41,8 +157,61 @@ impl Hub {
                     history: VecDeque::new(),
                 }),
                 tx,
+                log: None,
             }),
         }
+    }
+    pub fn with_log(path: &Path) -> Self {
+        let mut history = VecDeque::new();
+        let mut seq = 0;
+        match File::open(path) {
+            Ok(file) => {
+                let mut reader = BufReader::new(file);
+                let mut line = Vec::new();
+                let mut warned = false;
+                loop {
+                    line.clear();
+                    match reader.read_until(b'\n', &mut line) {
+                        Ok(0) => break,
+                        Ok(_) => match serde_json::from_slice::<Envelope>(&line) {
+                            Ok(envelope) => {
+                                seq = seq.max(envelope.seq);
+                                if history.len() == HISTORY_LIMIT {
+                                    history.pop_front();
+                                }
+                                history.push_back(envelope);
+                            }
+                            Err(_) => {
+                                if !warned {
+                                    eprintln!("event log contains invalid lines; skipping them");
+                                    warned = true;
+                                }
+                            }
+                        },
+                        Err(error) => {
+                            eprintln!("event log read failed: {error}");
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!("event log read failed: {error}"),
+        }
+        let closers = interrupted(&history);
+        let (tx, _) = broadcast::channel(1024);
+        let hub = Self {
+            inner: Arc::new(Inner {
+                seq: AtomicU64::new(seq),
+                data: Mutex::new(Data { history }),
+                tx,
+                log: Some(LogWriter::start(path)),
+            }),
+        };
+        for (agent, session, event) in closers {
+            hub.publish(agent, &session, event);
+        }
+        hub
     }
     pub fn publish(&self, agent: AgentKind, session: &str, event: Event) {
         let mut data = self.inner.data.lock().unwrap();
@@ -57,10 +226,15 @@ impl Hub {
                 .min(u64::MAX as u128) as u64,
             event,
         };
-        if data.history.len() == 5000 {
+        if data.history.len() == HISTORY_LIMIT {
             data.history.pop_front();
         }
         data.history.push_back(envelope.clone());
+        if let Some(log) = &self.inner.log {
+            if let Some(tx) = &log.tx {
+                let _ = tx.send(envelope.clone());
+            }
+        }
         let _ = self.inner.tx.send(envelope);
     }
     pub fn subscribe(&self) -> (Vec<Envelope>, broadcast::Receiver<Envelope>) {
@@ -200,7 +374,7 @@ async fn run_actor<A, F, Fut>(
                     session_id = Uuid::new_v4().to_string();
                 }
                 hub.publish(
-                    agent.clone(),
+                    agent,
                     &session_id,
                     Event::Message {
                         role: Role::User,
@@ -232,7 +406,7 @@ async fn run_actor<A, F, Fut>(
                                     state.lock().unwrap().pending.push(id.clone());
                                 }
                             }
-                            hub.publish(agent.clone(), &session_id, event);
+                            hub.publish(agent, &session_id, event);
                             if let Some(id) = permission {
                                 let (allow, response) = if yes {
                                     (true, None)
@@ -261,7 +435,7 @@ async fn run_actor<A, F, Fut>(
                                 match active.respond(&id, allow).await {
                                     Ok(()) => {
                                         hub.publish(
-                                            agent.clone(),
+                                            agent,
                                             &session_id,
                                             Event::PermissionResolved { id, allow },
                                         );
@@ -309,14 +483,14 @@ async fn run_actor<A, F, Fut>(
                     Err(error) => {
                         eprintln!("agent error: {error:#}");
                         hub.publish(
-                            agent.clone(),
+                            agent,
                             &session_id,
                             Event::Error {
                                 message: format!("{error:#}"),
                             },
                         );
                         hub.publish(
-                            agent.clone(),
+                            agent,
                             &session_id,
                             Event::Done {
                                 reason: "error".into(),
@@ -342,7 +516,108 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn log_restores_history_and_continues_sequence() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("agentsflow-{}.jsonl", Uuid::new_v4()));
+        {
+            let hub = Hub::with_log(&path);
+            for _ in 0..5002 {
+                hub.publish(
+                    AgentKind::Claude,
+                    "test",
+                    Event::Done {
+                        reason: "ok".into(),
+                    },
+                );
+            }
+        }
+        {
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(file, "invalid json").unwrap();
+            writeln!(file, "another invalid line").unwrap();
+        }
+        {
+            let hub = Hub::with_log(&path);
+            let (history, _) = hub.subscribe();
+            assert_eq!(history.len(), 5000);
+            assert_eq!(history.first().unwrap().seq, 3);
+            assert_eq!(history.last().unwrap().seq, 5002);
+            hub.publish(
+                AgentKind::Codex,
+                "test",
+                Event::Done {
+                    reason: "new".into(),
+                },
+            );
+            assert_eq!(hub.subscribe().0.last().unwrap().seq, 5003);
+        }
+        let lines = std::fs::read_to_string(&path).unwrap();
+        let last: Envelope = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
+        assert_eq!(last.seq, 5003);
+        assert!(matches!(last.event, Event::Done { ref reason } if reason == "new"));
+        std::fs::remove_file(path).unwrap();
+    }
+
     use super::*;
+
+    #[test]
+    fn log_closes_what_a_crash_left_open() {
+        let path = std::env::temp_dir().join(format!("agentsflow-{}.jsonl", Uuid::new_v4()));
+        {
+            let hub = Hub::with_log(&path);
+            let workflow = |status| Event::Workflow {
+                name: "flow".into(),
+                step: None,
+                status,
+                detail: String::new(),
+            };
+            hub.publish(
+                AgentKind::Orchestrator,
+                "w",
+                workflow(WorkflowStatus::Started),
+            );
+            hub.publish(AgentKind::Claude, "c", permission());
+            hub.publish(
+                AgentKind::Codex,
+                "x",
+                Event::Done {
+                    reason: "ok".into(),
+                },
+            );
+        }
+        let hub = Hub::with_log(&path);
+        let (history, _) = hub.subscribe();
+        let tail: Vec<_> = history
+            .iter()
+            .skip(3)
+            .map(|e| (e.agent, &e.event))
+            .collect();
+        assert!(matches!(
+            tail[..],
+            [
+                (
+                    AgentKind::Claude,
+                    Event::PermissionResolved { allow: false, .. }
+                ),
+                (AgentKind::Claude, Event::Done { .. }),
+                (
+                    AgentKind::Orchestrator,
+                    Event::Workflow {
+                        status: WorkflowStatus::Failed,
+                        ..
+                    }
+                ),
+            ]
+        ));
+        drop(hub);
+        // A second restart finds everything closed and adds nothing.
+        let hub = Hub::with_log(&path);
+        assert_eq!(hub.subscribe().0.len(), 6);
+        drop(hub);
+        std::fs::remove_file(path).unwrap();
+    }
+
     use std::sync::atomic::AtomicUsize;
     use tokio::task::LocalSet;
 

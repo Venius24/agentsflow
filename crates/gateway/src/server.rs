@@ -35,6 +35,7 @@ pub struct ServeOptions {
     codex_bin: Option<PathBuf>,
     yes: bool,
     workflows: Vec<PathBuf>,
+    log: Option<PathBuf>,
 }
 impl ServeOptions {
     pub fn parse(args: &[String]) -> Option<Self> {
@@ -49,6 +50,7 @@ impl ServeOptions {
             codex_bin: None,
             yes: false,
             workflows: Vec::new(),
+            log: None,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -61,6 +63,7 @@ impl ServeOptions {
                 return None;
             }
             match arg.as_str() {
+                "--log" => options.log = Some(value.into()),
                 "--workflow" => options.workflows.push(value.into()),
                 "--port" => options.port = value.parse().ok()?,
                 "--cwd" => options.cwd = PathBuf::from(value),
@@ -113,6 +116,7 @@ impl ServeOptions {
             sandbox: self.sandbox.clone(),
             codex_bin: self.codex_bin.clone(),
             yes: self.yes,
+            log: self.log.clone(),
         }
     }
 }
@@ -345,6 +349,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         sandbox: options.sandbox,
         codex_bin: options.codex_bin,
         yes: options.yes,
+        log: options.log,
     })?;
     let manager = Manager::new(
         runtime.hub.clone(),
@@ -402,6 +407,8 @@ mod tests {
         let opts = ServeOptions::parse(&args(&[
             "--port",
             "0",
+            "--log",
+            "events.jsonl",
             "--agents",
             "codex",
             "--sandbox",
@@ -409,6 +416,11 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(opts.port, 0);
+        assert_eq!(
+            opts.log.as_deref(),
+            Some(std::path::Path::new("events.jsonl"))
+        );
+        assert!(ServeOptions::parse(&args(&["--log"])).is_none());
         assert!(!opts.claude && opts.codex);
         assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
         assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
