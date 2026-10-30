@@ -152,6 +152,21 @@ impl ClaudeSession {
     }
 }
 
+impl crate::Agent for ClaudeSession {
+    async fn send(&mut self, prompt: &str) -> Result<()> {
+        Self::send(self, prompt).await
+    }
+    async fn next_events(&mut self) -> Result<Vec<Event>> {
+        Self::next_events(self).await
+    }
+    async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
+        Self::respond(self, request_id, allow).await
+    }
+    async fn shutdown(self) -> Result<()> {
+        Self::shutdown(self).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

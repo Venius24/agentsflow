@@ -9,6 +9,7 @@ dependencies = [
  "agentsflow-events",
  "anyhow",
  "claude-codes",
+ "codex-codes",
  "serde_json",
  "tokio",
 ]
@@ -114,6 +115,20 @@ dependencies = [
  "thiserror",
  "tokio",
  "uuid",
+ "which",
+]
+
+[[package]]
+name = "codex-codes"
+version = "0.166.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74edae0c491319c0fcd4f6037832e596c64e1acb35585805232425cc9d80008a"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
  "which",
 ]
 

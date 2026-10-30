@@ -1,11 +1,15 @@
 use std::{io::Write, path::PathBuf, process::ExitCode};
 
-use agentsflow_adapters::claude::{ClaudeOptions, ClaudeSession};
+use agentsflow_adapters::{
+    Agent,
+    claude::{ClaudeOptions, ClaudeSession},
+    codex::{CodexOptions, CodexSession, SandboxMode},
+};
 use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-const USAGE: &str = "Usage: agentsflow claude \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes]\n       agentsflow --version";
+const USAGE: &str = "Usage: agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();
@@ -17,9 +21,9 @@ fn truncate(text: &str) -> String {
     }
 }
 
-fn format_event(event: &Event) -> String {
+fn format_event(agent: &str, event: &Event) -> String {
     match event {
-        Event::Message { text, .. } => format!("claude> {text}"),
+        Event::Message { text, .. } => format!("{agent}> {text}"),
         Event::ToolCall { name, input, .. } => {
             format!("[tool] {name} {}", truncate(&input.to_string()))
         }
@@ -40,14 +44,19 @@ fn format_event(event: &Event) -> String {
 }
 
 struct Command {
+    agent: String,
     prompt: String,
-    opts: ClaudeOptions,
+    model: Option<String>,
+    cwd: Option<PathBuf>,
     yes: bool,
+    sandbox: Option<SandboxMode>,
+    bin: Option<PathBuf>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Option<Command> {
     let mut args = args.into_iter();
-    if args.next()?.as_str() != "claude" {
+    let agent = args.next()?;
+    if agent != "claude" && agent != "codex" {
         return None;
     }
     let prompt = args.next()?;
@@ -55,27 +64,36 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Option<Command> {
         return None;
     }
     let mut command = Command {
+        agent,
         prompt,
-        opts: ClaudeOptions::default(),
+        model: None,
+        cwd: None,
         yes: false,
+        sandbox: None,
+        bin: None,
     };
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--model" => {
-                let value = args.next()?;
-                if value.starts_with("--") {
-                    return None;
-                }
-                command.opts.model = Some(value);
-            }
-            "--cwd" => {
-                let value = args.next()?;
-                if value.starts_with("--") {
-                    return None;
-                }
-                command.opts.cwd = Some(PathBuf::from(value));
-            }
             "--yes" => command.yes = true,
+            "--model" | "--cwd" | "--sandbox" | "--codex-bin" => {
+                let value = args.next()?;
+                if value.starts_with("--") || value.is_empty() {
+                    return None;
+                }
+                match arg.as_str() {
+                    "--model" => command.model = Some(value),
+                    "--cwd" => command.cwd = Some(value.into()),
+                    "--sandbox" if command.agent == "codex" => {
+                        command.sandbox = Some(match value.as_str() {
+                            "read-only" => SandboxMode::Read_only,
+                            "workspace-write" => SandboxMode::Workspace_write,
+                            _ => return None,
+                        })
+                    }
+                    "--codex-bin" if command.agent == "codex" => command.bin = Some(value.into()),
+                    _ => return None,
+                }
+            }
             _ => return None,
         }
     }
@@ -83,14 +101,33 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Option<Command> {
 }
 
 async fn run(command: Command) -> Result<()> {
-    let mut session = ClaudeSession::start(command.opts).await?;
-    let result = run_turn(&mut session, &command.prompt, command.yes).await;
+    if command.agent == "claude" {
+        let session = ClaudeSession::start(ClaudeOptions {
+            model: command.model,
+            cwd: command.cwd,
+        })
+        .await?;
+        run_turn(session, "claude", &command.prompt, command.yes).await
+    } else {
+        let session = CodexSession::start(CodexOptions {
+            model: command.model,
+            cwd: command.cwd,
+            sandbox: command.sandbox,
+            bin: command.bin,
+        })
+        .await?;
+        run_turn(session, "codex", &command.prompt, command.yes).await
+    }
+}
+
+async fn run_turn<A: Agent>(mut session: A, agent: &str, prompt: &str, yes: bool) -> Result<()> {
+    let result = drive_turn(&mut session, agent, prompt, yes).await;
     let shutdown = session.shutdown().await;
     result?;
     shutdown
 }
 
-async fn run_turn(session: &mut ClaudeSession, prompt: &str, yes: bool) -> Result<()> {
+async fn drive_turn<A: Agent>(session: &mut A, agent: &str, prompt: &str, yes: bool) -> Result<()> {
     session.send(prompt).await?;
     let mut input = BufReader::new(tokio::io::stdin());
     loop {
@@ -98,10 +135,10 @@ async fn run_turn(session: &mut ClaudeSession, prompt: &str, yes: bool) -> Resul
         for event in &events {
             if let Event::PermissionRequest { id, .. } = event {
                 let allow = if yes {
-                    println!("{} [auto-allowed]", format_event(event));
+                    println!("{} [auto-allowed]", format_event(agent, event));
                     true
                 } else {
-                    print!("{} Allow? [y/N] ", format_event(event));
+                    print!("{} Allow? [y/N] ", format_event(agent, event));
                     std::io::stdout().flush()?;
                     let mut answer = String::new();
                     input.read_line(&mut answer).await?;
@@ -109,7 +146,7 @@ async fn run_turn(session: &mut ClaudeSession, prompt: &str, yes: bool) -> Resul
                 };
                 session.respond(id, allow).await?;
             } else {
-                println!("{}", format_event(event));
+                println!("{}", format_event(agent, event));
             }
         }
         if events
@@ -148,56 +185,82 @@ mod tests {
     use agentsflow_events::Role;
 
     #[test]
-    fn formats_messages_and_results() {
+    fn formats_events() {
+        let event = Event::Message {
+            role: Role::Assistant,
+            text: "hello".into(),
+            delta: false,
+        };
+        assert_eq!(format_event("claude", &event), "claude> hello");
+        assert_eq!(format_event("codex", &event), "codex> hello");
         assert_eq!(
-            format_event(&Event::Message {
-                role: Role::Assistant,
-                text: "hello".into(),
-                delta: false
-            }),
-            "claude> hello"
-        );
-        assert_eq!(
-            format_event(&Event::ToolResult {
-                id: "1".into(),
-                output: "bad".into(),
-                is_error: true
-            }),
+            format_event(
+                "codex",
+                &Event::ToolResult {
+                    id: "1".into(),
+                    output: "bad".into(),
+                    is_error: true
+                }
+            ),
             "[result:error] bad"
         );
         assert_eq!(
-            format_event(&Event::Done {
-                reason: "success".into()
-            }),
-            "[done] success"
+            format_event(
+                "codex",
+                &Event::Done {
+                    reason: "completed".into()
+                }
+            ),
+            "[done] completed"
         );
     }
-
     #[test]
-    fn formats_and_truncates_tool_input() {
+    fn truncates_unicode() {
         let input = "я".repeat(201).into();
-        let text = format_event(&Event::ToolCall {
-            id: "1".into(),
-            name: "Write".into(),
-            input,
-        });
+        let text = format_event(
+            "codex",
+            &Event::ToolCall {
+                id: "1".into(),
+                name: "Write".into(),
+                input,
+            },
+        );
         assert!(text.starts_with("[tool] Write \""));
         assert!(text.ends_with("..."));
         assert_eq!(truncate(&"я".repeat(201)).chars().count(), 203);
     }
-
     #[test]
     fn parses_options_and_rejects_invalid_commands() {
         let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let cmd = parse_args(args(&[
-            "claude", "hello", "--model", "haiku", "--cwd", ".", "--yes",
+            "codex",
+            "hello",
+            "--model",
+            "m",
+            "--cwd",
+            ".",
+            "--yes",
+            "--sandbox",
+            "workspace-write",
+            "--codex-bin",
+            "bin",
         ]))
         .unwrap();
-        assert_eq!(cmd.prompt, "hello");
-        assert_eq!(cmd.opts.model.as_deref(), Some("haiku"));
+        assert_eq!(cmd.agent, "codex");
+        assert_eq!(cmd.model.as_deref(), Some("m"));
+        assert_eq!(cmd.sandbox, Some(SandboxMode::Workspace_write));
+        assert_eq!(cmd.bin, Some(PathBuf::from("bin")));
         assert!(cmd.yes);
-        assert!(parse_args(args(&[])).is_none());
-        assert!(parse_args(args(&["unknown"])).is_none());
-        assert!(parse_args(args(&["claude", "hi", "--model", "--yes"])).is_none());
+        assert!(parse_args(args(&["claude", "hello", "--model", "haiku"])).is_some());
+        for input in [
+            &[][..],
+            &["unknown"][..],
+            &["claude", "hi", "--sandbox", "read-only"][..],
+            &["claude", "hi", "--codex-bin", "x"][..],
+            &["codex", "hi", "--sandbox", "danger-full-access"][..],
+            &["codex", "hi", "--model", "--yes"][..],
+        ] {
+            assert!(parse_args(args(input)).is_none());
+        }
     }
 }

@@ -2,19 +2,22 @@
 
 Лёгкий шлюз для событий агентов Claude Code и Codex.
 
-Планируемый поток:
-`Claude Code / Codex -> адаптеры -> события -> локальный сервер -> веб-страница`
+Поток: `Claude Code / Codex -> адаптеры -> события -> консоль`
 
 Структура проекта:
 - `crates/events` — общий формат событий.
-- `crates/adapters` — адаптер Claude Code.
+- `crates/adapters` — адаптеры Claude Code и Codex.
 - `crates/gateway` — консольный шлюз.
 - `web` — статическая страница с двумя колонками.
 - `.github/workflows` — проверки CI.
 
 Сборка: `cargo build`.
 Тесты: `cargo test`.
-Запуск (требуется настроенный Claude CLI): `cargo run -p agentsflow-gateway -- claude "Привет" --model haiku`.
-Для автоматического разрешения всех запросов инструментов добавьте `--yes`.
 
-Статус: **stage 1** — события Claude Code выводятся в консоль; сервер и адаптер Codex ещё не реализованы.
+Для запуска нужны настроенные CLI соответствующих агентов:
+- `cargo run -p agentsflow-gateway -- claude "Привет" --model haiku`
+- `cargo run -p agentsflow-gateway -- codex "Привет" --sandbox read-only`
+
+Путь к Codex можно задать через `--codex-bin` или переменную `CODEX_BIN`.
+Флаг `--yes` автоматически разрешает запросы инструментов; без него требуется подтверждение.
+Статус: **stage 2** — оба агента выводят события в консоль; сервер ещё не реализован.
