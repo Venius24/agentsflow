@@ -135,6 +135,17 @@
   .mail-body.expanded { max-height: none; }
   .mail-more { background: none; border: none; padding: 0; color: var(--muted); font-size: 11px; text-decoration: underline; }
   .mailline { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .mail-form { display: flex; flex-direction: column; gap: 6px; padding: 9px 12px; border-top: 1px solid var(--border); }
+  .mail-form h3 { margin: 0; font-size: 12px; }
+  .mail-form select, .mail-form input, .mail-form textarea { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; background: var(--bg); color: var(--text); font: inherit; }
+  .mail-form textarea { resize: vertical; min-height: 52px; }
+  .mail-form .mail-fields { display: flex; gap: 6px; }
+  .mail-form .mail-fields select { flex: 0 1 120px; }
+  .mail-form .mail-fields input { flex: 1; }
+  .mail-form .mail-actions { display: flex; align-items: center; gap: 8px; }
+  .mail-form .mail-error { color: var(--err); font-size: 12px; overflow-wrap: anywhere; }
+  .mail-reply-button { margin: 8px 10px; font-size: 12px; }
+  .mail-form.reply { background: var(--panel-2); border-radius: 0 0 8px 8px; }
   @media (max-width: 1100px) {
     main { grid-template-columns: 1fr 1fr; overflow-y: auto; grid-auto-rows: minmax(70vh, auto); }
     .col.orch { grid-column: 1 / -1; min-height: 50vh; }
@@ -387,7 +398,7 @@ function handle(env) {
 
 
 const orch = { running: false, workflows: [] };
-const mail = { threads: new Map(), messages: new Map(), read: new Set() };
+const mail = { threads: new Map(), messages: new Map(), read: new Set(), viewed: new Set(), awaiting: new Set(), agentsKnown: false };
 function buildOrch() {
   const col = el("section", "col orch");
   col.style.setProperty("--accent", "var(--orch)");
@@ -399,6 +410,7 @@ function buildOrch() {
   tabs.setAttribute("role", "tablist");
   orch.journalTab = el("button", "", "Журнал");
   orch.mailTab = el("button", "", "Почта");
+  orch.mailTab.title = "для вас: 0";
   orch.badge = el("span", "mail-badge", "0");
   orch.badge.hidden = true;
   orch.mailTab.append(orch.badge);
@@ -427,7 +439,8 @@ function buildOrch() {
   mail.empty = el("div", "empty", "Писем пока нет");
   mail.log.append(mail.empty);
   watchSticky(mail);
-  col.append(head, tabs, ctl, orch.log, mail.log);
+  mail.compose = buildMailForm(null);
+  col.append(head, tabs, ctl, orch.log, mail.log, mail.compose.form);
   $("#panes").append(col);
 
   orch.journalTab.onclick = () => selectOrchTab("journal");
@@ -456,13 +469,122 @@ function selectOrchTab(tab) {
   orch.controls.hidden = showMail;
   orch.log.hidden = showMail;
   mail.log.hidden = !showMail;
+  mail.compose.form.hidden = !showMail;
   orch.journalTab.setAttribute("aria-selected", String(!showMail));
   orch.mailTab.setAttribute("aria-selected", String(showMail));
   try { localStorage.setItem("agentsflow.orchTab", tab); } catch (_) {}
   if (showMail) {
+    for (const thread of mail.threads.values()) markThreadViewed(thread);
     stickToBottom(mail);
     requestAnimationFrame(refreshMailBodies);
   }
+}
+function agentName(agent) { return agent === "orchestrator" ? "вы (оркестратор)" : agent; }
+function updateRecipients(form, thread) {
+  const current = form.to.value;
+  const allowed = AGENTS.filter(a => mail.agentsKnown && panes[a.id].enabled && (!thread || thread.participants.has(a.id)));
+  form.to.replaceChildren(...allowed.map(a => {
+    const option = el("option", "", a.title);
+    option.value = a.id;
+    return option;
+  }));
+  if (allowed.some(a => a.id === current)) form.to.value = current;
+  form.to.disabled = !mail.agentsKnown || !allowed.length || form.sending;
+  form.send.disabled = form.to.disabled;
+  if (!mail.agentsKnown) form.error.textContent = "Загрузка списка агентов…";
+  else if (!allowed.length) form.error.textContent = "Нет доступных получателей";
+  else if (form.error.textContent === "Нет доступных получателей" || form.error.textContent === "Загрузка списка агентов…") form.error.textContent = "";
+}
+function revealSentThread(id) {
+  const thread = mail.threads.get(id);
+  if (!thread) return;
+  mail.awaiting.delete(id);
+  thread.manual = true;
+  thread.card.open = true;
+  markThreadViewed(thread);
+  thread.card.scrollIntoView({ block: "nearest" });
+  requestAnimationFrame(refreshMailBodies);
+}
+function buildMailForm(thread) {
+  const form = el("form", "mail-form" + (thread ? " reply" : ""));
+  form.noValidate = true;
+  if (!thread) form.append(el("h3", "", "Новое письмо"));
+  const fields = el("div", "mail-fields");
+  const to = el("select");
+  to.setAttribute("aria-label", "Получатель");
+  const subject = el("input");
+  subject.type = "text";
+  subject.placeholder = "Тема";
+  subject.setAttribute("aria-label", "Тема");
+  if (thread) subject.value = "Re: " + thread.subject;
+  fields.append(to, subject);
+  const body = el("textarea");
+  body.placeholder = "Текст письма (Ctrl+Enter — отправить)";
+  body.setAttribute("aria-label", "Текст письма");
+  const actions = el("div", "mail-actions");
+  const send = el("button", "send", "Отправить");
+  send.type = "submit";
+  const error = el("span", "mail-error");
+  error.setAttribute("role", "alert");
+  actions.append(send, error);
+  form.append(fields, body, actions);
+  const state = { form, to, subject, body, send, error, sending: false };
+  updateRecipients(state, thread);
+  body.addEventListener("keydown", event => {
+    if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (state.sending) return;
+    const title = subject.value.trim();
+    const text = body.value;
+    if (!mail.agentsKnown || !to.value || !panes[to.value] || !panes[to.value].enabled) {
+      error.textContent = "Выберите доступного получателя";
+      return;
+    }
+    if (!title || Array.from(title).length > 200) {
+      error.textContent = "Тема обязательна и должна содержать не более 200 символов";
+      return;
+    }
+    if (!text.trim() || new TextEncoder().encode(text).length > 65536) {
+      error.textContent = "Текст обязателен и должен занимать не более 65536 байт UTF-8";
+      return;
+    }
+    const payload = { from: "orchestrator", to: to.value, subject: title, body: text };
+    if (thread) payload.thread = thread.id;
+    state.sending = true;
+    error.textContent = "";
+    updateRecipients(state, thread);
+    subject.disabled = body.disabled = true;
+    try {
+      const result = await post("/api/mail/send", payload);
+      subject.value = thread ? "Re: " + thread.subject : "";
+      body.value = "";
+      mail.awaiting.add(result.thread);
+      revealSentThread(result.thread);
+      if (thread) form.hidden = true;
+    } catch (err) { error.textContent = err.message; }
+    finally {
+      state.sending = false;
+      subject.disabled = body.disabled = false;
+      updateRecipients(state, thread);
+    }
+  });
+  return state;
+}
+function markThreadViewed(thread) {
+  if (mail.log.hidden || !thread.card.open) return;
+  for (const id of thread.messageIds) {
+    const message = mail.messages.get(id);
+    if (message && message.to === "orchestrator") {
+      mail.viewed.add(id);
+      message.unread.hidden = true;
+    }
+  }
+  updateMailBadge();
 }
 function mailTime(ms) {
   const date = new Date(ms);
@@ -471,10 +593,15 @@ function mailTime(ms) {
     .map(value => String(value).padStart(2, "0")).join(":");
 }
 function updateMailBadge() {
-  let unread = 0;
-  for (const id of mail.messages.keys()) if (!mail.read.has(id)) unread++;
+  let unread = 0, forYou = 0;
+  for (const [id, message] of mail.messages) {
+    if (message.to === "orchestrator") {
+      if (!mail.viewed.has(id)) { unread++; forYou++; }
+    } else if (!mail.read.has(id)) unread++;
+  }
   orch.badge.textContent = String(unread);
   orch.badge.hidden = unread === 0;
+  orch.mailTab.title = "для вас: " + forYou;
 }
 function refreshMailBodies() {
   for (const message of mail.messages.values()) {
@@ -495,11 +622,21 @@ function handleMail(env) {
     const items = el("div", "mail-items");
     summary.append(title, meta);
     card.append(summary, items);
-    thread = { card, summary, meta, items, subject: ev.subject, participants: new Set(), count: 0, manual: false };
+    thread = { id: ev.thread, card, summary, meta, items, subject: ev.subject, participants: new Set(), messageIds: [], count: 0, manual: false };
+    const reply = el("button", "mail-reply-button", "Ответить");
+    reply.type = "button";
+    thread.reply = buildMailForm(thread);
+    thread.reply.form.hidden = true;
+    reply.onclick = () => {
+      thread.reply.form.hidden = !thread.reply.form.hidden;
+      if (!thread.reply.form.hidden) { updateRecipients(thread.reply, thread); thread.reply.body.focus(); }
+    };
+    card.append(reply, thread.reply.form);
     summary.addEventListener("click", (event) => {
       event.preventDefault();
       thread.manual = true;
       card.open = !card.open;
+      markThreadViewed(thread);
       requestAnimationFrame(refreshMailBodies);
     });
     mail.threads.set(ev.thread, thread);
@@ -507,13 +644,16 @@ function handleMail(env) {
   }
   thread.participants.add(ev.from);
   thread.participants.add(ev.to);
+  updateRecipients(thread.reply, thread);
   thread.count++;
-  thread.meta.textContent = [...thread.participants].join(" ⇄ ") + " · " + thread.count + " писем · " + mailTime(env.ts_ms);
+  thread.meta.textContent = [...thread.participants].map(agentName).join(" ⇄ ") + " · " + thread.count + " писем · " + mailTime(env.ts_ms);
   const item = el("div", "mail-item");
   const meta = el("div", "mail-meta");
-  const unread = el("span", "mail-unread", "не прочитано");
-  unread.hidden = mail.read.has(ev.id);
-  meta.append(el("span", "mail-route", ev.from + " → " + ev.to), el("span", "", mailTime(env.ts_ms)), unread);
+  const unread = el("span", "mail-unread", ev.to === "orchestrator" ? "не просмотрено" : "не прочитано");
+  unread.hidden = ev.to === "orchestrator" ? mail.viewed.has(ev.id) : mail.read.has(ev.id);
+  meta.append(el("span", "mail-route", agentName(ev.from) + " → " + agentName(ev.to)), el("span", "", mailTime(env.ts_ms)));
+  if (ev.to === "orchestrator") meta.append(el("span", "", "для вас"));
+  meta.append(unread);
   item.append(meta);
   if (ev.subject !== thread.subject) item.append(el("div", "mail-subject", ev.subject));
   const body = el("div", "mail-body", ev.body);
@@ -526,13 +666,16 @@ function handleMail(env) {
   };
   item.append(body, more);
   thread.items.append(item);
-  mail.messages.set(ev.id, { unread, body, more });
+  mail.messages.set(ev.id, { unread, body, more, to: ev.to });
+  thread.messageIds.push(ev.id);
   mail.log.prepend(thread.card);
   for (const other of mail.threads.values()) if (!other.manual) other.card.open = other === thread;
+  if (mail.awaiting.has(ev.thread)) revealSentThread(ev.thread);
+  markThreadViewed(thread);
   updateMailBadge();
   stickToBottom(mail);
   requestAnimationFrame(refreshMailBodies);
-  const line = "✉ → " + ev.to + ": " + ev.subject;
+  const line = "✉ " + (ev.from === "orchestrator" ? "вы (оркестратор) " : "") + "→ " + agentName(ev.to) + ": " + ev.subject;
   if (panes[ev.from]) push(panes[ev.from], el("div", "mailline", line));
   push(orch, el("div", "mailline", line));
 }
@@ -540,7 +683,7 @@ function handleMailRead(ev) {
   for (const id of ev.ids) {
     mail.read.add(id);
     const message = mail.messages.get(id);
-    if (message) message.unread.hidden = true;
+    if (message && message.to !== "orchestrator") message.unread.hidden = true;
   }
   updateMailBadge();
 }
@@ -632,6 +775,9 @@ async function loadState() {
       const st = s.agents && s.agents[a.id];
       if (st) { panes[a.id].enabled = !!st.enabled; refreshStatus(panes[a.id]); }
     }
+    mail.agentsKnown = true;
+    updateRecipients(mail.compose, null);
+    for (const thread of mail.threads.values()) updateRecipients(thread.reply, thread);
   } catch (_) {}
 }
 

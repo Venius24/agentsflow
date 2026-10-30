@@ -2,13 +2,14 @@ use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Durati
 
 use crate::hub::{Actor, Hub, HubError};
 use crate::{
-    runtime::{Runtime, RuntimeOptions},
+    runtime::{MailAgentTokens, Runtime, RuntimeOptions},
     workflow::{self, Manager, Spec},
 };
 use agentsflow_adapters::codex::SandboxMode;
+use agentsflow_events::AgentKind;
 use anyhow::Result;
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Query, Request, State},
     http::{StatusCode, header},
     middleware::{self, Next},
@@ -118,6 +119,7 @@ impl ServeOptions {
             yes: self.yes,
             log: self.log.clone(),
             mail: None,
+            mail_agent_tokens: MailAgentTokens::default(),
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
         }
     }
@@ -127,6 +129,7 @@ impl ServeOptions {
 struct AppState {
     hub: Hub,
     token: String,
+    mail_agent_tokens: MailAgentTokens,
     port: u16,
     cwd: String,
     claude: Option<Actor>,
@@ -161,7 +164,66 @@ fn origin_allowed(origin: &str, host: &str) -> bool {
     origin == format!("http://{host}")
 }
 
-async fn guard(State(state): State<AppState>, request: Request, next: Next) -> Response {
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Identity {
+    Main,
+    Agent(AgentKind),
+}
+
+fn identify(token: &str, main: &str, agents: &MailAgentTokens) -> Option<Identity> {
+    if token.is_empty() {
+        return None;
+    }
+    if verify_token(main, token) {
+        return Some(Identity::Main);
+    }
+    if agents
+        .claude
+        .as_deref()
+        .is_some_and(|expected| verify_token(expected, token))
+    {
+        return Some(Identity::Agent(AgentKind::Claude));
+    }
+    if agents
+        .codex
+        .as_deref()
+        .is_some_and(|expected| verify_token(expected, token))
+    {
+        return Some(Identity::Agent(AgentKind::Codex));
+    }
+    None
+}
+
+fn authorize(identity: Identity, method: &axum::http::Method, path: &str) -> bool {
+    identity == Identity::Main
+        || (*method == axum::http::Method::POST
+            && matches!(path, "/api/mail/send" | "/api/mail/inbox"))
+}
+fn authenticate(
+    header: &str,
+    query: &str,
+    main: &str,
+    agents: &MailAgentTokens,
+) -> Option<Identity> {
+    identify(header, main, agents).or_else(|| identify(query, main, agents))
+}
+
+fn authorize_request(
+    header: &str,
+    query: &str,
+    main: &str,
+    agents: &MailAgentTokens,
+    method: &axum::http::Method,
+    path: &str,
+) -> Result<Identity, StatusCode> {
+    let identity = authenticate(header, query, main, agents).ok_or(StatusCode::UNAUTHORIZED)?;
+    if !authorize(identity, method, path) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(identity)
+}
+
+async fn guard(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let host = request
         .headers()
         .get(header::HOST)
@@ -193,9 +255,18 @@ async fn guard(State(state): State<AppState>, request: Request, next: Next) -> R
             .and_then(|q| q.get("token"))
             .map(String::as_str)
             .unwrap_or("");
-        if !verify_token(&state.token, header_token) && !verify_token(&state.token, query_token) {
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
+        let identity = match authorize_request(
+            header_token,
+            query_token,
+            &state.token,
+            &state.mail_agent_tokens,
+            request.method(),
+            request.uri().path(),
+        ) {
+            Ok(identity) => identity,
+            Err(status) => return status.into_response(),
+        };
+        request.extensions_mut().insert(identity);
     }
     next.run(request).await
 }
@@ -269,6 +340,7 @@ fn recipient_enabled(agent: agentsflow_events::AgentKind, claude: bool, codex: b
 }
 async fn send_mail(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     input: Result<Json<SendMail>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let Ok(Json(input)) = input else {
@@ -278,6 +350,13 @@ async fn send_mail(
         )
             .into_response();
     };
+    if matches!(identity, Identity::Agent(agent) if parse_agent(&input.from) != Some(agent)) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"sender does not match token"})),
+        )
+            .into_response();
+    }
     let Some(from) = parse_agent(&input.from) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -313,6 +392,7 @@ async fn send_mail(
 }
 async fn inbox(
     State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
     input: Result<Json<Inbox>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let Ok(Json(input)) = input else {
@@ -322,6 +402,13 @@ async fn inbox(
         )
             .into_response();
     };
+    if matches!(identity, Identity::Agent(owner) if parse_agent(&input.agent) != Some(owner)) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"inbox does not match token"})),
+        )
+            .into_response();
+    }
     let Some(agent) = parse_agent(&input.agent) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -436,6 +523,10 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, options.port)).await?;
     let port = listener.local_addr()?.port();
     let token = Uuid::new_v4().simple().to_string();
+    let mail_agent_tokens = MailAgentTokens {
+        claude: options.claude.then(|| Uuid::new_v4().simple().to_string()),
+        codex: options.codex.then(|| Uuid::new_v4().simple().to_string()),
+    };
     let runtime = Runtime::new(RuntimeOptions {
         cwd: options.cwd,
         claude: options.claude,
@@ -448,10 +539,11 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         log: options.log,
         mail: Some(agentsflow_adapters::MailConfig {
             url: format!("http://127.0.0.1:{port}"),
-            token: token.clone(),
+            token: String::new(),
             exe: std::env::current_exe()?,
             thread_limit: crate::hub::MAX_THREAD_MAILS,
         }),
+        mail_agent_tokens: mail_agent_tokens.clone(),
         mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
     })?;
     let manager = Manager::new(
@@ -463,6 +555,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let state = AppState {
         hub: runtime.hub.clone(),
         token: token.clone(),
+        mail_agent_tokens,
         port,
         cwd: runtime.cwd.to_string_lossy().into_owned(),
         claude: runtime.claude.clone(),
@@ -492,6 +585,218 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_token_access() {
+        let tokens = MailAgentTokens {
+            claude: Some("claude-token".into()),
+            codex: Some("codex-token".into()),
+        };
+        let claude = authenticate("claude-token", "", "main-token", &tokens).unwrap();
+        let codex = authenticate("", "codex-token", "main-token", &tokens).unwrap();
+        assert_eq!(claude, Identity::Agent(AgentKind::Claude));
+        assert_eq!(codex, Identity::Agent(AgentKind::Codex));
+        assert_ne!(claude, codex);
+        assert_eq!(authenticate("bad", "", "main-token", &tokens), None);
+        assert_eq!(
+            authenticate("bad", "main-token", "main-token", &tokens),
+            Some(Identity::Main)
+        );
+        assert_eq!(
+            authenticate("claude-token", "main-token", "main-token", &tokens),
+            Some(claude)
+        );
+        for identity in [claude, codex] {
+            for path in ["/api/mail/send", "/api/mail/inbox"] {
+                assert!(authorize(identity, &axum::http::Method::POST, path));
+                assert!(!authorize(identity, &axum::http::Method::GET, path));
+            }
+            for (method, path) in [
+                (axum::http::Method::POST, "/api/prompt"),
+                (axum::http::Method::GET, "/api/state"),
+                (axum::http::Method::POST, "/api/permission"),
+                (axum::http::Method::POST, "/api/workflow/run"),
+            ] {
+                assert!(!authorize(identity, &method, path));
+                assert!(authorize(Identity::Main, &method, path));
+            }
+        }
+        for (method, path) in [
+            (axum::http::Method::POST, "/api/prompt"),
+            (axum::http::Method::GET, "/api/state"),
+            (axum::http::Method::POST, "/api/permission"),
+            (axum::http::Method::POST, "/api/workflow/run"),
+        ] {
+            assert_eq!(
+                authorize_request("claude-token", "", "main-token", &tokens, &method, path),
+                Err(StatusCode::FORBIDDEN)
+            );
+            assert_eq!(
+                authorize_request("bad", "", "main-token", &tokens, &method, path),
+                Err(StatusCode::UNAUTHORIZED)
+            );
+            assert_eq!(
+                authorize_request("", "main-token", "main-token", &tokens, &method, path),
+                Ok(Identity::Main)
+            );
+        }
+        assert_eq!(
+            authenticate("", "", "main-token", &MailAgentTokens::default()),
+            None
+        );
+    }
+
+    struct NoAgent;
+    impl agentsflow_adapters::Agent for NoAgent {
+        async fn send(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn next_events(&mut self) -> Result<Vec<agentsflow_events::Event>> {
+            std::future::pending().await
+        }
+        async fn respond(&mut self, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
+        async fn shutdown(self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn personal_mail_identity() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (claude, claude_task) =
+                    crate::hub::spawn(hub.clone(), AgentKind::Claude, false, || async {
+                        Ok(NoAgent)
+                    });
+                let (codex, codex_task) =
+                    crate::hub::spawn(hub.clone(), AgentKind::Codex, false, || async {
+                        Ok(NoAgent)
+                    });
+                let manager = Manager::new(hub.clone(), Some(claude.clone()), Some(codex.clone()));
+                let (_shutdown, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub,
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::default(),
+                    port: 7878,
+                    cwd: ".".into(),
+                    claude: Some(claude.clone()),
+                    codex: Some(codex.clone()),
+                    shutdown,
+                    workflows: Vec::new(),
+                    manager,
+                };
+                let make = |from: &str, to: &str| SendMail {
+                    from: from.into(),
+                    to: to.into(),
+                    subject: "subject".into(),
+                    body: "body".into(),
+                    thread: None,
+                };
+                let c = Identity::Agent(AgentKind::Claude);
+                let d = Identity::Agent(AgentKind::Codex);
+                assert_eq!(
+                    send_mail(
+                        State(state.clone()),
+                        Extension(c),
+                        Ok(Json(make("claude", "codex")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                let denied = send_mail(
+                    State(state.clone()),
+                    Extension(c),
+                    Ok(Json(make("codex", "claude"))),
+                )
+                .await;
+                assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+                let body = axum::body::to_bytes(denied.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["error"],
+                    "sender does not match token"
+                );
+                assert_eq!(
+                    send_mail(
+                        State(state.clone()),
+                        Extension(d),
+                        Ok(Json(make("claude", "codex")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    inbox(
+                        State(state.clone()),
+                        Extension(c),
+                        Ok(Json(Inbox {
+                            agent: "codex".into()
+                        }))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    inbox(
+                        State(state.clone()),
+                        Extension(d),
+                        Ok(Json(Inbox {
+                            agent: "claude".into()
+                        }))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    inbox(
+                        State(state.clone()),
+                        Extension(c),
+                        Ok(Json(Inbox {
+                            agent: "claude".into()
+                        }))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                assert_eq!(
+                    inbox(
+                        State(state.clone()),
+                        Extension(d),
+                        Ok(Json(Inbox {
+                            agent: "codex".into()
+                        }))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                assert_eq!(
+                    send_mail(
+                        State(state),
+                        Extension(Identity::Main),
+                        Ok(Json(make("orchestrator", "codex")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                claude.shutdown().await;
+                codex.shutdown().await;
+                claude_task.await.unwrap();
+                codex_task.await.unwrap();
+            })
+            .await;
+    }
     #[test]
     fn security_checks() {
         assert!(verify_token("012345", "012345"));
