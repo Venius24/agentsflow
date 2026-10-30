@@ -147,6 +147,19 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> 
     closers
 }
 
+fn compact(path: &Path, history: &VecDeque<Envelope>) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    let mut bytes = Vec::new();
+    for envelope in history {
+        serde_json::to_writer(&mut bytes, envelope)?;
+        bytes.push(b'\n');
+    }
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
 impl Hub {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1024);
@@ -164,6 +177,7 @@ impl Hub {
     pub fn with_log(path: &Path) -> Self {
         let mut history = VecDeque::new();
         let mut seq = 0;
+        let mut lines = 0;
         match File::open(path) {
             Ok(file) => {
                 let mut reader = BufReader::new(file);
@@ -175,6 +189,7 @@ impl Hub {
                         Ok(0) => break,
                         Ok(_) => match serde_json::from_slice::<Envelope>(&line) {
                             Ok(envelope) => {
+                                lines += 1;
                                 seq = seq.max(envelope.seq);
                                 if history.len() == HISTORY_LIMIT {
                                     history.pop_front();
@@ -197,6 +212,12 @@ impl Hub {
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => eprintln!("event log read failed: {error}"),
+        }
+        // Keep the file bounded: drop what no longer fits the replayed history.
+        if lines > history.len() {
+            if let Err(error) = compact(path, &history) {
+                eprintln!("event log compaction failed: {error}");
+            }
         }
         let closers = interrupted(&history);
         let (tx, _) = broadcast::channel(1024);
@@ -553,6 +574,8 @@ mod tests {
             assert_eq!(hub.subscribe().0.last().unwrap().seq, 5003);
         }
         let lines = std::fs::read_to_string(&path).unwrap();
+        // 5002 + 2 invalid lines were compacted to 5000 at start, plus one new event.
+        assert_eq!(lines.lines().count(), HISTORY_LIMIT + 1);
         let last: Envelope = serde_json::from_str(lines.lines().last().unwrap()).unwrap();
         assert_eq!(last.seq, 5003);
         assert!(matches!(last.event, Event::Done { ref reason } if reason == "new"));

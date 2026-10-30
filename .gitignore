@@ -1,5 +1,7 @@
 target/
 *.log
+*.jsonl
+*.jsonl.tmp
 .env
 .DS_Store
 .idea/
