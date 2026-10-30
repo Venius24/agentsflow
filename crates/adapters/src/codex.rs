@@ -155,6 +155,7 @@ pub struct CodexOptions {
     pub sandbox: Option<SandboxMode>,
     pub bin: Option<PathBuf>,
     pub mail: Option<crate::MailConfig>,
+    pub effort: Option<String>,
 }
 
 fn choose_binary(
@@ -219,6 +220,9 @@ impl CodexSession {
         let mut builder = AppServerBuilder::new()
             .command(find_binary(opts.bin))
             .working_directory(&cwd);
+        if let Some(effort) = opts.effort {
+            builder = builder.config_override("model_reasoning_effort", json!(effort).to_string());
+        }
         if let Some(mail) = opts.mail {
             let exe = mail
                 .exe
@@ -228,7 +232,7 @@ impl CodexSession {
                 ("mcp_servers.mail.command", json!(exe).to_string()),
                 (
                     "mcp_servers.mail.args",
-                    json!(["mail-mcp", "--as", "codex"]).to_string(),
+                    json!(["mail-mcp", "--as", mail.id]).to_string(),
                 ),
                 (
                     "mcp_servers.mail.env.AGENTSFLOW_URL",
@@ -237,6 +241,10 @@ impl CodexSession {
                 (
                     "mcp_servers.mail.env.AGENTSFLOW_TOKEN",
                     json!(mail.token).to_string(),
+                ),
+                (
+                    "mcp_servers.mail.env.AGENTSFLOW_PEERS",
+                    json!(mail.peers.join(",")).to_string(),
                 ),
                 (
                     "mcp_servers.mail.default_tools_approval_mode",

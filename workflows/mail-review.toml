@@ -3,7 +3,7 @@ description = "Реализация и ревью через переписку 
 
 [[step]]
 id = "work"
-agent = "codex"
+agent = "@engineer"
 mode = "mail"
 subject = "implementation and review"
 timeout_secs = 1800
@@ -12,7 +12,7 @@ next = "end"
 prompt = '''Task:
 {task}
 
-Implement it in the working directory. When the implementation is ready, send a mail to claude with subject "review" in the same thread summarising your changes and asking for a code review; claude will reply in the same thread either with the exact last line `VERDICT: APPROVED` or with concrete fixes; apply the fixes and mail claude again; do at most 3 review rounds. When claude approves, send a final mail to orchestrator in the same thread: a short summary followed by `VERDICT: APPROVED` as the very last line. If you cannot finish, send a mail to orchestrator explaining why, without that line.
+Implement it in the working directory. When the implementation is ready, send a mail to {@reviewer} with subject "review" in the same thread summarising your changes and asking for a code review; {@reviewer} will reply in the same thread either with the exact last line `VERDICT: APPROVED` or with concrete fixes; apply the fixes and mail {@reviewer} again; do at most 3 review rounds. When {@reviewer} approves, send a final mail to orchestrator in the same thread: a short summary followed by `VERDICT: APPROVED` as the very last line. If you cannot finish, send a mail to orchestrator explaining why, without that line.
 
-You MUST include the following exact text in your review request to claude:
+You MUST include the following exact text in your review request to {@reviewer}:
 Reply in this thread. Review the changes in the working directory (read the files and run the project's checks if any). Your reply MUST end with the exact last line `VERDICT: APPROVED` if there are no blocking problems; otherwise list concrete fixes and do not use that line.'''

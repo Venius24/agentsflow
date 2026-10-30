@@ -12,7 +12,7 @@ use std::{
 };
 
 use agentsflow_adapters::Agent;
-use agentsflow_events::{AgentKind, Envelope, Event, Role, WorkflowStatus};
+use agentsflow_events::{AgentId, Envelope, Event, Role, WorkflowStatus};
 use anyhow::Result;
 use serde::Serialize;
 use tokio::{
@@ -45,8 +45,8 @@ pub const MAX_THREAD_MAILS: usize = 12;
 pub struct MailMsg {
     pub id: String,
     pub thread: String,
-    pub from: AgentKind,
-    pub to: AgentKind,
+    pub from: AgentId,
+    pub to: AgentId,
     pub subject: String,
     pub body: String,
     pub seq: u64,
@@ -88,8 +88,8 @@ fn mail_state(history: &VecDeque<Envelope>) -> (Vec<MailMsg>, HashSet<String>) {
             } => mail.push(MailMsg {
                 id: id.clone(),
                 thread: thread.clone(),
-                from: *from,
-                to: *to,
+                from: from.clone(),
+                to: to.clone(),
                 subject: subject.clone(),
                 body: body.clone(),
                 seq: envelope.seq,
@@ -156,16 +156,16 @@ impl LogWriter {
 
 /// Events that close whatever a previous run left open (permission requests,
 /// agent turns, workflows), so a replayed history does not show them as live.
-fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> {
+fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentId, String, Event)> {
     const REASON: &str = "interrupted: server restarted";
-    let mut permissions: Vec<(AgentKind, String, String)> = Vec::new();
-    let mut turns: Vec<(AgentKind, String, bool)> = Vec::new();
+    let mut permissions: Vec<(AgentId, String, String)> = Vec::new();
+    let mut turns: Vec<(AgentId, String, bool)> = Vec::new();
     let mut workflows: Vec<(String, String)> = Vec::new();
     for envelope in history {
-        let agent = envelope.agent;
+        let agent = envelope.agent.clone();
         match &envelope.event {
             Event::PermissionRequest { id, .. } => {
-                permissions.push((agent, envelope.session.clone(), id.clone()));
+                permissions.push((agent.clone(), envelope.session.clone(), id.clone()));
             }
             Event::PermissionResolved { id, .. } => permissions.retain(|(_, _, open)| open != id),
             Event::Workflow { name, status, .. } => match status {
@@ -177,7 +177,7 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> 
             },
             _ => {}
         }
-        if agent != AgentKind::Orchestrator
+        if agent != AgentId::orchestrator()
             && !matches!(envelope.event, Event::Mail { .. } | Event::MailRead { .. })
         {
             let done = matches!(envelope.event, Event::Done { .. });
@@ -210,7 +210,7 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> 
             status: WorkflowStatus::Failed,
             detail: REASON.into(),
         };
-        closers.push((AgentKind::Orchestrator, session, event));
+        closers.push((AgentId::orchestrator(), session, event));
     }
     closers
 }
@@ -313,17 +313,11 @@ impl Hub {
         }
         hub
     }
-    pub fn publish(&self, agent: AgentKind, session: &str, event: Event) {
+    pub fn publish(&self, agent: AgentId, session: &str, event: Event) {
         let mut data = self.inner.data.lock().unwrap();
         self.publish_locked(&mut data, agent, session, event);
     }
-    fn publish_locked(
-        &self,
-        data: &mut Data,
-        agent: AgentKind,
-        session: &str,
-        event: Event,
-    ) -> u64 {
+    fn publish_locked(&self, data: &mut Data, agent: AgentId, session: &str, event: Event) -> u64 {
         let envelope = Envelope {
             session: session.into(),
             agent,
@@ -359,8 +353,8 @@ impl Hub {
     }
     pub fn send_mail(
         &self,
-        from: AgentKind,
-        to: AgentKind,
+        from: AgentId,
+        to: AgentId,
         subject: String,
         body: String,
         thread: Option<String>,
@@ -398,7 +392,7 @@ impl Hub {
         {
             self.publish_locked(
                 &mut data,
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 "mail",
                 Event::Error {
                     message: MailError::ThreadLimit.to_string(),
@@ -415,12 +409,12 @@ impl Hub {
         let event = Event::Mail {
             id: id.clone(),
             thread: thread.clone(),
-            from,
-            to,
+            from: from.clone(),
+            to: to.clone(),
             subject: subject.clone(),
             body: body.clone(),
         };
-        let seq = self.publish_locked(&mut data, from, "mail", event);
+        let seq = self.publish_locked(&mut data, from.clone(), "mail", event);
         let mail = MailMsg {
             id,
             thread,
@@ -433,7 +427,7 @@ impl Hub {
         data.mail.push(mail.clone());
         Ok(mail)
     }
-    pub fn unread(&self, agent: AgentKind) -> Vec<MailMsg> {
+    pub fn unread(&self, agent: AgentId) -> Vec<MailMsg> {
         let data = self.inner.data.lock().unwrap();
         data.mail
             .iter()
@@ -441,10 +435,10 @@ impl Hub {
             .cloned()
             .collect()
     }
-    pub fn unread_count(&self, agent: AgentKind) -> usize {
+    pub fn unread_count(&self, agent: AgentId) -> usize {
         self.unread(agent).len()
     }
-    pub fn take_inbox(&self, agent: AgentKind) -> Vec<MailMsg> {
+    pub fn take_inbox(&self, agent: AgentId) -> Vec<MailMsg> {
         let mut data = self.inner.data.lock().unwrap();
         let mail: Vec<_> = data
             .mail
@@ -455,11 +449,16 @@ impl Hub {
         if !mail.is_empty() {
             let ids: Vec<_> = mail.iter().map(|mail| mail.id.clone()).collect();
             data.read.extend(ids.iter().cloned());
-            self.publish_locked(&mut data, agent, "mail", Event::MailRead { agent, ids });
+            self.publish_locked(
+                &mut data,
+                agent.clone(),
+                "mail",
+                Event::MailRead { agent, ids },
+            );
         }
         mail
     }
-    pub fn take_thread_for(&self, agent: AgentKind, thread: &str) -> Option<MailMsg> {
+    pub fn take_thread_for(&self, agent: AgentId, thread: &str) -> Option<MailMsg> {
         let mut data = self.inner.data.lock().unwrap();
         let mail = data
             .mail
@@ -469,7 +468,7 @@ impl Hub {
         data.read.insert(mail.id.clone());
         self.publish_locked(
             &mut data,
-            agent,
+            agent.clone(),
             "mail",
             Event::MailRead {
                 agent,
@@ -559,12 +558,7 @@ impl Actor {
     }
 }
 
-pub fn spawn<A, F, Fut>(
-    hub: Hub,
-    agent: AgentKind,
-    yes: bool,
-    factory: F,
-) -> (Actor, JoinHandle<()>)
+pub fn spawn<A, F, Fut>(hub: Hub, agent: AgentId, yes: bool, factory: F) -> (Actor, JoinHandle<()>)
 where
     A: Agent + 'static,
     F: Fn() -> Fut + 'static,
@@ -595,7 +589,7 @@ async fn close<A: Agent>(session: &mut Option<A>) {
 
 async fn run_actor<A, F, Fut>(
     hub: Hub,
-    agent: AgentKind,
+    agent: AgentId,
     yes: bool,
     factory: F,
     state: Arc<Mutex<AgentState>>,
@@ -615,7 +609,7 @@ async fn run_actor<A, F, Fut>(
                     session_id = Uuid::new_v4().to_string();
                 }
                 hub.publish(
-                    agent,
+                    agent.clone(),
                     &session_id,
                     Event::Message {
                         role: Role::User,
@@ -647,7 +641,7 @@ async fn run_actor<A, F, Fut>(
                                     state.lock().unwrap().pending.push(id.clone());
                                 }
                             }
-                            hub.publish(agent, &session_id, event);
+                            hub.publish(agent.clone(), &session_id, event);
                             if let Some(id) = permission {
                                 let (allow, response) = if yes {
                                     (true, None)
@@ -676,7 +670,7 @@ async fn run_actor<A, F, Fut>(
                                 match active.respond(&id, allow).await {
                                     Ok(()) => {
                                         hub.publish(
-                                            agent,
+                                            agent.clone(),
                                             &session_id,
                                             Event::PermissionResolved { id, allow },
                                         );
@@ -724,14 +718,14 @@ async fn run_actor<A, F, Fut>(
                     Err(error) => {
                         eprintln!("agent error: {error:#}");
                         hub.publish(
-                            agent,
+                            agent.clone(),
                             &session_id,
                             Event::Error {
                                 message: format!("{error:#}"),
                             },
                         );
                         hub.publish(
-                            agent,
+                            agent.clone(),
                             &session_id,
                             Event::Done {
                                 reason: "error".into(),
@@ -767,8 +761,8 @@ mod tests {
             hub.set_mail_thread_limit(2);
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Claude,
+                    AgentId::from("claude"),
+                    AgentId::from("claude"),
                     "s".into(),
                     "b".into(),
                     None
@@ -777,8 +771,8 @@ mod tests {
             );
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "".into(),
                     "b".into(),
                     None
@@ -787,8 +781,8 @@ mod tests {
             );
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "я".repeat(201),
                     "b".into(),
                     None
@@ -797,8 +791,8 @@ mod tests {
             );
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "s".into(),
                     "я".repeat(32769),
                     None
@@ -807,8 +801,8 @@ mod tests {
             );
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "s".into(),
                     "".into(),
                     None
@@ -817,8 +811,8 @@ mod tests {
             );
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "s".into(),
                     "b".into(),
                     Some("missing".into())
@@ -827,8 +821,8 @@ mod tests {
             );
             first = hub
                 .send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "s".into(),
                     "b".into(),
                     None,
@@ -836,8 +830,8 @@ mod tests {
                 .unwrap();
             second = hub
                 .send_mail(
-                    AgentKind::Claude,
-                    AgentKind::Codex,
+                    AgentId::from("claude"),
+                    AgentId::from("codex"),
                     "s2".into(),
                     "b2".into(),
                     Some(first.thread.clone()),
@@ -846,23 +840,23 @@ mod tests {
             assert!(first.seq < second.seq);
             assert_eq!(
                 hub.send_mail(
-                    AgentKind::Codex,
-                    AgentKind::Claude,
+                    AgentId::from("codex"),
+                    AgentId::from("claude"),
                     "s".into(),
                     "b".into(),
                     Some(first.thread.clone())
                 ),
                 Err(MailError::ThreadLimit)
             );
-            assert_eq!(hub.unread_count(AgentKind::Codex), 2);
+            assert_eq!(hub.unread_count(AgentId::from("codex")), 2);
             assert_eq!(
-                hub.take_inbox(AgentKind::Codex),
+                hub.take_inbox(AgentId::from("codex")),
                 vec![first.clone(), second.clone()]
             );
-            assert!(hub.take_inbox(AgentKind::Codex).is_empty());
+            assert!(hub.take_inbox(AgentId::from("codex")).is_empty());
             hub.send_mail(
-                AgentKind::Claude,
-                AgentKind::Codex,
+                AgentId::from("claude"),
+                AgentId::from("codex"),
                 "new".into(),
                 "body".into(),
                 None,
@@ -871,7 +865,7 @@ mod tests {
         }
         {
             let hub = Hub::with_log(&path);
-            let unread = hub.unread(AgentKind::Codex);
+            let unread = hub.unread(AgentId::from("codex"));
             assert_eq!(unread.len(), 1);
             assert_eq!(unread[0].subject, "new");
             let (history, _) = hub.subscribe();
@@ -896,7 +890,7 @@ mod tests {
             let hub = Hub::with_log(&path);
             for _ in 0..5002 {
                 hub.publish(
-                    AgentKind::Claude,
+                    AgentId::from("claude"),
                     "test",
                     Event::Done {
                         reason: "ok".into(),
@@ -916,7 +910,7 @@ mod tests {
             assert_eq!(history.first().unwrap().seq, 3);
             assert_eq!(history.last().unwrap().seq, 5002);
             hub.publish(
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 "test",
                 Event::Done {
                     reason: "new".into(),
@@ -947,13 +941,13 @@ mod tests {
                 detail: String::new(),
             };
             hub.publish(
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 "w",
                 workflow(WorkflowStatus::Started),
             );
-            hub.publish(AgentKind::Claude, "c", permission());
+            hub.publish(AgentId::from("claude"), "c", permission());
             hub.publish(
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 "x",
                 Event::Done {
                     reason: "ok".into(),
@@ -965,24 +959,23 @@ mod tests {
         let tail: Vec<_> = history
             .iter()
             .skip(3)
-            .map(|e| (e.agent, &e.event))
+            .map(|e| (e.agent.clone(), &e.event))
             .collect();
+        assert_eq!(tail.len(), 3);
+        assert_eq!(tail[0].0, AgentId::from("claude"));
         assert!(matches!(
-            tail[..],
-            [
-                (
-                    AgentKind::Claude,
-                    Event::PermissionResolved { allow: false, .. }
-                ),
-                (AgentKind::Claude, Event::Done { .. }),
-                (
-                    AgentKind::Orchestrator,
-                    Event::Workflow {
-                        status: WorkflowStatus::Failed,
-                        ..
-                    }
-                ),
-            ]
+            tail[0].1,
+            Event::PermissionResolved { allow: false, .. }
+        ));
+        assert_eq!(tail[1].0, AgentId::from("claude"));
+        assert!(matches!(tail[1].1, Event::Done { .. }));
+        assert_eq!(tail[2].0, AgentId::orchestrator());
+        assert!(matches!(
+            tail[2].1,
+            Event::Workflow {
+                status: WorkflowStatus::Failed,
+                ..
+            }
         ));
         drop(hub);
         // A second restart finds everything closed and adds nothing.
@@ -1043,7 +1036,7 @@ mod tests {
     fn snapshot_and_live_order() {
         let hub = Hub::new();
         hub.publish(
-            AgentKind::Claude,
+            AgentId::from("claude"),
             "a",
             Event::Done {
                 reason: "first".into(),
@@ -1051,7 +1044,7 @@ mod tests {
         );
         let (snapshot, mut rx) = hub.subscribe();
         hub.publish(
-            AgentKind::Codex,
+            AgentId::from("codex"),
             "b",
             Event::Done {
                 reason: "second".into(),
@@ -1061,7 +1054,11 @@ mod tests {
         assert_eq!(snapshot[0].seq, 1);
         assert_eq!(rx.try_recv().unwrap().seq, 2);
         for _ in 0..5000 {
-            hub.publish(AgentKind::Claude, "a", Event::Done { reason: "x".into() });
+            hub.publish(
+                AgentId::from("claude"),
+                "a",
+                Event::Done { reason: "x".into() },
+            );
         }
         let (history, _) = hub.subscribe();
         assert_eq!(history.len(), 5000);
@@ -1090,7 +1087,7 @@ mod tests {
             .run_until(async {
                 let closed = Arc::new(AtomicUsize::new(0));
                 let copy = closed.clone();
-                let (actor, task) = spawn(Hub::new(), AgentKind::Claude, false, move || {
+                let (actor, task) = spawn(Hub::new(), AgentId::from("claude"), false, move || {
                     let copy = copy.clone();
                     async move { Ok(Hangs(copy)) }
                 });
@@ -1113,7 +1110,7 @@ mod tests {
                     let (_, mut rx) = hub.subscribe();
                     let answers = Arc::new(Mutex::new(Vec::new()));
                     let copy = answers.clone();
-                    let (actor, task) = spawn(hub, AgentKind::Claude, yes, move || {
+                    let (actor, task) = spawn(hub, AgentId::from("claude"), yes, move || {
                         let answers = copy.clone();
                         async move {
                             Ok(Fake {
@@ -1168,7 +1165,7 @@ mod tests {
                 let (_, mut rx) = hub.subscribe();
                 let starts = Arc::new(AtomicUsize::new(0));
                 let count = starts.clone();
-                let (actor, task) = spawn(hub, AgentKind::Codex, false, move || {
+                let (actor, task) = spawn(hub, AgentId::from("codex"), false, move || {
                     let first = count.fetch_add(1, Ordering::SeqCst) == 0;
                     async move {
                         Ok(Fake {

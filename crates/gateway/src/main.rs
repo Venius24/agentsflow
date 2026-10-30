@@ -5,6 +5,7 @@ mod mail;
 mod mail_mcp;
 mod runtime;
 mod server;
+mod team;
 mod workflow;
 
 use std::process::ExitCode;
@@ -16,10 +17,19 @@ async fn main() -> ExitCode {
         println!("agentsflow {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
+    if args.first().is_some_and(|arg| arg == "team") {
+        return match team::run_cli(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                ExitCode::from(2)
+            }
+        };
+    }
     if args.first().is_some_and(|arg| arg == "mail-mcp") {
         if args.len() != 3
             || args[1] != "--as"
-            || !matches!(args[2].as_str(), "claude" | "codex" | "orchestrator")
+            || !(args[2] == "orchestrator" || team::valid_id(&args[2]))
         {
             eprintln!("Usage: agentsflow mail-mcp --as <claude|codex|orchestrator>");
             return ExitCode::from(2);
@@ -50,8 +60,8 @@ async fn main() -> ExitCode {
         };
     }
     let result = if args.first().is_some_and(|arg| arg == "serve") {
-        match server::ServeOptions::parse(&args[1..]) {
-            Some(options) => {
+        match server::ServeOptions::parse_checked(&args[1..]) {
+            Ok(Some(options)) => {
                 let workflows = match options.workflows() {
                     Ok(workflows) => workflows,
                     Err(error) => {
@@ -61,8 +71,12 @@ async fn main() -> ExitCode {
                 };
                 server::serve(options, workflows).await
             }
-            None => {
+            Ok(None) => {
                 eprintln!("{}", cli::USAGE);
+                return ExitCode::from(2);
+            }
+            Err(error) => {
+                eprintln!("[error] {error:#}");
                 return ExitCode::from(2);
             }
         }

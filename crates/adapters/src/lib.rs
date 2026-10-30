@@ -12,6 +12,8 @@ pub struct MailConfig {
     pub token: String,
     pub exe: std::path::PathBuf,
     pub thread_limit: usize,
+    pub id: String,
+    pub peers: Vec<String>,
 }
 
 #[allow(async_fn_in_trait)]

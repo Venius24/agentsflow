@@ -2,11 +2,12 @@ use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Durati
 
 use crate::hub::{Actor, Hub, HubError};
 use crate::{
-    runtime::{MailAgentTokens, Runtime, RuntimeOptions},
+    runtime::{Agents, MailAgentTokens, Runtime, RuntimeOptions},
+    team::Team,
     workflow::{self, Manager, Spec},
 };
 use agentsflow_adapters::codex::SandboxMode;
-use agentsflow_events::AgentKind;
+use agentsflow_events::AgentId;
 use anyhow::Result;
 use axum::{
     Extension, Json, Router,
@@ -30,6 +31,7 @@ pub struct ServeOptions {
     cwd: PathBuf,
     claude: bool,
     codex: bool,
+    team: Team,
     claude_model: Option<String>,
     codex_model: Option<String>,
     sandbox: Option<SandboxMode>,
@@ -41,11 +43,29 @@ pub struct ServeOptions {
 }
 impl ServeOptions {
     pub fn parse(args: &[String]) -> Option<Self> {
+        Self::parse_checked(args).ok().flatten()
+    }
+    pub fn parse_checked(args: &[String]) -> Result<Option<Self>> {
+        if args.iter().any(|arg| arg == "--team") && args.iter().any(|arg| arg == "--agents") {
+            anyhow::bail!("--team and --agents cannot be used together");
+        }
+        let Some(mut options) = Self::parse_basic(args) else {
+            return Ok(None);
+        };
+        if let Some(index) = args.iter().position(|arg| arg == "--team") {
+            options.team = Team::load(&args[index + 1])?;
+        } else {
+            options.team = Team::filtered_pair(options.claude, options.codex)?;
+        }
+        Ok(Some(options))
+    }
+    fn parse_basic(args: &[String]) -> Option<Self> {
         let mut options = Self {
             port: 7878,
             cwd: std::env::current_dir().ok()?,
             claude: true,
             codex: true,
+            team: Team::preset("pair").ok()?,
             claude_model: None,
             codex_model: None,
             sandbox: None,
@@ -76,6 +96,7 @@ impl ServeOptions {
                     }
                     options.mail_thread_limit = limit;
                 }
+                "--team" => {}
                 "--cwd" => options.cwd = PathBuf::from(value),
                 "--agents" => {
                     options.claude = false;
@@ -119,8 +140,7 @@ impl ServeOptions {
     pub fn runtime_options(&self) -> RuntimeOptions {
         RuntimeOptions {
             cwd: self.cwd.clone(),
-            claude: self.claude,
-            codex: self.codex,
+            team: self.team.clone(),
             claude_model: self.claude_model.clone(),
             codex_model: self.codex_model.clone(),
             sandbox: self.sandbox.clone(),
@@ -141,19 +161,15 @@ struct AppState {
     mail_agent_tokens: MailAgentTokens,
     port: u16,
     cwd: String,
-    claude: Option<Actor>,
-    codex: Option<Actor>,
+    agents: Agents,
+    team: Team,
     shutdown: watch::Receiver<bool>,
     workflows: Vec<Spec>,
     manager: Manager,
 }
 impl AppState {
     fn actor(&self, agent: &str) -> Option<&Actor> {
-        match agent {
-            "claude" => self.claude.as_ref(),
-            "codex" => self.codex.as_ref(),
-            _ => None,
-        }
+        self.agents.get(&AgentId::from(agent))
     }
 }
 
@@ -173,10 +189,10 @@ fn origin_allowed(origin: &str, host: &str) -> bool {
     origin == format!("http://{host}")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Identity {
     Main,
-    Agent(AgentKind),
+    Agent(AgentId),
 }
 
 fn identify(token: &str, main: &str, agents: &MailAgentTokens) -> Option<Identity> {
@@ -186,19 +202,10 @@ fn identify(token: &str, main: &str, agents: &MailAgentTokens) -> Option<Identit
     if verify_token(main, token) {
         return Some(Identity::Main);
     }
-    if agents
-        .claude
-        .as_deref()
-        .is_some_and(|expected| verify_token(expected, token))
-    {
-        return Some(Identity::Agent(AgentKind::Claude));
-    }
-    if agents
-        .codex
-        .as_deref()
-        .is_some_and(|expected| verify_token(expected, token))
-    {
-        return Some(Identity::Agent(AgentKind::Codex));
+    for (agent, expected) in agents {
+        if verify_token(expected, token) {
+            return Some(Identity::Agent(agent.clone()));
+        }
     }
     None
 }
@@ -226,7 +233,7 @@ fn authorize_request(
     path: &str,
 ) -> Result<Identity, StatusCode> {
     let identity = authenticate(header, query, main, agents).ok_or(StatusCode::UNAUTHORIZED)?;
-    if !authorize(identity, method, path) {
+    if !authorize(identity.clone(), method, path) {
         return Err(StatusCode::FORBIDDEN);
     }
     Ok(identity)
@@ -366,21 +373,25 @@ struct SendMail {
 struct Inbox {
     agent: String,
 }
-fn parse_agent(name: &str) -> Option<agentsflow_events::AgentKind> {
-    match name {
-        "claude" => Some(agentsflow_events::AgentKind::Claude),
-        "codex" => Some(agentsflow_events::AgentKind::Codex),
-        "orchestrator" => Some(agentsflow_events::AgentKind::Orchestrator),
-        _ => None,
-    }
+fn parse_agent(name: &str, team: &Team) -> Option<AgentId> {
+    let id = AgentId::from(name);
+    (id == AgentId::orchestrator() || team.get(&id).is_some()).then_some(id)
 }
-fn recipient_enabled(agent: agentsflow_events::AgentKind, claude: bool, codex: bool) -> bool {
-    match agent {
-        agentsflow_events::AgentKind::Claude => claude,
-        agentsflow_events::AgentKind::Codex => codex,
-        agentsflow_events::AgentKind::Orchestrator => true,
-    }
+fn unknown_agent(state: &AppState, name: &str, status: StatusCode) -> Response {
+    let valid = state
+        .team
+        .ids()
+        .map(ToString::to_string)
+        .chain(std::iter::once("orchestrator".into()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        status,
+        Json(json!({"error":format!("unknown agent {name}; valid: {valid}")})),
+    )
+        .into_response()
 }
+
 async fn send_mail(
     State(state): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -393,31 +404,16 @@ async fn send_mail(
         )
             .into_response();
     };
-    if matches!(identity, Identity::Agent(agent) if parse_agent(&input.from) != Some(agent)) {
+    let Some(from) = parse_agent(&input.from, &state.team) else {
+        return unknown_agent(&state, &input.from, StatusCode::BAD_REQUEST);
+    };
+    let Some(to) = parse_agent(&input.to, &state.team) else {
+        return unknown_agent(&state, &input.to, StatusCode::BAD_REQUEST);
+    };
+    if matches!(identity, Identity::Agent(agent) if agent != from) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error":"sender does not match token"})),
-        )
-            .into_response();
-    }
-    let Some(from) = parse_agent(&input.from) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"unknown sender"})),
-        )
-            .into_response();
-    };
-    let Some(to) = parse_agent(&input.to) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"unknown recipient"})),
-        )
-            .into_response();
-    };
-    if !recipient_enabled(to, state.claude.is_some(), state.codex.is_some()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"recipient agent is disabled"})),
         )
             .into_response();
     }
@@ -445,20 +441,16 @@ async fn inbox(
         )
             .into_response();
     };
-    if matches!(identity, Identity::Agent(owner) if parse_agent(&input.agent) != Some(owner)) {
+    let Some(agent) = parse_agent(&input.agent, &state.team) else {
+        return unknown_agent(&state, &input.agent, StatusCode::BAD_REQUEST);
+    };
+    if matches!(identity, Identity::Agent(owner) if owner != agent) {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({"error":"inbox does not match token"})),
         )
             .into_response();
     }
-    let Some(agent) = parse_agent(&input.agent) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":"unknown agent"})),
-        )
-            .into_response();
-    };
     let messages: Vec<_> = state.hub.take_inbox(agent).into_iter().map(|mail| json!({"id":mail.id,"thread":mail.thread,"from":mail.from,"subject":mail.subject,"body":mail.body})).collect();
     Json(json!({"messages":messages})).into_response()
 }
@@ -474,7 +466,7 @@ async fn prompt(State(state): State<AppState>, Json(input): Json<Prompt>) -> Res
         return StatusCode::BAD_REQUEST.into_response();
     }
     let Some(actor) = state.actor(&input.agent) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return unknown_agent(&state, &input.agent, StatusCode::NOT_FOUND);
     };
     match actor.prompt(input.text).await {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
@@ -483,7 +475,7 @@ async fn prompt(State(state): State<AppState>, Json(input): Json<Prompt>) -> Res
 }
 async fn permission(State(state): State<AppState>, Json(input): Json<Permission>) -> Response {
     let Some(actor) = state.actor(&input.agent) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return unknown_agent(&state, &input.agent, StatusCode::NOT_FOUND);
     };
     match actor.respond(input.id, input.allow).await {
         Ok(()) => Json(json!({"ok":true})).into_response(),
@@ -491,11 +483,19 @@ async fn permission(State(state): State<AppState>, Json(input): Json<Permission>
     }
 }
 async fn get_state(State(state): State<AppState>) -> Json<Value> {
-    let info = |actor: &Option<Actor>| actor.as_ref().map(Actor::state).unwrap_or_default();
+    let agents: HashMap<_, _> = state
+        .agents
+        .iter()
+        .map(|(id, actor)| (id.to_string(), actor.state()))
+        .collect();
     Json(
-        json!({"cwd":state.cwd, "agents":{"claude":info(&state.claude),"codex":info(&state.codex)}, "workflow":state.manager.state()}),
+        json!({"cwd": state.cwd, "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
     )
 }
+async fn get_team(State(state): State<AppState>) -> Json<Value> {
+    Json(json!(state.team.members))
+}
+
 #[derive(Deserialize)]
 struct RunWorkflow {
     name: String,
@@ -530,8 +530,13 @@ async fn run_workflow(State(state): State<AppState>, Json(input): Json<RunWorkfl
     };
     match state.manager.start(spec.clone(), input.task) {
         Ok(id) => (StatusCode::ACCEPTED, Json(json!({"ok":true,"run":id}))).into_response(),
-        Err("busy") => (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response(),
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Err(workflow::StartError::Busy) => {
+            (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response()
+        }
+        Err(workflow::StartError::InvalidTeam(message)) => {
+            (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response()
+        }
+        Err(workflow::StartError::Closed) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 async fn stop_workflow(State(state): State<AppState>) -> Response {
@@ -552,6 +557,7 @@ fn app(state: AppState) -> Router {
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/inbox", post(inbox))
         .route("/api/state", get(get_state))
+        .route("/api/team", get(get_team))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflow/run", post(run_workflow))
         .route("/api/workflow/stop", post(stop_workflow))
@@ -567,33 +573,26 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, options.port)).await?;
     let port = listener.local_addr()?.port();
     let token = Uuid::new_v4().simple().to_string();
-    let mail_agent_tokens = MailAgentTokens {
-        claude: options.claude.then(|| Uuid::new_v4().simple().to_string()),
-        codex: options.codex.then(|| Uuid::new_v4().simple().to_string()),
-    };
-    let runtime = Runtime::new(RuntimeOptions {
-        cwd: options.cwd,
-        claude: options.claude,
-        codex: options.codex,
-        claude_model: options.claude_model,
-        codex_model: options.codex_model,
-        sandbox: options.sandbox,
-        codex_bin: options.codex_bin,
-        yes: options.yes,
-        log: options.log,
-        mail: Some(agentsflow_adapters::MailConfig {
-            url: format!("http://127.0.0.1:{port}"),
-            token: String::new(),
-            exe: std::env::current_exe()?,
-            thread_limit: options.mail_thread_limit,
-        }),
-        mail_agent_tokens: mail_agent_tokens.clone(),
-        mail_thread_limit: options.mail_thread_limit,
-    })?;
+    let mut runtime_options = options.runtime_options();
+    let mail_agent_tokens: MailAgentTokens = runtime_options
+        .team
+        .ids()
+        .map(|id| (id.clone(), Uuid::new_v4().simple().to_string()))
+        .collect();
+    runtime_options.mail = Some(agentsflow_adapters::MailConfig {
+        url: format!("http://127.0.0.1:{port}"),
+        token: String::new(),
+        exe: std::env::current_exe()?,
+        thread_limit: options.mail_thread_limit,
+        id: String::new(),
+        peers: Vec::new(),
+    });
+    runtime_options.mail_agent_tokens = mail_agent_tokens.clone();
+    let runtime = Runtime::new(runtime_options)?;
     let manager = Manager::new(
         runtime.hub.clone(),
-        runtime.claude.clone(),
-        runtime.codex.clone(),
+        runtime.agents.clone(),
+        runtime.team.clone(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let state = AppState {
@@ -602,13 +601,14 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         mail_agent_tokens,
         port,
         cwd: runtime.cwd.to_string_lossy().into_owned(),
-        claude: runtime.claude.clone(),
-        codex: runtime.codex.clone(),
+        agents: runtime.agents.clone(),
+        team: runtime.team.clone(),
         shutdown: shutdown_rx,
         workflows: specs,
         manager: manager.clone(),
     };
     println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
+    eprintln!("{}", crate::team::format_compact(&runtime.team));
     let result = axum::serve(listener, app(state))
         .with_graceful_shutdown(async move {
             if let Err(error) = tokio::signal::ctrl_c().await {
@@ -632,14 +632,14 @@ mod tests {
 
     #[test]
     fn personal_token_access() {
-        let tokens = MailAgentTokens {
-            claude: Some("claude-token".into()),
-            codex: Some("codex-token".into()),
-        };
+        let tokens = MailAgentTokens::from([
+            (AgentId::from("claude"), "claude-token".into()),
+            (AgentId::from("codex"), "codex-token".into()),
+        ]);
         let claude = authenticate("claude-token", "", "main-token", &tokens).unwrap();
         let codex = authenticate("", "codex-token", "main-token", &tokens).unwrap();
-        assert_eq!(claude, Identity::Agent(AgentKind::Claude));
-        assert_eq!(codex, Identity::Agent(AgentKind::Codex));
+        assert_eq!(claude, Identity::Agent(AgentId::from("claude")));
+        assert_eq!(codex, Identity::Agent(AgentId::from("codex")));
         assert_ne!(claude, codex);
         assert_eq!(authenticate("bad", "", "main-token", &tokens), None);
         assert_eq!(
@@ -648,12 +648,12 @@ mod tests {
         );
         assert_eq!(
             authenticate("claude-token", "main-token", "main-token", &tokens),
-            Some(claude)
+            Some(claude.clone())
         );
         for identity in [claude, codex] {
             for path in ["/api/mail/send", "/api/mail/inbox"] {
-                assert!(authorize(identity, &axum::http::Method::POST, path));
-                assert!(!authorize(identity, &axum::http::Method::GET, path));
+                assert!(authorize(identity.clone(), &axum::http::Method::POST, path));
+                assert!(!authorize(identity.clone(), &axum::http::Method::GET, path));
             }
             for (method, path) in [
                 (axum::http::Method::POST, "/api/prompt"),
@@ -662,7 +662,7 @@ mod tests {
                 (axum::http::Method::POST, "/api/permission"),
                 (axum::http::Method::POST, "/api/workflow/run"),
             ] {
-                assert!(!authorize(identity, &method, path));
+                assert!(!authorize(identity.clone(), &method, path));
                 assert!(authorize(Identity::Main, &method, path));
             }
         }
@@ -714,14 +714,21 @@ mod tests {
             .run_until(async {
                 let hub = Hub::new();
                 let (claude, claude_task) =
-                    crate::hub::spawn(hub.clone(), AgentKind::Claude, false, || async {
+                    crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
                         Ok(NoAgent)
                     });
                 let (codex, codex_task) =
-                    crate::hub::spawn(hub.clone(), AgentKind::Codex, false, || async {
+                    crate::hub::spawn(hub.clone(), AgentId::from("codex"), false, || async {
                         Ok(NoAgent)
                     });
-                let manager = Manager::new(hub.clone(), Some(claude.clone()), Some(codex.clone()));
+                let manager = Manager::new(
+                    hub.clone(),
+                    Agents::from([
+                        (AgentId::from("claude"), claude.clone()),
+                        (AgentId::from("codex"), codex.clone()),
+                    ]),
+                    Team::preset("pair").unwrap(),
+                );
                 let (_shutdown, shutdown) = watch::channel(false);
                 let state = AppState {
                     hub,
@@ -729,8 +736,11 @@ mod tests {
                     mail_agent_tokens: MailAgentTokens::default(),
                     port: 7878,
                     cwd: ".".into(),
-                    claude: Some(claude.clone()),
-                    codex: Some(codex.clone()),
+                    agents: Agents::from([
+                        (AgentId::from("claude"), claude.clone()),
+                        (AgentId::from("codex"), codex.clone()),
+                    ]),
+                    team: Team::preset("pair").unwrap(),
                     shutdown,
                     workflows: Vec::new(),
                     manager,
@@ -742,12 +752,12 @@ mod tests {
                     body: "body".into(),
                     thread: None,
                 };
-                let c = Identity::Agent(AgentKind::Claude);
-                let d = Identity::Agent(AgentKind::Codex);
+                let c = Identity::Agent(AgentId::from("claude"));
+                let d = Identity::Agent(AgentId::from("codex"));
                 assert_eq!(
                     send_mail(
                         State(state.clone()),
-                        Extension(c),
+                        Extension(c.clone()),
                         Ok(Json(make("claude", "codex")))
                     )
                     .await
@@ -756,7 +766,7 @@ mod tests {
                 );
                 let denied = send_mail(
                     State(state.clone()),
-                    Extension(c),
+                    Extension(c.clone()),
                     Ok(Json(make("codex", "claude"))),
                 )
                 .await;
@@ -771,7 +781,7 @@ mod tests {
                 assert_eq!(
                     send_mail(
                         State(state.clone()),
-                        Extension(d),
+                        Extension(d.clone()),
                         Ok(Json(make("claude", "codex")))
                     )
                     .await
@@ -781,7 +791,7 @@ mod tests {
                 assert_eq!(
                     inbox(
                         State(state.clone()),
-                        Extension(c),
+                        Extension(c.clone()),
                         Ok(Json(Inbox {
                             agent: "codex".into()
                         }))
@@ -793,7 +803,7 @@ mod tests {
                 assert_eq!(
                     inbox(
                         State(state.clone()),
-                        Extension(d),
+                        Extension(d.clone()),
                         Ok(Json(Inbox {
                             agent: "claude".into()
                         }))
@@ -805,7 +815,7 @@ mod tests {
                 assert_eq!(
                     inbox(
                         State(state.clone()),
-                        Extension(c),
+                        Extension(c.clone()),
                         Ok(Json(Inbox {
                             agent: "claude".into()
                         }))
@@ -817,7 +827,7 @@ mod tests {
                 assert_eq!(
                     inbox(
                         State(state.clone()),
-                        Extension(d),
+                        Extension(d.clone()),
                         Ok(Json(Inbox {
                             agent: "codex".into()
                         }))
@@ -843,6 +853,214 @@ mod tests {
             })
             .await;
     }
+    #[tokio::test]
+    async fn workflow_with_unknown_agent_returns_bad_request() {
+        LocalSet::new()
+            .run_until(async {
+                let runtime = Runtime::new(RuntimeOptions {
+                    team: Team::preset("trio").unwrap(),
+                    ..Default::default()
+                })
+                .unwrap();
+                let manager = Manager::new(
+                    runtime.hub.clone(),
+                    runtime.agents.clone(),
+                    runtime.team.clone(),
+                );
+                let (_stop, shutdown) = watch::channel(false);
+                let spec =
+                    Spec::parse("name='x'\n[[step]]\nid='s'\nagent='missing'\nprompt='x'").unwrap();
+                let role_spec =
+                    Spec::parse("name='role'\n[[step]]\nid='s'\nagent='@missing'\nprompt='x'")
+                        .unwrap();
+                let state = AppState {
+                    hub: runtime.hub.clone(),
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::new(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents: runtime.agents.clone(),
+                    team: runtime.team.clone(),
+                    shutdown,
+                    workflows: vec![spec, role_spec],
+                    manager: manager.clone(),
+                };
+                let response = run_workflow(
+                    State(state.clone()),
+                    Json(RunWorkflow {
+                        name: "x".into(),
+                        task: "task".into(),
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["error"],
+                    "step s: agent missing is not in the team (members: lead, main, junior)"
+                );
+                let response = run_workflow(
+                    State(state),
+                    Json(RunWorkflow {
+                        name: "role".into(),
+                        task: "task".into(),
+                    }),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let body = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert!(
+                    serde_json::from_slice::<Value>(&body).unwrap()["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("no team member has role missing")
+                );
+                assert!(!manager.state().running);
+                runtime.shutdown().await;
+            })
+            .await;
+    }
+    #[tokio::test]
+    async fn trio_state_and_personal_mail_access() {
+        LocalSet::new()
+            .run_until(async {
+                let runtime = Runtime::new(RuntimeOptions {
+                    team: Team::preset("trio").unwrap(),
+                    ..Default::default()
+                })
+                .unwrap();
+                let tokens: MailAgentTokens = runtime
+                    .team
+                    .ids()
+                    .map(|id| (id.clone(), format!("token-{id}")))
+                    .collect();
+                let manager = Manager::new(
+                    runtime.hub.clone(),
+                    runtime.agents.clone(),
+                    runtime.team.clone(),
+                );
+                let (_stop, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub: runtime.hub.clone(),
+                    token: "main".into(),
+                    mail_agent_tokens: tokens.clone(),
+                    port: 7878,
+                    cwd: ".".into(),
+                    agents: runtime.agents.clone(),
+                    team: runtime.team.clone(),
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                let body = get_state(State(state.clone())).await.0;
+                assert_eq!(
+                    body["team"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v["id"].as_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    ["lead", "main", "junior"]
+                );
+                for id in ["lead", "main", "junior"] {
+                    assert_eq!(body["agents"][id]["enabled"], true);
+                    assert_eq!(
+                        authenticate(&format!("token-{id}"), "", "main", &tokens),
+                        Some(Identity::Agent(AgentId::from(id)))
+                    );
+                }
+                assert_eq!(get_team(State(state.clone())).await.0, body["team"]);
+                assert_eq!(
+                    authorize_request(
+                        "token-lead",
+                        "",
+                        "main",
+                        &tokens,
+                        &axum::http::Method::GET,
+                        "/api/team"
+                    ),
+                    Err(StatusCode::FORBIDDEN)
+                );
+                assert_eq!(
+                    authorize_request(
+                        "main",
+                        "",
+                        "main",
+                        &tokens,
+                        &axum::http::Method::GET,
+                        "/api/team"
+                    ),
+                    Ok(Identity::Main)
+                );
+                let mail = |from: &str, to: &str| SendMail {
+                    from: from.into(),
+                    to: to.into(),
+                    subject: "s".into(),
+                    body: "b".into(),
+                    thread: None,
+                };
+                assert_eq!(
+                    send_mail(
+                        State(state.clone()),
+                        Extension(Identity::Agent(AgentId::from("lead"))),
+                        Ok(Json(mail("junior", "main")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    send_mail(
+                        State(state.clone()),
+                        Extension(Identity::Agent(AgentId::from("lead"))),
+                        Ok(Json(mail("lead", "main")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                assert_eq!(
+                    inbox(
+                        State(state.clone()),
+                        Extension(Identity::Agent(AgentId::from("junior"))),
+                        Ok(Json(Inbox {
+                            agent: "main".into()
+                        }))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    send_mail(
+                        State(state.clone()),
+                        Extension(Identity::Main),
+                        Ok(Json(mail("orchestrator", "unknown")))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::BAD_REQUEST
+                );
+                assert_eq!(
+                    prompt(
+                        State(state.clone()),
+                        Json(Prompt {
+                            agent: "unknown".into(),
+                            text: "x".into()
+                        })
+                    )
+                    .await
+                    .status(),
+                    StatusCode::NOT_FOUND
+                );
+                runtime.shutdown().await;
+            })
+            .await;
+    }
     #[test]
     fn security_checks() {
         assert!(verify_token("012345", "012345"));
@@ -854,34 +1072,60 @@ mod tests {
         assert!(!host_allowed("evil:7878", 7878));
         assert!(origin_allowed("http://localhost:7878", "localhost:7878"));
         assert!(!origin_allowed("http://127.0.0.1:7878", "localhost:7878"));
+        let pair = Team::preset("pair").unwrap();
+        assert_eq!(parse_agent("claude", &pair), Some(AgentId::from("claude")));
+        assert_eq!(parse_agent("codex", &pair), Some(AgentId::from("codex")));
         assert_eq!(
-            parse_agent("claude"),
-            Some(agentsflow_events::AgentKind::Claude)
+            parse_agent("orchestrator", &pair),
+            Some(AgentId::orchestrator())
+        );
+        assert_eq!(parse_agent("other", &pair), None);
+        let codex_only = Team::filtered_pair(false, true).unwrap();
+        assert_eq!(parse_agent("claude", &codex_only), None);
+        assert_eq!(
+            parse_agent("codex", &codex_only),
+            Some(AgentId::from("codex"))
         );
         assert_eq!(
-            parse_agent("codex"),
-            Some(agentsflow_events::AgentKind::Codex)
+            parse_agent("orchestrator", &codex_only),
+            Some(AgentId::orchestrator())
         );
-        assert_eq!(
-            parse_agent("orchestrator"),
-            Some(agentsflow_events::AgentKind::Orchestrator)
+    }
+    #[test]
+    fn parse_team_options() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let trio = ServeOptions::parse_checked(&args(&["--team", "trio"]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(trio.runtime_options().team, Team::preset("trio").unwrap());
+        let path = std::env::temp_dir().join(format!("agentsflow-team-{}.toml", Uuid::new_v4()));
+        std::fs::write(&path, crate::team::TEMPLATE).unwrap();
+        let file = ServeOptions::parse_checked(&args(&["--team", path.to_str().unwrap()]))
+            .unwrap()
+            .unwrap();
+        assert_eq!(file.runtime_options().team, Team::preset("trio").unwrap());
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            format!(
+                "{:#}",
+                ServeOptions::parse_checked(&args(&["--team", "nonexistent-preset"]))
+                    .err()
+                    .unwrap()
+            )
+            .contains("cannot read team file")
         );
-        assert_eq!(parse_agent("other"), None);
-        assert!(!recipient_enabled(
-            agentsflow_events::AgentKind::Claude,
-            false,
-            true
-        ));
-        assert!(recipient_enabled(
-            agentsflow_events::AgentKind::Codex,
-            false,
-            true
-        ));
-        assert!(recipient_enabled(
-            agentsflow_events::AgentKind::Orchestrator,
-            false,
-            false
-        ));
+        for items in [
+            ["--team", "pair", "--agents", "codex"],
+            ["--agents", "codex", "--team", "pair"],
+        ] {
+            assert!(
+                ServeOptions::parse_checked(&args(&items))
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("cannot be used together")
+            );
+        }
     }
     #[test]
     fn parse_serve_options() {

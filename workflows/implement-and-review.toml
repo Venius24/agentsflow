@@ -4,12 +4,12 @@ max_steps = 20
 
 [[step]]
 id = "implement"
-agent = "codex"
+agent = "@engineer"
 prompt = "{task}"
 
 [[step]]
 id = "review"
-agent = "claude"
+agent = "@reviewer"
 prompt = "Ты ревьюер. Исходная задача:\n{task}\n\nОтчёт исполнителя:\n{prev.output}\n\nПроверь результат в рабочей папке (читай файлы, при необходимости запускай проверки). Если всё верно — последней строкой ответа напиши ровно VERDICT: APPROVED. Если есть проблемы — перечисли их и НЕ пиши эту строку нигде."
 until = "VERDICT: APPROVED"
 otherwise = "fix"
@@ -18,6 +18,6 @@ next = "end"
 
 [[step]]
 id = "fix"
-agent = "codex"
+agent = "@engineer"
 prompt = "Исходная задача:\n{task}\n\nЗамечания ревьюера:\n{review.output}\n\nИсправь их."
 next = "review"

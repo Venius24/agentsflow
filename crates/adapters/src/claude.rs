@@ -127,6 +127,7 @@ pub struct ClaudeOptions {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub mail: Option<crate::MailConfig>,
+    pub effort: Option<String>,
 }
 
 pub struct ClaudeSession {
@@ -138,7 +139,7 @@ impl ClaudeSession {
     pub async fn start(opts: ClaudeOptions) -> Result<Self> {
         let mut builder = ClaudeCliBuilder::new().permission_prompt_tool("stdio");
         if let Some(mail) = opts.mail {
-            let config = serde_json::json!({"mcpServers":{"mail":{"command":mail.exe,"args":["mail-mcp","--as","claude"],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token}}}});
+            let config = serde_json::json!({"mcpServers":{"mail":{"command":mail.exe,"args":["mail-mcp","--as",mail.id],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token,"AGENTSFLOW_PEERS":mail.peers.join(",")}}}});
             builder = builder
                 .mcp_config([config.to_string()])
                 .allowed_tools(["mcp__mail__send_mail", "mcp__mail__check_inbox"]);
@@ -149,7 +150,11 @@ impl ClaudeSession {
         if let Some(cwd) = opts.cwd {
             builder = builder.working_directory(cwd);
         }
-        let mut client = AsyncClient::new(builder.spawn().await?)?;
+        let mut command = builder.build_command()?;
+        if let Some(effort) = opts.effort {
+            command.arg("--effort").arg(effort);
+        }
+        let mut client = AsyncClient::new(command.spawn()?)?;
         if let Err(error) = client.enable_tool_approval().await {
             let _ = client.shutdown().await;
             return Err(error.into());
@@ -384,6 +389,7 @@ mod tests {
             model: Some("haiku".into()),
             cwd: None,
             mail: None,
+            effort: None,
         })
         .await?;
         session
