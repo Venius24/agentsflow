@@ -37,6 +37,7 @@ pub struct ServeOptions {
     yes: bool,
     workflows: Vec<PathBuf>,
     log: Option<PathBuf>,
+    mail_thread_limit: usize,
 }
 impl ServeOptions {
     pub fn parse(args: &[String]) -> Option<Self> {
@@ -52,6 +53,7 @@ impl ServeOptions {
             yes: false,
             workflows: Vec::new(),
             log: None,
+            mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -67,6 +69,13 @@ impl ServeOptions {
                 "--log" => options.log = Some(value.into()),
                 "--workflow" => options.workflows.push(value.into()),
                 "--port" => options.port = value.parse().ok()?,
+                "--mail-thread-limit" => {
+                    let limit = value.parse().ok()?;
+                    if !(2..=100).contains(&limit) {
+                        return None;
+                    }
+                    options.mail_thread_limit = limit;
+                }
                 "--cwd" => options.cwd = PathBuf::from(value),
                 "--agents" => {
                     options.claude = false;
@@ -120,7 +129,7 @@ impl ServeOptions {
             log: self.log.clone(),
             mail: None,
             mail_agent_tokens: MailAgentTokens::default(),
-            mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
+            mail_thread_limit: self.mail_thread_limit,
         }
     }
 }
@@ -541,10 +550,10 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
             url: format!("http://127.0.0.1:{port}"),
             token: String::new(),
             exe: std::env::current_exe()?,
-            thread_limit: crate::hub::MAX_THREAD_MAILS,
+            thread_limit: options.mail_thread_limit,
         }),
         mail_agent_tokens: mail_agent_tokens.clone(),
-        mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
+        mail_thread_limit: options.mail_thread_limit,
     })?;
     let manager = Manager::new(
         runtime.hub.clone(),
@@ -860,6 +869,26 @@ mod tests {
         assert!(!opts.claude && opts.codex);
         assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
         assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
+    }
+    #[test]
+    fn parse_mail_thread_limit() {
+        let args = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let default = ServeOptions::parse(&[]).unwrap();
+        assert_eq!(default.mail_thread_limit, crate::hub::MAX_THREAD_MAILS);
+        assert_eq!(
+            default.runtime_options().mail_thread_limit,
+            crate::hub::MAX_THREAD_MAILS
+        );
+        for limit in [2, 42, 100] {
+            let opts =
+                ServeOptions::parse(&args(&["--mail-thread-limit", &limit.to_string()])).unwrap();
+            assert_eq!(opts.mail_thread_limit, limit);
+            assert_eq!(opts.runtime_options().mail_thread_limit, limit);
+        }
+        for value in ["1", "101", "abc"] {
+            assert!(ServeOptions::parse(&args(&["--mail-thread-limit", value])).is_none());
+        }
+        assert!(ServeOptions::parse(&args(&["--mail-thread-limit"])).is_none());
     }
     #[test]
     fn workflow_request_validation() {
