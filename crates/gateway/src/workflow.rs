@@ -28,6 +28,8 @@ pub struct Step {
     pub prompt: String,
     #[serde(default)]
     pub mode: StepMode,
+    #[serde(default)]
+    pub cc: Vec<String>,
     pub subject: Option<String>,
     pub timeout_secs: Option<u64>,
     pub until: Option<String>,
@@ -70,7 +72,8 @@ fn placeholders(prompt: &str) -> Result<Vec<&str>> {
 }
 impl Spec {
     pub fn parse(text: &str) -> Result<Self> {
-        let spec: Self = toml::from_str(text).context("invalid workflow TOML")?;
+        let raw: toml::Value = toml::from_str(text).context("invalid workflow TOML")?;
+        let spec: Self = raw.clone().try_into().context("invalid workflow TOML")?;
         if spec.name.trim().is_empty() {
             bail!("workflow name is empty");
         }
@@ -78,7 +81,7 @@ impl Spec {
             bail!("workflow has no steps");
         }
         let mut ids = HashSet::new();
-        for step in &spec.step {
+        for (index, step) in spec.step.iter().enumerate() {
             if step.id.trim().is_empty() || !ids.insert(step.id.as_str()) {
                 bail!("step id is empty or duplicated: {:?}", step.id);
             }
@@ -87,6 +90,24 @@ impl Spec {
             }
             if step.otherwise.is_some() && step.until.is_none() {
                 bail!("otherwise requires until in step {}", step.id);
+            }
+            let cc_present = raw
+                .get("step")
+                .and_then(toml::Value::as_array)
+                .and_then(|steps| steps.get(index))
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("cc"));
+            if cc_present && step.mode != StepMode::Mail {
+                bail!("cc requires mode='mail' in step {}", step.id);
+            }
+            let mut recipients = HashSet::new();
+            for recipient in &step.cc {
+                if !matches!(recipient.as_str(), "claude" | "codex")
+                    || recipient == &step.agent
+                    || !recipients.insert(recipient)
+                {
+                    bail!("invalid cc recipient {recipient:?} in step {}", step.id);
+                }
             }
             match step.mode {
                 StepMode::Prompt if step.subject.is_some() || step.timeout_secs.is_some() => {
@@ -467,10 +488,22 @@ async fn run_mail_step(
             AgentKind::Orchestrator,
             agent,
             step.subject.as_deref().unwrap_or(&step.id).to_owned(),
-            prompt,
+            prompt.clone(),
             None,
         )
         .map_err(|error| anyhow::anyhow!("mail send failed: {error}"))?;
+    for recipient in &step.cc {
+        context
+            .hub
+            .send_mail(
+                AgentKind::Orchestrator,
+                kind(recipient),
+                step.subject.as_deref().unwrap_or(&step.id).to_owned(),
+                prompt.clone(),
+                Some(sent.thread.clone()),
+            )
+            .map_err(|error| anyhow::anyhow!("mail send to cc {recipient} failed: {error}"))?;
+    }
     let timeout_secs = step.timeout_secs.unwrap_or(900);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
@@ -652,6 +685,7 @@ pub fn builtins() -> Result<Vec<Spec>> {
         Spec::parse(include_str!("../../../workflows/implement-and-review.toml"))?,
         Spec::parse(include_str!("../../../workflows/cross-check.toml"))?,
         Spec::parse(include_str!("../../../workflows/mail-review.toml"))?,
+        Spec::parse(include_str!("../../../workflows/mail-team.toml"))?,
     ])
 }
 
@@ -690,10 +724,11 @@ mod tests {
             .is_ok()
         );
         let specs = builtins().unwrap();
-        assert_eq!(specs.len(), 3);
+        assert_eq!(specs.len(), 4);
         assert_eq!(specs[0].name, "implement-and-review");
         assert_eq!(specs[1].name, "cross-check");
         assert_eq!(specs[2].name, "mail-review");
+        assert_eq!(specs[3].name, "mail-team");
     }
 
     #[test]
@@ -732,6 +767,94 @@ mod tests {
                 "{suffix}"
             );
         }
+    }
+
+    #[test]
+    fn cc_validation() {
+        let prefix = "name='x'\n[[step]]\nid='work'\nagent='codex'\nprompt='{task}'\n";
+        assert!(Spec::parse(&format!("{prefix}mode='mail'\ncc=['claude']\n")).is_ok());
+        for suffix in [
+            "cc=['claude']",
+            "cc=[]",
+            "mode='mail'\ncc=['other']",
+            "mode='mail'\ncc=['codex']",
+            "mode='mail'\ncc=['claude','claude']",
+        ] {
+            assert!(
+                Spec::parse(&format!("{prefix}{suffix}\n")).is_err(),
+                "{suffix}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cc_delivers_same_mail_and_reply_completes() {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        let (_, mut events) = hub.subscribe();
+        let sender = hub.clone();
+        let reply = tokio::spawn(async move {
+            let mut received = Vec::new();
+            while received.len() < 2 {
+                if let Event::Mail {
+                    from: AgentKind::Orchestrator,
+                    to,
+                    thread,
+                    subject,
+                    body,
+                    ..
+                } = events.recv().await.unwrap().event
+                {
+                    received.push((to, thread, subject, body));
+                }
+            }
+            assert_eq!(received[0].0, AgentKind::Codex);
+            assert_eq!(received[1].0, AgentKind::Claude);
+            assert_eq!(received[0].1, received[1].1);
+            assert_eq!(received[0].2, received[1].2);
+            assert_eq!(received[0].3, received[1].3);
+            sender
+                .send_mail(
+                    AgentKind::Codex,
+                    AgentKind::Orchestrator,
+                    "reply".into(),
+                    "VERDICT: APPROVED".into(),
+                    Some(received[0].1.clone()),
+                )
+                .unwrap();
+        });
+        let (_tx, stop) = watch::channel(false);
+        let spec = builtins().unwrap().remove(3);
+        assert!(execute(&hub, None, None, &spec, "do work", "run", stop).await);
+        reply.await.unwrap();
+        let codex = hub.unread(AgentKind::Codex);
+        let claude = hub.unread(AgentKind::Claude);
+        assert_eq!(codex.len(), 1);
+        assert_eq!(claude.len(), 1);
+        assert_eq!(codex[0].thread, claude[0].thread);
+        assert_eq!(codex[0].body, claude[0].body);
+        assert_eq!(codex[0].subject, claude[0].subject);
+    }
+
+    #[tokio::test]
+    async fn cc_limit_fails_with_reason() {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        hub.set_mail_thread_limit(1);
+        let (_tx, stop) = watch::channel(false);
+        let spec = builtins().unwrap().remove(3);
+        assert!(!execute(&hub, None, None, &spec, "work", "run", stop).await);
+        assert_eq!(hub.unread(AgentKind::Codex).len(), 1);
+        assert!(hub.unread(AgentKind::Claude).is_empty());
+        assert!(
+            hub.subscribe()
+                .0
+                .iter()
+                .any(|envelope| matches!(&envelope.event,
+                    Event::Workflow { status: WorkflowStatus::Failed, detail, .. }
+                    if detail.contains("cc claude") && detail.contains("thread limit")
+                ))
+        );
     }
 
     const MAIL_SPEC: &str = "name='mail'\n[[step]]\nid='work'\nagent='codex'\nmode='mail'\nprompt='{task}'\nuntil='VERDICT: APPROVED'\ntimeout_secs=1\nnext='end'\n";

@@ -1,0 +1,24 @@
+name = "mail-team"
+description = "Команда из двух агентов: сами делят файлы, работают и ревьюят друг друга по почте"
+
+[[step]]
+id = "team"
+agent = "codex"
+cc = ["claude"]
+mode = "mail"
+subject = "team task"
+timeout_secs = 2700
+until = "VERDICT: APPROVED"
+next = "end"
+prompt = '''Team task from the orchestrator. Two engineers, `codex` (the lead) and `claude`, do it together in the same working directory. You talk to each other only with send_mail, always in this same thread, and you do not wait for the user.
+
+Task:
+{task}
+
+Protocol:
+1. Split. `codex` reads the relevant code and mails `claude` a split: a list of files, each owned by exactly ONE of you, and what each owner does. Nobody edits a file they do not own; if you need a change in someone else's file, mail its owner. `claude` replies once to accept or to object with a concrete alternative; the lead's next message is final. `claude` does not start work before the split arrives (read the code if you like).
+2. Work. Each of you implements your own files. When done, mail the other a short summary of what you changed.
+3. Cross-review. Each of you reviews the other's files (read them; run `cargo fmt --all -- --check`, `cargo clippy --offline --workspace --all-targets -- -D warnings` and `cargo test --offline --workspace` when the environment allows) and mails either `LGTM` or concrete fixes; the owner applies the fixes and mails again. At most 3 rounds.
+4. Finish. When both reviews are LGTM and the checks pass, the lead mails the orchestrator (same thread) a short summary: who did what, which files, the check results. Its very last line must be `VERDICT: APPROVED`. If you cannot finish, the lead mails the orchestrator why, without that line.
+
+Environment: no network, run cargo with --offline, write files as UTF-8 without BOM, do not run git commit or push.'''
