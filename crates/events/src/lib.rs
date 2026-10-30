@@ -1,10 +1,43 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AgentId(pub String);
+
+impl AgentId {
+    pub fn orchestrator() -> Self {
+        Self("orchestrator".into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl From<&str> for AgentId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+impl From<String> for AgentId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+impl AsRef<str> for AgentId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
     pub session: String,
-    pub agent: AgentKind,
+    pub agent: AgentId,
     pub seq: u64,
     pub ts_ms: u64,
     pub event: Event,
@@ -15,7 +48,6 @@ pub struct Envelope {
 pub enum AgentKind {
     Claude,
     Codex,
-    Orchestrator,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,18 +84,18 @@ pub enum Event {
     Mail {
         id: String,
         thread: String,
-        from: AgentKind,
-        to: AgentKind,
+        from: AgentId,
+        to: AgentId,
         subject: String,
         body: String,
     },
     MailRead {
-        agent: AgentKind,
+        agent: AgentId,
         ids: Vec<String>,
     },
     Handoff {
-        from: AgentKind,
-        to: AgentKind,
+        from: AgentId,
+        to: AgentId,
         step: String,
         text: String,
     },
@@ -138,18 +170,18 @@ mod tests {
             Event::Mail {
                 id: "1".into(),
                 thread: "t".into(),
-                from: AgentKind::Claude,
-                to: AgentKind::Codex,
+                from: AgentId::from("claude"),
+                to: AgentId::from("codex"),
                 subject: "s".into(),
                 body: "b".into(),
             },
             Event::MailRead {
-                agent: AgentKind::Codex,
+                agent: AgentId::from("codex"),
                 ids: vec!["1".into()],
             },
             Event::Handoff {
-                from: AgentKind::Claude,
-                to: AgentKind::Codex,
+                from: AgentId::from("claude"),
+                to: AgentId::from("codex"),
                 step: "fix".into(),
                 text: "hello".into(),
             },
@@ -188,6 +220,25 @@ mod tests {
     }
 
     #[test]
+    fn agent_id_json_roundtrip() {
+        let id = AgentId::from("junior");
+        assert_eq!(serde_json::to_string(&id).unwrap(), "\"junior\"");
+        assert_eq!(serde_json::from_str::<AgentId>("\"junior\"").unwrap(), id);
+        assert_eq!(AgentId::orchestrator().as_str(), "orchestrator");
+    }
+
+    #[test]
+    fn legacy_pair_envelope_json() {
+        let json = r#"{"session":"s","agent":"claude","seq":1,"ts_ms":2,"event":{"type":"mail","id":"i","thread":"t","from":"claude","to":"orchestrator","subject":"s","body":"b"}}"#;
+        let envelope: Envelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.agent, AgentId::from("claude"));
+        assert_eq!(
+            serde_json::to_value(envelope).unwrap(),
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+    }
+
+    #[test]
     fn workflow_status_roundtrip() {
         for status in [
             WorkflowStatus::Started,
@@ -204,7 +255,7 @@ mod tests {
             );
         }
         assert_eq!(
-            serde_json::to_string(&AgentKind::Orchestrator).unwrap(),
+            serde_json::to_string(&AgentId::orchestrator()).unwrap(),
             "\"orchestrator\""
         );
     }

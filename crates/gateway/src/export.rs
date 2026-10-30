@@ -1,4 +1,4 @@
-use agentsflow_events::{AgentKind, Envelope, Event, Role, WorkflowStatus};
+use agentsflow_events::{AgentId, Envelope, Event, Role, WorkflowStatus};
 use std::fmt::Write;
 
 const TOOL_INPUT_LIMIT: usize = 200;
@@ -45,7 +45,7 @@ pub fn render_markdown(events: &[Envelope]) -> String {
 }
 
 fn render_event(envelope: &Envelope) -> Option<String> {
-    let agent = agent_name(envelope.agent);
+    let agent = agent_name(&envelope.agent);
     let mut out = String::new();
     match &envelope.event {
         Event::Message { role, text, .. } => {
@@ -104,8 +104,8 @@ fn render_event(envelope: &Envelope) -> Option<String> {
             let _ = writeln!(
                 out,
                 "> **{} -> {}** [{}]",
-                agent_name(*from),
-                agent_name(*to),
+                agent_name(from),
+                agent_name(to),
                 escape_inline(subject)
             );
             out.push_str(">\n");
@@ -123,8 +123,8 @@ fn render_event(envelope: &Envelope) -> Option<String> {
             let _ = writeln!(
                 out,
                 "*handoff {} -> {} [{}]: {}*",
-                agent_name(*from),
-                agent_name(*to),
+                agent_name(from),
+                agent_name(to),
                 escape_inline(step),
                 escape_inline(text)
             );
@@ -159,12 +159,8 @@ fn render_event(envelope: &Envelope) -> Option<String> {
     Some(out)
 }
 
-fn agent_name(agent: AgentKind) -> &'static str {
-    match agent {
-        AgentKind::Claude => "claude",
-        AgentKind::Codex => "codex",
-        AgentKind::Orchestrator => "orchestrator",
-    }
+fn agent_name(agent: &AgentId) -> &str {
+    agent.as_str()
 }
 
 fn status_name(status: &WorkflowStatus) -> &'static str {
@@ -283,7 +279,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn env(seq: u64, ts_ms: u64, agent: AgentKind, event: Event) -> Envelope {
+    fn env(seq: u64, ts_ms: u64, agent: AgentId, event: Event) -> Envelope {
         Envelope {
             session: "s".into(),
             agent,
@@ -294,7 +290,7 @@ mod tests {
     }
 
     fn one(event: Event) -> String {
-        render_markdown(&[env(1, 0, AgentKind::Claude, event)])
+        render_markdown(&[env(1, 0, AgentId::from("claude"), event)])
     }
 
     fn message(text: &str) -> Event {
@@ -308,11 +304,11 @@ mod tests {
     #[test]
     fn jsonl_is_one_envelope_per_line_in_order() {
         let events = [
-            env(1, 10, AgentKind::Claude, message("a")),
+            env(1, 10, AgentId::from("claude"), message("a")),
             env(
                 2,
                 20,
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 Event::Done {
                     reason: "ok".into(),
                 },
@@ -339,8 +335,8 @@ mod tests {
     #[test]
     fn title_has_count_and_utc_range() {
         let events = [
-            env(2, 1_700_000_005_000, AgentKind::Codex, message("b")),
-            env(1, 1_700_000_000_000, AgentKind::Claude, message("a")),
+            env(2, 1_700_000_005_000, AgentId::from("codex"), message("b")),
+            env(1, 1_700_000_000_000, AgentId::from("claude"), message("a")),
         ];
         let out = render_markdown(&events);
         assert!(out.contains("2 events, 2023-11-14T22:13:20Z \u{2013} 2023-11-14T22:13:25Z UTC"));
@@ -360,11 +356,11 @@ mod tests {
     #[test]
     fn message_line() {
         let out = render_markdown(&[
-            env(1, 0, AgentKind::Claude, message("hello")),
+            env(1, 0, AgentId::from("claude"), message("hello")),
             env(
                 2,
                 0,
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 Event::Message {
                     role: Role::User,
                     text: "task".into(),
@@ -443,7 +439,7 @@ mod tests {
             env(
                 1,
                 0,
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 Event::PermissionRequest {
                     id: "p1".into(),
                     tool: "write".into(),
@@ -453,7 +449,7 @@ mod tests {
             env(
                 2,
                 0,
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 Event::PermissionResolved {
                     id: "p1".into(),
                     allow: true,
@@ -462,7 +458,7 @@ mod tests {
             env(
                 3,
                 0,
-                AgentKind::Codex,
+                AgentId::from("codex"),
                 Event::PermissionResolved {
                     id: "p2".into(),
                     allow: false,
@@ -479,18 +475,18 @@ mod tests {
         let mail = Event::Mail {
             id: "m1".into(),
             thread: "t".into(),
-            from: AgentKind::Claude,
-            to: AgentKind::Codex,
+            from: AgentId::from("claude"),
+            to: AgentId::from("codex"),
             subject: "split".into(),
             body: "line one\nline two".into(),
         };
         let read = Event::MailRead {
-            agent: AgentKind::Codex,
+            agent: AgentId::from("codex"),
             ids: vec!["m1".into()],
         };
         let out = render_markdown(&[
-            env(1, 0, AgentKind::Claude, mail),
-            env(2, 0, AgentKind::Codex, read),
+            env(1, 0, AgentId::from("claude"), mail),
+            env(2, 0, AgentId::from("codex"), read),
         ]);
         assert!(out.contains("> **claude -> codex** [split]\n>\n> line one\n> line two\n"));
         assert!(!out.contains("m1"));
@@ -505,10 +501,10 @@ mod tests {
             env(
                 1,
                 0,
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 Event::Handoff {
-                    from: AgentKind::Claude,
-                    to: AgentKind::Codex,
+                    from: AgentId::from("claude"),
+                    to: AgentId::from("codex"),
                     step: "fix".into(),
                     text: "go\nnow".into(),
                 },
@@ -516,7 +512,7 @@ mod tests {
             env(
                 2,
                 0,
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 Event::Workflow {
                     name: "flow".into(),
                     step: Some("fix".into()),
@@ -527,7 +523,7 @@ mod tests {
             env(
                 3,
                 0,
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 Event::Workflow {
                     name: "flow".into(),
                     step: None,
@@ -591,8 +587,8 @@ mod tests {
         let mail = one(Event::Mail {
             id: "m".into(),
             thread: "t".into(),
-            from: AgentKind::Claude,
-            to: AgentKind::Codex,
+            from: AgentId::from("claude"),
+            to: AgentId::from("codex"),
             subject: "s".into(),
             body: "```\nx".into(),
         });
@@ -609,14 +605,14 @@ mod tests {
             Event::Mail {
                 id: "m".into(),
                 thread: "t".into(),
-                from: AgentKind::Claude,
-                to: AgentKind::Codex,
+                from: AgentId::from("claude"),
+                to: AgentId::from("codex"),
                 subject: html.into(),
                 body: html.into(),
             },
             Event::Handoff {
-                from: AgentKind::Claude,
-                to: AgentKind::Codex,
+                from: AgentId::from("claude"),
+                to: AgentId::from("codex"),
                 step: html.into(),
                 text: html.into(),
             },

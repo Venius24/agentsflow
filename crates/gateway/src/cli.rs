@@ -9,7 +9,7 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes]\n       agentsflow flow FILE --task <text> --yes [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow --version";
+pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes]\n       agentsflow flow FILE --task <text> --yes [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();
@@ -77,12 +77,8 @@ pub fn format_event(agent: &str, event: &Event) -> String {
     }
 }
 
-fn agent_label(agent: &agentsflow_events::AgentKind) -> &'static str {
-    match agent {
-        agentsflow_events::AgentKind::Claude => "claude",
-        agentsflow_events::AgentKind::Codex => "codex",
-        agentsflow_events::AgentKind::Orchestrator => "orchestrator",
-    }
+fn agent_label(agent: &agentsflow_events::AgentId) -> &str {
+    agent.as_str()
 }
 
 fn print_flow_event(envelope: &agentsflow_events::Envelope) {
@@ -161,6 +157,7 @@ pub async fn run(command: Command) -> Result<()> {
             model: command.model,
             cwd: command.cwd,
             mail: None,
+            effort: None,
         })
         .await?;
         run_turn(session, "claude", &command.prompt, command.yes).await
@@ -171,6 +168,7 @@ pub async fn run(command: Command) -> Result<()> {
             sandbox: command.sandbox,
             bin: command.bin,
             mail: None,
+            effort: None,
         })
         .await?;
         run_turn(session, "codex", &command.prompt, command.yes).await
@@ -265,7 +263,8 @@ impl FlowCommand {
         let options = crate::server::ServeOptions::parse(&serve_args)
             .ok_or_else(|| anyhow::anyhow!("invalid flow options"))?
             .runtime_options();
-        let spec = crate::workflow::Spec::load(std::path::Path::new(file))?;
+        let spec =
+            crate::workflow::Spec::load(std::path::Path::new(file))?.resolve_team(&options.team)?;
         Ok(Self {
             spec,
             task,
@@ -282,8 +281,7 @@ impl FlowCommand {
                 let success = {
                     let execution = crate::workflow::execute(
                         &runtime.hub,
-                        runtime.claude.as_ref(),
-                        runtime.codex.as_ref(),
+                        &runtime.agents,
                         &self.spec,
                         &self.task,
                         &id,

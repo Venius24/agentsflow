@@ -1,5 +1,5 @@
 use crate::hub::{Actor, Hub};
-use agentsflow_events::{AgentKind, Event, Role, WorkflowStatus};
+use agentsflow_events::{AgentId, Event, Role, WorkflowStatus};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,6 +19,8 @@ pub struct Spec {
     #[serde(default = "default_steps")]
     pub max_steps: usize,
     pub step: Vec<Step>,
+    #[serde(skip)]
+    bindings: HashMap<String, String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,7 +72,103 @@ fn placeholders(prompt: &str) -> Result<Vec<&str>> {
     }
     Ok(result)
 }
+fn valid_role(role: &str) -> bool {
+    !role.is_empty()
+        && role.len() <= 24
+        && role
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+}
+
+fn resolve_address(team: &crate::team::Team, step: &str, address: &str) -> Result<AgentId> {
+    if let Some(role) = address.strip_prefix('@') {
+        let member = if role == "lead" {
+            team.lead()
+        } else {
+            team.by_role(role)
+        };
+        return member.map(|member| member.id.clone()).with_context(|| {
+            let mut roles = vec!["lead".to_string()];
+            for member in &team.members {
+                for role in &member.roles {
+                    if !roles.contains(role) {
+                        roles.push(role.clone());
+                    }
+                }
+            }
+            format!(
+                "step {step}: no team member has role {role} (roles: {})",
+                roles.join(", ")
+            )
+        });
+    }
+    let id = AgentId::from(address);
+    if team.get(&id).is_none() {
+        bail!(
+            "step {step}: agent {address} is not in the team (members: {})",
+            team.ids()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(id)
+}
+
+fn roster(team: &crate::team::Team) -> String {
+    team.members
+        .iter()
+        .map(|member| {
+            let kind = match member.kind {
+                agentsflow_events::AgentKind::Claude => "claude",
+                agentsflow_events::AgentKind::Codex => "codex",
+            };
+            format!(
+                "- {} ({kind}, {} {}): {}; roles: {}{}",
+                member.id,
+                member.model.as_deref().unwrap_or("default"),
+                member.effort.as_deref().unwrap_or("default"),
+                member.title,
+                member.roles.join(", "),
+                if member.lead { "; lead" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 impl Spec {
+    pub fn resolve_team(&self, team: &crate::team::Team) -> Result<Self> {
+        let mut resolved = self.clone();
+        resolved.bindings.insert("team".into(), roster(team));
+        for step in &mut resolved.step {
+            let agent = resolve_address(team, &step.id, &step.agent)?;
+            let mut recipients = Vec::new();
+            for address in &step.cc {
+                if address == "@others" {
+                    for id in team.ids() {
+                        if id != &agent && !recipients.contains(id) {
+                            recipients.push(id.clone());
+                        }
+                    }
+                } else {
+                    let id = resolve_address(team, &step.id, address)?;
+                    if id == agent || recipients.contains(&id) {
+                        bail!("step {}: duplicate recipient {}", step.id, id);
+                    }
+                    recipients.push(id);
+                }
+            }
+            for key in placeholders(&step.prompt)? {
+                if key.starts_with('@') {
+                    let id = resolve_address(team, &step.id, key)?;
+                    resolved.bindings.insert(key.to_owned(), id.to_string());
+                }
+            }
+            step.agent = agent.to_string();
+            step.cc = recipients.into_iter().map(|id| id.to_string()).collect();
+        }
+        Ok(resolved)
+    }
     pub fn parse(text: &str) -> Result<Self> {
         let raw: toml::Value = toml::from_str(text).context("invalid workflow TOML")?;
         let spec: Self = raw.clone().try_into().context("invalid workflow TOML")?;
@@ -85,7 +183,12 @@ impl Spec {
             if step.id.trim().is_empty() || !ids.insert(step.id.as_str()) {
                 bail!("step id is empty or duplicated: {:?}", step.id);
             }
-            if !matches!(step.agent.as_str(), "claude" | "codex") {
+            if !(crate::team::valid_id(&step.agent)
+                || step
+                    .agent
+                    .strip_prefix('@')
+                    .is_some_and(|role| role != "others" && valid_role(role)))
+            {
                 bail!("invalid agent in step {}: {}", step.id, step.agent);
             }
             if step.otherwise.is_some() && step.until.is_none() {
@@ -100,11 +203,9 @@ impl Spec {
             if cc_present && step.mode != StepMode::Mail {
                 bail!("cc requires mode='mail' in step {}", step.id);
             }
-            let mut recipients = HashSet::new();
             for recipient in &step.cc {
-                if !matches!(recipient.as_str(), "claude" | "codex")
-                    || recipient == &step.agent
-                    || !recipients.insert(recipient)
+                if !(crate::team::valid_id(recipient)
+                    || recipient.strip_prefix('@').is_some_and(valid_role))
                 {
                     bail!("invalid cc recipient {recipient:?} in step {}", step.id);
                 }
@@ -145,7 +246,11 @@ impl Spec {
             }
             for key in placeholders(&step.prompt)? {
                 if key != "task"
+                    && key != "team"
                     && key != "prev.output"
+                    && !key
+                        .strip_prefix('@')
+                        .is_some_and(|role| role != "others" && valid_role(role))
                     && !key
                         .strip_suffix(".output")
                         .is_some_and(|id| ids.contains(id))
@@ -169,6 +274,7 @@ pub struct Summary<'a> {
     name: &'a str,
     description: &'a Option<String>,
     steps: Vec<StepSummary<'a>>,
+    agents: Vec<&'a str>,
 }
 #[derive(Serialize)]
 struct StepSummary<'a> {
@@ -181,6 +287,22 @@ impl Spec {
         Summary {
             name: &self.name,
             description: &self.description,
+            agents: {
+                let mut agents = Vec::new();
+                for step in &self.step {
+                    for id in std::iter::once(&step.agent).chain(&step.cc) {
+                        if !agents.contains(&id.as_str()) {
+                            agents.push(id.as_str());
+                        }
+                    }
+                    for role in placeholders(&step.prompt).expect("validated prompt") {
+                        if role.starts_with('@') && !agents.contains(&role) {
+                            agents.push(role);
+                        }
+                    }
+                }
+                agents
+            },
             steps: self
                 .step
                 .iter()
@@ -194,19 +316,16 @@ impl Spec {
     }
 }
 
-fn kind(name: &str) -> AgentKind {
-    if name == "claude" {
-        AgentKind::Claude
-    } else {
-        AgentKind::Codex
-    }
+fn kind(name: &str) -> AgentId {
+    AgentId::from(name)
 }
 fn render(
     template: &str,
     task: &str,
-    outputs: &HashMap<String, (String, AgentKind)>,
-    previous: Option<&(String, AgentKind)>,
-) -> Result<(String, Option<AgentKind>)> {
+    outputs: &HashMap<String, (String, AgentId)>,
+    previous: Option<&(String, AgentId)>,
+    bindings: &HashMap<String, String>,
+) -> Result<(String, Option<AgentId>)> {
     let mut text = String::new();
     let mut rest = template;
     let mut from = None;
@@ -217,6 +336,8 @@ fn render(
         let key = &rest[..end];
         if key == "task" {
             text.push_str(task);
+        } else if let Some(value) = bindings.get(key) {
+            text.push_str(value);
         } else {
             let id = key.strip_suffix(".output").context("invalid placeholder")?;
             let (output, agent) = if id == "prev" {
@@ -227,7 +348,7 @@ fn render(
                     .with_context(|| format!("step {id} has not run"))?
             };
             text.push_str(output);
-            from = Some(*agent);
+            from = Some(agent.clone());
         }
         rest = &rest[end + 1..];
     }
@@ -244,6 +365,7 @@ pub struct WorkflowState {
 pub struct Manager {
     shared: Arc<Mutex<Shared>>,
     tx: mpsc::UnboundedSender<Job>,
+    team: crate::team::Team,
 }
 struct Shared {
     state: WorkflowState,
@@ -255,8 +377,15 @@ struct Job {
     id: String,
     stop: watch::Receiver<bool>,
 }
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartError {
+    Busy,
+    Closed,
+    InvalidTeam(String),
+}
+
 impl Manager {
-    pub fn new(hub: Hub, claude: Option<Actor>, codex: Option<Actor>) -> Self {
+    pub fn new(hub: Hub, agents: crate::runtime::Agents, team: crate::team::Team) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<Job>();
         let shared = Arc::new(Mutex::new(Shared {
             state: WorkflowState::default(),
@@ -265,30 +394,24 @@ impl Manager {
         let state = shared.clone();
         tokio::task::spawn_local(async move {
             while let Some(job) = rx.recv().await {
-                let _ = execute(
-                    &hub,
-                    claude.as_ref(),
-                    codex.as_ref(),
-                    &job.spec,
-                    &job.task,
-                    &job.id,
-                    job.stop,
-                )
-                .await;
+                let _ = execute(&hub, &agents, &job.spec, &job.task, &job.id, job.stop).await;
                 let mut lock = state.lock().unwrap();
                 lock.state = WorkflowState::default();
                 lock.stop = None;
             }
         });
-        Self { shared, tx }
+        Self { shared, tx, team }
     }
     pub fn state(&self) -> WorkflowState {
         self.shared.lock().unwrap().state.clone()
     }
-    pub fn start(&self, spec: Spec, task: String) -> std::result::Result<String, &'static str> {
+    pub fn start(&self, spec: Spec, task: String) -> std::result::Result<String, StartError> {
+        let spec = spec
+            .resolve_team(&self.team)
+            .map_err(|error| StartError::InvalidTeam(error.to_string()))?;
         let mut shared = self.shared.lock().unwrap();
         if shared.state.running {
-            return Err("busy");
+            return Err(StartError::Busy);
         }
         let (stop, rx) = watch::channel(false);
         let id = Uuid::new_v4().to_string();
@@ -309,7 +432,7 @@ impl Manager {
         {
             shared.state = WorkflowState::default();
             shared.stop = None;
-            return Err("closed");
+            return Err(StartError::Closed);
         }
         Ok(id)
     }
@@ -333,7 +456,7 @@ fn publish(
     detail: impl Into<String>,
 ) {
     hub.publish(
-        AgentKind::Orchestrator,
+        AgentId::orchestrator(),
         id,
         Event::Workflow {
             name: spec.name.clone(),
@@ -345,8 +468,7 @@ fn publish(
 }
 struct RunContext<'a> {
     hub: &'a Hub,
-    claude: Option<&'a Actor>,
-    codex: Option<&'a Actor>,
+    agents: &'a crate::runtime::Agents,
     spec: &'a Spec,
     task: &'a str,
     id: &'a str,
@@ -354,7 +476,7 @@ struct RunContext<'a> {
 
 struct StepOutcome {
     output: String,
-    agent: AgentKind,
+    agent: AgentId,
 }
 
 enum Next {
@@ -426,7 +548,7 @@ fn next_index(
 
 async fn wait_turn(
     events: &mut tokio::sync::broadcast::Receiver<agentsflow_events::Envelope>,
-    agent: &AgentKind,
+    agent: &AgentId,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<String> {
     let mut output = String::new();
@@ -474,7 +596,7 @@ async fn wait_idle(actor: &Actor, stop: &mut watch::Receiver<bool>) -> Result<()
 async fn run_mail_step(
     context: &RunContext<'_>,
     step: &Step,
-    agent: AgentKind,
+    agent: AgentId,
     prompt: String,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<StepOutcome> {
@@ -485,7 +607,7 @@ async fn run_mail_step(
     let sent = context
         .hub
         .send_mail(
-            AgentKind::Orchestrator,
+            AgentId::orchestrator(),
             agent,
             step.subject.as_deref().unwrap_or(&step.id).to_owned(),
             prompt.clone(),
@@ -496,7 +618,7 @@ async fn run_mail_step(
         context
             .hub
             .send_mail(
-                AgentKind::Orchestrator,
+                AgentId::orchestrator(),
                 kind(recipient),
                 step.subject.as_deref().unwrap_or(&step.id).to_owned(),
                 prompt.clone(),
@@ -512,7 +634,7 @@ async fn run_mail_step(
         }
         if let Some(reply) = context
             .hub
-            .take_thread_for(AgentKind::Orchestrator, &sent.thread)
+            .take_thread_for(AgentId::orchestrator(), &sent.thread)
         {
             return Ok(StepOutcome {
                 output: reply.body,
@@ -536,21 +658,27 @@ async fn run_mail_step(
 async fn run_step(
     context: &RunContext<'_>,
     step: &Step,
-    outputs: &HashMap<String, (String, AgentKind)>,
-    previous: Option<&(String, AgentKind)>,
+    outputs: &HashMap<String, (String, AgentId)>,
+    previous: Option<&(String, AgentId)>,
     stop: &mut watch::Receiver<bool>,
 ) -> Result<StepOutcome> {
     let agent = kind(&step.agent);
-    let (prompt, from) = render(&step.prompt, context.task, outputs, previous)?;
+    let (prompt, from) = render(
+        &step.prompt,
+        context.task,
+        outputs,
+        previous,
+        &context.spec.bindings,
+    )?;
     if step.mode == StepMode::Prompt
         && let Some(from) = from
     {
         context.hub.publish(
-            AgentKind::Orchestrator,
+            AgentId::orchestrator(),
             context.id,
             Event::Handoff {
                 from,
-                to: agent,
+                to: agent.clone(),
                 step: step.id.clone(),
                 text: prompt.clone(),
             },
@@ -567,12 +695,10 @@ async fn run_step(
     if step.mode == StepMode::Mail {
         return run_mail_step(context, step, agent, prompt, stop).await;
     }
-    let actor = match agent {
-        AgentKind::Claude => context.claude,
-        AgentKind::Codex => context.codex,
-        AgentKind::Orchestrator => None,
-    }
-    .with_context(|| format!("agent {} is disabled", step.agent))?;
+    let actor = context
+        .agents
+        .get(&agent)
+        .with_context(|| format!("agent {} is disabled", step.agent))?;
     let (_, mut events) = context.hub.subscribe();
     tokio::select! {
         biased;
@@ -612,7 +738,7 @@ async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool
         let step = &context.spec.step[index];
         let outcome = run_step(context, step, &outputs, previous.as_ref(), stop).await?;
         let detail = outcome.output.chars().take(200).collect::<String>();
-        previous = Some((outcome.output.clone(), outcome.agent));
+        previous = Some((outcome.output.clone(), outcome.agent.clone()));
         outputs.insert(step.id.clone(), (outcome.output.clone(), outcome.agent));
         publish(
             context.hub,
@@ -645,8 +771,7 @@ async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool
 
 pub async fn execute(
     hub: &Hub,
-    claude: Option<&Actor>,
-    codex: Option<&Actor>,
+    agents: &crate::runtime::Agents,
     spec: &Spec,
     task: &str,
     id: &str,
@@ -655,8 +780,7 @@ pub async fn execute(
     publish(hub, id, spec, None, WorkflowStatus::Started, "");
     let context = RunContext {
         hub,
-        claude,
-        codex,
+        agents,
         spec,
         task,
         id,
@@ -707,7 +831,7 @@ mod tests {
                 "name='x'\n[[step]]\nid='a'\nagent='claude'\nprompt='x'\n",
                 "[[step]]\nid='a'\nagent='codex'\nprompt='x'"
             ),
-            "name='x'\n[[step]]\nid='a'\nagent='bad'\nprompt='x'",
+            "name='x'\n[[step]]\nid='a'\nagent=''\nprompt='x'",
             "name='x'\n[[step]]\nid='a'\nagent='claude'\nprompt='x'\nnext='bad'",
             "name='x'\n[[step]]\nid='a'\nagent='claude'\nprompt='x'\nuntil='ok'\notherwise='bad'",
             "name='x'\n[[step]]\nid='a'\nagent='claude'\nprompt='{missing.output}'",
@@ -770,16 +894,172 @@ mod tests {
     }
 
     #[test]
+    fn validates_team_members_and_agent_format() {
+        let team = crate::team::Team::preset("trio").unwrap();
+        let spec = Spec::parse("name='x'\n[[step]]\nid='one'\nagent='main'\nprompt='x'\n[[step]]\nid='two'\nagent='junior'\nmode='mail'\ncc=['missing']\nprompt='x'").unwrap();
+        assert_eq!(
+            spec.resolve_team(&team).unwrap_err().to_string(),
+            "step two: agent missing is not in the team (members: lead, main, junior)"
+        );
+        let spec = Spec::parse("name='x'\n[[step]]\nid='one'\nagent='other'\nprompt='x'").unwrap();
+        assert_eq!(
+            spec.resolve_team(&team).unwrap_err().to_string(),
+            "step one: agent other is not in the team (members: lead, main, junior)"
+        );
+        for id in ["@others", "UPPER", "a b", "", "abcdefghijklmnopqrstuvwxyz"] {
+            let text = format!("name='x'\n[[step]]\nid='s'\nagent='{id}'\nprompt='x'");
+            assert!(Spec::parse(&text).is_err(), "{id}");
+        }
+    }
+    #[test]
+    fn named_agents_are_valid_workflow_targets() {
+        let spec = Spec::parse("name='team'\n[[step]]\nid='work'\nagent='main'\nmode='mail'\ncc=['junior']\nprompt='x'").unwrap();
+        assert_eq!(spec.step[0].agent, "main");
+        assert_eq!(spec.step[0].cc, ["junior"]);
+    }
+
+    #[test]
+    fn roles_others_and_bindings() {
+        let spec = Spec::parse("name='x'\n[[step]]\nid='work'\nagent='@lead'\nmode='mail'\ncc=['@others']\nprompt='{team} {@lead} {@engineer}'").unwrap();
+        for (preset, lead, others, engineer) in [
+            ("pair", "claude", vec!["codex"], "codex"),
+            ("trio", "lead", vec!["main", "junior"], "main"),
+        ] {
+            let team = crate::team::Team::preset(preset).unwrap();
+            let resolved = spec.resolve_team(&team).unwrap();
+            assert_eq!(resolved.step[0].agent, lead);
+            assert_eq!(resolved.step[0].cc, others);
+            let (text, from) = render(
+                &resolved.step[0].prompt,
+                "",
+                &HashMap::new(),
+                None,
+                &resolved.bindings,
+            )
+            .unwrap();
+            assert!(text.contains(&format!("- {lead} (claude,")));
+            assert!(text.contains(&format!("{lead} {engineer}")));
+            assert!(text.contains("; lead"));
+            assert!(from.is_none());
+        }
+        let trio = crate::team::Team::preset("trio").unwrap();
+        let spec = Spec::parse("name='x'\n[[step]]\nid='work'\nagent='@lead'\nmode='mail'\ncc=['main','@others']\nprompt='x'").unwrap();
+        assert_eq!(
+            spec.resolve_team(&trio).unwrap().step[0].cc,
+            ["main", "junior"]
+        );
+    }
+
+    #[test]
+    fn role_errors_and_builtins_for_each_team() {
+        for team_name in ["pair", "trio"] {
+            let team = crate::team::Team::preset(team_name).unwrap();
+            for spec in builtins().unwrap() {
+                spec.resolve_team(&team).unwrap();
+            }
+        }
+        let team = crate::team::Team::preset("trio").unwrap();
+        for spec in [
+            "name='x'\n[[step]]\nid='s'\nagent='@missing'\nprompt='x'",
+            "name='x'\n[[step]]\nid='s'\nagent='main'\nprompt='{@missing}'",
+        ] {
+            assert!(
+                Spec::parse(spec)
+                    .unwrap()
+                    .resolve_team(&team)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no team member has role missing")
+            );
+        }
+        for cc in [
+            "['main']",
+            "['@engineer']",
+            "['junior','junior']",
+            "['@others','junior']",
+        ] {
+            let spec = format!(
+                "name='x'\n[[step]]\nid='s'\nagent='main'\nmode='mail'\ncc={cc}\nprompt='x'"
+            );
+            assert!(
+                Spec::parse(&spec)
+                    .unwrap()
+                    .resolve_team(&team)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("duplicate recipient")
+            );
+        }
+        assert!(Spec::parse("name='x'\n[[step]]\nid='s'\nagent='@others'\nprompt='x'").is_err());
+        assert!(
+            Spec::parse("name='x'\n[[step]]\nid='s'\nagent='main'\nprompt='{@others}'").is_err()
+        );
+        let spec = builtins().unwrap().remove(0).resolve_team(&team).unwrap();
+        assert_eq!(
+            spec.step
+                .iter()
+                .map(|s| s.agent.as_str())
+                .collect::<Vec<_>>(),
+            ["main", "lead", "main"]
+        );
+    }
+
+    #[tokio::test]
+    async fn trio_mail_team_delivers_to_all_in_one_thread() {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        let (_, mut events) = hub.subscribe();
+        let sender = hub.clone();
+        let reply = tokio::spawn(async move {
+            let mut messages = Vec::new();
+            while messages.len() < 3 {
+                if let Event::Mail {
+                    from,
+                    to,
+                    thread,
+                    body,
+                    ..
+                } = events.recv().await.unwrap().event
+                    && from == AgentId::orchestrator()
+                {
+                    messages.push((to, thread, body));
+                }
+            }
+            assert_eq!(
+                messages.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(),
+                ["lead", "main", "junior"]
+            );
+            assert!(
+                messages
+                    .iter()
+                    .all(|m| m.1 == messages[0].1 && m.2 == messages[0].2)
+            );
+            assert!(messages[0].2.contains("- junior (codex,"));
+            sender
+                .send_mail(
+                    AgentId::from("lead"),
+                    AgentId::orchestrator(),
+                    "reply".into(),
+                    "VERDICT: APPROVED".into(),
+                    Some(messages[0].1.clone()),
+                )
+                .unwrap();
+        });
+        let spec = builtins()
+            .unwrap()
+            .remove(3)
+            .resolve_team(&crate::team::Team::preset("trio").unwrap())
+            .unwrap();
+        let (_tx, stop) = watch::channel(false);
+        assert!(execute(&hub, &Default::default(), &spec, "task", "run", stop).await);
+        reply.await.unwrap();
+    }
+
+    #[test]
     fn cc_validation() {
         let prefix = "name='x'\n[[step]]\nid='work'\nagent='codex'\nprompt='{task}'\n";
         assert!(Spec::parse(&format!("{prefix}mode='mail'\ncc=['claude']\n")).is_ok());
-        for suffix in [
-            "cc=['claude']",
-            "cc=[]",
-            "mode='mail'\ncc=['other']",
-            "mode='mail'\ncc=['codex']",
-            "mode='mail'\ncc=['claude','claude']",
-        ] {
+        for suffix in ["cc=['claude']", "cc=[]", "mode='mail'\ncc=['']"] {
             assert!(
                 Spec::parse(&format!("{prefix}{suffix}\n")).is_err(),
                 "{suffix}"
@@ -797,26 +1077,27 @@ mod tests {
             let mut received = Vec::new();
             while received.len() < 2 {
                 if let Event::Mail {
-                    from: AgentKind::Orchestrator,
+                    from,
                     to,
                     thread,
                     subject,
                     body,
                     ..
                 } = events.recv().await.unwrap().event
+                    && from == AgentId::orchestrator()
                 {
                     received.push((to, thread, subject, body));
                 }
             }
-            assert_eq!(received[0].0, AgentKind::Codex);
-            assert_eq!(received[1].0, AgentKind::Claude);
+            assert_eq!(received[0].0, AgentId::from("claude"));
+            assert_eq!(received[1].0, AgentId::from("codex"));
             assert_eq!(received[0].1, received[1].1);
             assert_eq!(received[0].2, received[1].2);
             assert_eq!(received[0].3, received[1].3);
             sender
                 .send_mail(
-                    AgentKind::Codex,
-                    AgentKind::Orchestrator,
+                    AgentId::from("codex"),
+                    AgentId::orchestrator(),
                     "reply".into(),
                     "VERDICT: APPROVED".into(),
                     Some(received[0].1.clone()),
@@ -824,11 +1105,15 @@ mod tests {
                 .unwrap();
         });
         let (_tx, stop) = watch::channel(false);
-        let spec = builtins().unwrap().remove(3);
-        assert!(execute(&hub, None, None, &spec, "do work", "run", stop).await);
+        let spec = builtins()
+            .unwrap()
+            .remove(3)
+            .resolve_team(&crate::team::Team::preset("pair").unwrap())
+            .unwrap();
+        assert!(execute(&hub, &Default::default(), &spec, "do work", "run", stop).await);
         reply.await.unwrap();
-        let codex = hub.unread(AgentKind::Codex);
-        let claude = hub.unread(AgentKind::Claude);
+        let codex = hub.unread(AgentId::from("codex"));
+        let claude = hub.unread(AgentId::from("claude"));
         assert_eq!(codex.len(), 1);
         assert_eq!(claude.len(), 1);
         assert_eq!(codex[0].thread, claude[0].thread);
@@ -842,17 +1127,21 @@ mod tests {
         hub.set_mail_enabled(true);
         hub.set_mail_thread_limit(1);
         let (_tx, stop) = watch::channel(false);
-        let spec = builtins().unwrap().remove(3);
-        assert!(!execute(&hub, None, None, &spec, "work", "run", stop).await);
-        assert_eq!(hub.unread(AgentKind::Codex).len(), 1);
-        assert!(hub.unread(AgentKind::Claude).is_empty());
+        let spec = builtins()
+            .unwrap()
+            .remove(3)
+            .resolve_team(&crate::team::Team::preset("pair").unwrap())
+            .unwrap();
+        assert!(!execute(&hub, &Default::default(), &spec, "work", "run", stop).await);
+        assert_eq!(hub.unread(AgentId::from("claude")).len(), 1);
+        assert!(hub.unread(AgentId::from("codex")).is_empty());
         assert!(
             hub.subscribe()
                 .0
                 .iter()
                 .any(|envelope| matches!(&envelope.event,
                     Event::Workflow { status: WorkflowStatus::Failed, detail, .. }
-                    if detail.contains("cc claude") && detail.contains("thread limit")
+                    if detail.contains("cc codex") && detail.contains("thread limit")
                 ))
         );
     }
@@ -867,18 +1156,20 @@ mod tests {
         let reply = tokio::spawn(async move {
             loop {
                 if let Event::Mail {
-                    from: AgentKind::Orchestrator,
-                    to: AgentKind::Codex,
+                    from,
+                    to,
                     thread,
                     subject,
                     ..
                 } = events.recv().await.unwrap().event
+                    && from == AgentId::orchestrator()
+                    && to == AgentId::from("codex")
                 {
                     assert_eq!(subject, "work");
                     sender
                         .send_mail(
-                            AgentKind::Claude,
-                            AgentKind::Orchestrator,
+                            AgentId::from("claude"),
+                            AgentId::orchestrator(),
                             "other".into(),
                             "unrelated".into(),
                             None,
@@ -886,8 +1177,8 @@ mod tests {
                         .unwrap();
                     sender
                         .send_mail(
-                            AgentKind::Codex,
-                            AgentKind::Orchestrator,
+                            AgentId::from("codex"),
+                            AgentId::orchestrator(),
                             "reply".into(),
                             body.into(),
                             Some(thread),
@@ -900,11 +1191,11 @@ mod tests {
         let (_tx, stop) = watch::channel(false);
         let spec = Spec::parse(MAIL_SPEC).unwrap();
         assert_eq!(
-            execute(&hub, None, None, &spec, "task", "run", stop).await,
+            execute(&hub, &Default::default(), &spec, "task", "run", stop).await,
             expected
         );
         reply.await.unwrap();
-        let unread = hub.unread(AgentKind::Orchestrator);
+        let unread = hub.unread(AgentId::orchestrator());
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].body, "unrelated");
         let (history, _) = hub.subscribe();
@@ -918,9 +1209,9 @@ mod tests {
             assert!(history.iter().any(|e| matches!(
                 e.event,
                 Event::MailRead {
-                    agent: AgentKind::Orchestrator,
+                    ref agent,
                     ..
-                }
+                } if *agent == AgentId::orchestrator()
             )));
         } else {
             assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail.contains("until not satisfied"))));
@@ -941,8 +1232,7 @@ mod tests {
         assert!(
             !execute(
                 &hub,
-                None,
-                None,
+                &Default::default(),
                 &Spec::parse(MAIL_SPEC).unwrap(),
                 "task",
                 "run",
@@ -973,9 +1263,9 @@ mod tests {
                 if matches!(
                     event.event,
                     Event::Mail {
-                        from: AgentKind::Orchestrator,
+                        ref from,
                         ..
-                    }
+                    } if *from == AgentId::orchestrator()
                 ) {
                     tx.send(true).unwrap();
                     break;
@@ -985,8 +1275,7 @@ mod tests {
         assert!(
             !execute(
                 &hub,
-                None,
-                None,
+                &Default::default(),
                 &Spec::parse(MAIL_SPEC).unwrap(),
                 "task",
                 "run",
@@ -1003,7 +1292,7 @@ mod tests {
         let hub = Hub::new();
         let (_tx, stop) = watch::channel(false);
         let spec = Spec::parse("name='mixed'\n[[step]]\nid='first'\nagent='claude'\nprompt='first'\n[[step]]\nid='mail'\nagent='codex'\nmode='mail'\nprompt='second'\n").unwrap();
-        assert!(!execute(&hub, None, None, &spec, "task", "run", stop).await);
+        assert!(!execute(&hub, &Default::default(), &spec, "task", "run", stop).await);
         let (history, _) = hub.subscribe();
         assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail == "mail steps require `agentsflow serve`")));
         assert!(!history.iter().any(|e| matches!(
@@ -1017,26 +1306,27 @@ mod tests {
 
     #[test]
     fn rendering() {
-        let outputs = HashMap::from([("a".into(), ("answer".into(), AgentKind::Codex))]);
-        let previous = ("latest".into(), AgentKind::Claude);
+        let outputs = HashMap::from([("a".into(), ("answer".into(), AgentId::from("codex")))]);
+        let previous = ("latest".into(), AgentId::from("claude"));
         assert_eq!(
             render(
                 "{task}: {a.output} / {prev.output}",
                 "hi",
                 &outputs,
-                Some(&previous)
+                Some(&previous),
+                &HashMap::new()
             )
             .unwrap(),
-            ("hi: answer / latest".into(), Some(AgentKind::Claude))
+            ("hi: answer / latest".into(), Some(AgentId::from("claude")))
         );
         assert!(
-            render("{prev.output}", "", &outputs, None)
+            render("{prev.output}", "", &outputs, None, &HashMap::new())
                 .unwrap_err()
                 .to_string()
                 .contains("no previous step")
         );
         assert!(
-            render("{b.output}", "", &outputs, None)
+            render("{b.output}", "", &outputs, None, &HashMap::new())
                 .unwrap_err()
                 .to_string()
                 .contains("has not run")
@@ -1082,7 +1372,7 @@ mod tests {
     }
     fn fake(
         hub: &Hub,
-        kind: AgentKind,
+        kind: AgentId,
         replies: &[&str],
         never: bool,
     ) -> (Actor, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<String>>>) {
@@ -1103,14 +1393,83 @@ mod tests {
         (actor, task, saved)
     }
 
+    #[tokio::test]
+    async fn workflow_uses_named_actor() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (main, task, prompts) = fake(&hub, AgentId::from("main"), &["done"], false);
+                let agents = HashMap::from([(AgentId::from("main"), main.clone())]);
+                let spec =
+                    Spec::parse("name='named'\n[[step]]\nid='work'\nagent='main'\nprompt='{task}'")
+                        .unwrap();
+                let (_tx, stop) = watch::channel(false);
+                assert!(execute(&hub, &agents, &spec, "hello", "id", stop).await);
+                assert_eq!(prompts.lock().unwrap().as_slice(), ["hello"]);
+                main.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn implement_review_runs_on_trio_roles() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (lead, lead_task, lead_prompts) =
+                    fake(&hub, AgentId::from("lead"), &["VERDICT: APPROVED"], false);
+                let (main, main_task, main_prompts) =
+                    fake(&hub, AgentId::from("main"), &["implementation"], false);
+                let agents = HashMap::from([
+                    (AgentId::from("lead"), lead.clone()),
+                    (AgentId::from("main"), main.clone()),
+                ]);
+                let spec = builtins()
+                    .unwrap()
+                    .remove(0)
+                    .resolve_team(&crate::team::Team::preset("trio").unwrap())
+                    .unwrap();
+                let (_tx, stop) = watch::channel(false);
+                assert!(execute(&hub, &agents, &spec, "task", "run", stop).await);
+                assert_eq!(main_prompts.lock().unwrap().as_slice(), ["task"]);
+                assert!(lead_prompts.lock().unwrap()[0].contains("implementation"));
+                lead.shutdown().await;
+                main.shutdown().await;
+                lead_task.await.unwrap();
+                main_task.await.unwrap();
+            })
+            .await;
+    }
+
     async fn looping_case(reviews: &[&str], success: bool) {
         let hub = Hub::new();
-        let (claude, ctask, prompts) = fake(&hub, AgentKind::Claude, reviews, false);
-        let (codex, dtask, _) = fake(&hub, AgentKind::Codex, &["implementation", "fixed"], false);
+        let (claude, ctask, prompts) = fake(&hub, AgentId::from("claude"), reviews, false);
+        let (codex, dtask, _) = fake(
+            &hub,
+            AgentId::from("codex"),
+            &["implementation", "fixed"],
+            false,
+        );
         let (_tx, stop) = watch::channel(false);
-        let spec = builtins().unwrap().remove(0);
+        let spec = builtins()
+            .unwrap()
+            .remove(0)
+            .resolve_team(&crate::team::Team::preset("pair").unwrap())
+            .unwrap();
         assert_eq!(
-            execute(&hub, Some(&claude), Some(&codex), &spec, "do", "id", stop).await,
+            execute(
+                &hub,
+                &HashMap::from([
+                    (AgentId::from("claude"), claude.clone()),
+                    (AgentId::from("codex"), codex.clone())
+                ]),
+                &spec,
+                "do",
+                "id",
+                stop
+            )
+            .await,
             success
         );
         let (history, _) = hub.subscribe();
@@ -1126,11 +1485,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            review_handoffs
-                .iter()
-                .all(|(from, to, _)| **from == AgentKind::Codex && **to == AgentKind::Claude)
-        );
+        assert!(review_handoffs.iter().all(
+            |(from, to, _)| **from == AgentId::from("codex") && **to == AgentId::from("claude")
+        ));
         assert!(review_handoffs[0].2.contains("implementation"));
         if reviews.len() > 1 {
             assert!(review_handoffs[1].2.contains("fixed"));
@@ -1205,7 +1562,7 @@ mod tests {
             Spec::parse("name='x'\n[[step]]\nid='a'\nagent='claude'\nprompt='{prev.output}'")
                 .unwrap();
         let (_tx, stop) = watch::channel(false);
-        assert!(!execute(&hub, None, None, &spec, "task", "id", stop).await);
+        assert!(!execute(&hub, &Default::default(), &spec, "task", "id", stop).await);
         let (history, _) = hub.subscribe();
         assert!(history.iter().any(|event| matches!(
             &event.event,
@@ -1221,11 +1578,29 @@ mod tests {
 
     async fn success_ends_case() {
         let hub = Hub::new();
-        let (claude, ctask, prompts) = fake(&hub, AgentKind::Claude, &["VERDICT: APPROVED"], false);
-        let (codex, dtask, fixes) = fake(&hub, AgentKind::Codex, &["implementation"], false);
+        let (claude, ctask, prompts) =
+            fake(&hub, AgentId::from("claude"), &["VERDICT: APPROVED"], false);
+        let (codex, dtask, fixes) = fake(&hub, AgentId::from("codex"), &["implementation"], false);
         let (_tx, stop) = watch::channel(false);
-        let spec = builtins().unwrap().remove(0);
-        assert!(execute(&hub, Some(&claude), Some(&codex), &spec, "task", "id", stop).await);
+        let spec = builtins()
+            .unwrap()
+            .remove(0)
+            .resolve_team(&crate::team::Team::preset("pair").unwrap())
+            .unwrap();
+        assert!(
+            execute(
+                &hub,
+                &HashMap::from([
+                    (AgentId::from("claude"), claude.clone()),
+                    (AgentId::from("codex"), codex.clone())
+                ]),
+                &spec,
+                "task",
+                "id",
+                stop
+            )
+            .await
+        );
         assert_eq!(prompts.lock().unwrap().len(), 1);
         assert_eq!(fixes.lock().unwrap().len(), 1);
         claude.shutdown().await;
@@ -1241,14 +1616,18 @@ mod tests {
 
     async fn busy_stop_case() {
         let hub = Hub::new();
-        let (actor, task, _) = fake(&hub, AgentKind::Claude, &[], true);
-        let manager = Manager::new(hub.clone(), Some(actor.clone()), None);
+        let (actor, task, _) = fake(&hub, AgentId::from("claude"), &[], true);
+        let manager = Manager::new(
+            hub.clone(),
+            HashMap::from([(AgentId::from("claude"), actor.clone())]),
+            crate::team::Team::filtered_pair(true, false).unwrap(),
+        );
         manager
             .start(Spec::parse(BASIC).unwrap(), "one".into())
             .unwrap();
         assert_eq!(
             manager.start(Spec::parse(BASIC).unwrap(), "two".into()),
-            Err("busy")
+            Err(StartError::Busy)
         );
         while !actor.state().busy {
             tokio::task::yield_now().await;

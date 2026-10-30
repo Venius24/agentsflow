@@ -5,8 +5,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 fn tools() -> Value {
+    let peers =
+        std::env::var("AGENTSFLOW_PEERS").unwrap_or_else(|_| "claude,codex,orchestrator".into());
+    tools_for(&peers)
+}
+fn tools_for(peers: &str) -> Value {
+    let peers: Vec<_> = peers.split(',').filter(|s| !s.is_empty()).collect();
     json!([
-        {"name":"send_mail", "description":"Send a request or reply to another agent. Set thread to reply in the same conversation.", "inputSchema":{"type":"object","properties":{"to":{"type":"string","enum":["claude","codex","orchestrator"]},"subject":{"type":"string"},"body":{"type":"string"},"thread":{"type":"string","description":"Thread ID for a reply in the same conversation."}},"required":["to","subject","body"]}},
+        {"name":"send_mail", "description":format!("Send a request or reply to a team member. Recipients: {}. Set thread to reply in the same conversation.", peers.join(", ")), "inputSchema":{"type":"object","properties":{"to":{"type":"string","enum":peers},"subject":{"type":"string"},"body":{"type":"string"},"thread":{"type":"string","description":"Thread ID for a reply in the same conversation."}},"required":["to","subject","body"]}},
         {"name":"check_inbox", "description":"Check your inbox for unread requests and replies from other agents and mark them read. Reply with send_mail using the same thread when appropriate.","inputSchema":{"type":"object","properties":{}}}
     ])
 }
@@ -209,6 +215,15 @@ pub async fn run(agent: &str) -> Result<()> {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn tools_list_configured_peers() {
+        let tools = tools_for("lead,main,junior,orchestrator");
+        assert_eq!(
+            tools[0]["inputSchema"]["properties"]["to"]["enum"],
+            json!(["lead", "main", "junior", "orchestrator"])
+        );
+    }
 
     #[tokio::test]
     async fn protocol_and_tools() {

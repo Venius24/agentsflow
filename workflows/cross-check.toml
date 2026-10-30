@@ -3,15 +3,15 @@ description = "Независимые ответы и сравнение"
 
 [[step]]
 id = "claude_answer"
-agent = "claude"
+agent = "@reviewer"
 prompt = "Ответь самостоятельно на задачу:\n{task}"
 
 [[step]]
 id = "codex_answer"
-agent = "codex"
+agent = "@engineer"
 prompt = "Ответь самостоятельно на задачу:\n{task}"
 
 [[step]]
 id = "compare"
-agent = "claude"
-prompt = "Сравни свой ответ с ответом Codex, найди расхождения и объясни их.\n\nТвой ответ:\n{claude_answer.output}\n\nОтвет Codex:\n{prev.output}"
+agent = "@lead"
+prompt = "Сравни ответ участника {@reviewer} с ответом участника {@engineer}, найди расхождения и объясни их.\n\nОтвет {@reviewer}:\n{claude_answer.output}\n\nОтвет {@engineer}:\n{prev.output}"
