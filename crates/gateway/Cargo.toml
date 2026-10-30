@@ -10,7 +10,10 @@ name = "agentsflow"
 path = "src/main.rs"
 
 [dependencies]
+agentsflow-adapters = { path = "../adapters" }
 agentsflow-events = { path = "../events" }
+anyhow.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

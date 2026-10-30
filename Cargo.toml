@@ -11,6 +11,9 @@ rust-version = "1.85"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+anyhow = "1"
+claude-codes = { version = "2.1.314", default-features = false, features = ["async-client"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
