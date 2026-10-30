@@ -26,11 +26,22 @@ pub struct Step {
     pub id: String,
     pub agent: String,
     pub prompt: String,
+    #[serde(default)]
+    pub mode: StepMode,
+    pub subject: Option<String>,
+    pub timeout_secs: Option<u64>,
     pub until: Option<String>,
     pub otherwise: Option<String>,
     #[serde(default = "default_loops")]
     pub max_loops: usize,
     pub next: Option<String>,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StepMode {
+    #[default]
+    Prompt,
+    Mail,
 }
 fn default_steps() -> usize {
     20
@@ -77,6 +88,27 @@ impl Spec {
             if step.otherwise.is_some() && step.until.is_none() {
                 bail!("otherwise requires until in step {}", step.id);
             }
+            match step.mode {
+                StepMode::Prompt if step.subject.is_some() || step.timeout_secs.is_some() => {
+                    bail!(
+                        "subject and timeout_secs require mode='mail' in step {}",
+                        step.id
+                    );
+                }
+                StepMode::Mail => {
+                    if !matches!(step.timeout_secs.unwrap_or(900), 1..=7200) {
+                        bail!("timeout_secs must be 1..=7200 in step {}", step.id);
+                    }
+                    let subject = step.subject.as_deref().unwrap_or(&step.id);
+                    if subject.is_empty() || subject.chars().count() > 200 {
+                        bail!(
+                            "mail subject must contain 1..=200 characters in step {}",
+                            step.id
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
         for step in &spec.step {
             for target in [
@@ -121,6 +153,7 @@ pub struct Summary<'a> {
 struct StepSummary<'a> {
     id: &'a str,
     agent: &'a str,
+    mode: StepMode,
 }
 impl Spec {
     pub fn summary(&self) -> Summary<'_> {
@@ -133,6 +166,7 @@ impl Spec {
                 .map(|s| StepSummary {
                     id: &s.id,
                     agent: &s.agent,
+                    mode: s.mode,
                 })
                 .collect(),
         }
@@ -416,6 +450,56 @@ async fn wait_idle(actor: &Actor, stop: &mut watch::Receiver<bool>) -> Result<()
     Ok(())
 }
 
+async fn run_mail_step(
+    context: &RunContext<'_>,
+    step: &Step,
+    agent: AgentKind,
+    prompt: String,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<StepOutcome> {
+    if *stop.borrow() {
+        bail!("stopped");
+    }
+    let (_, mut events) = context.hub.subscribe();
+    let sent = context
+        .hub
+        .send_mail(
+            AgentKind::Orchestrator,
+            agent,
+            step.subject.as_deref().unwrap_or(&step.id).to_owned(),
+            prompt,
+            None,
+        )
+        .map_err(|error| anyhow::anyhow!("mail send failed: {error}"))?;
+    let timeout_secs = step.timeout_secs.unwrap_or(900);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        if *stop.borrow() {
+            bail!("stopped");
+        }
+        if let Some(reply) = context
+            .hub
+            .take_thread_for(AgentKind::Orchestrator, &sent.thread)
+        {
+            return Ok(StepOutcome {
+                output: reply.body,
+                agent: reply.from,
+            });
+        }
+        tokio::select! {
+            biased;
+            _ = stop.wait_for(|stopped| *stopped) => bail!("stopped"),
+            _ = tokio::time::sleep_until(deadline) => {
+                bail!("mail timeout: no reply in thread {} within {}s", sent.thread, timeout_secs);
+            }
+            event = events.recv() => match event {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(error) => bail!("event stream: {error}"),
+            }
+        }
+    }
+}
+
 async fn run_step(
     context: &RunContext<'_>,
     step: &Step,
@@ -425,7 +509,9 @@ async fn run_step(
 ) -> Result<StepOutcome> {
     let agent = kind(&step.agent);
     let (prompt, from) = render(&step.prompt, context.task, outputs, previous)?;
-    if let Some(from) = from {
+    if step.mode == StepMode::Prompt
+        && let Some(from) = from
+    {
         context.hub.publish(
             AgentKind::Orchestrator,
             context.id,
@@ -445,6 +531,9 @@ async fn run_step(
         WorkflowStatus::StepStarted,
         "",
     );
+    if step.mode == StepMode::Mail {
+        return run_mail_step(context, step, agent, prompt, stop).await;
+    }
     let actor = match agent {
         AgentKind::Claude => context.claude,
         AgentKind::Codex => context.codex,
@@ -465,6 +554,15 @@ async fn run_step(
 }
 
 async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool>) -> Result<()> {
+    if context
+        .spec
+        .step
+        .iter()
+        .any(|step| step.mode == StepMode::Mail)
+        && !context.hub.mail_enabled()
+    {
+        bail!("mail steps require `agentsflow serve`");
+    }
     let mut outputs = HashMap::new();
     let mut previous = None;
     let mut loops = HashMap::new();
@@ -553,6 +651,7 @@ pub fn builtins() -> Result<Vec<Spec>> {
     Ok(vec![
         Spec::parse(include_str!("../../../workflows/implement-and-review.toml"))?,
         Spec::parse(include_str!("../../../workflows/cross-check.toml"))?,
+        Spec::parse(include_str!("../../../workflows/mail-review.toml"))?,
     ])
 }
 
@@ -591,9 +690,206 @@ mod tests {
             .is_ok()
         );
         let specs = builtins().unwrap();
-        assert_eq!(specs.len(), 2);
+        assert_eq!(specs.len(), 3);
         assert_eq!(specs[0].name, "implement-and-review");
         assert_eq!(specs[1].name, "cross-check");
+        assert_eq!(specs[2].name, "mail-review");
+    }
+
+    #[test]
+    fn mail_spec_validation() {
+        let prefix = "name='x'\n[[step]]\nid='work'\nagent='codex'\nprompt='{task}'\n";
+        let default = Spec::parse(prefix).unwrap();
+        assert_eq!(default.step[0].mode, StepMode::Prompt);
+        let mail = Spec::parse(&format!(
+            "{prefix}mode='mail'\nsubject='review'\ntimeout_secs=7\n"
+        ))
+        .unwrap();
+        assert_eq!(mail.step[0].mode, StepMode::Mail);
+        assert_eq!(mail.step[0].subject.as_deref(), Some("review"));
+        assert_eq!(mail.step[0].timeout_secs, Some(7));
+        let defaults = Spec::parse(&format!("{prefix}mode='mail'\n")).unwrap();
+        assert_eq!(
+            defaults.step[0]
+                .subject
+                .as_deref()
+                .unwrap_or(&defaults.step[0].id),
+            "work"
+        );
+        assert_eq!(defaults.step[0].timeout_secs.unwrap_or(900), 900);
+        assert!(Spec::parse(&format!("{prefix}mode='mail'\ntimeout_secs=7200\n")).is_ok());
+        for suffix in [
+            "mode='unknown'",
+            "subject='x'",
+            "timeout_secs=1",
+            "mode='mail'\ntimeout_secs=0",
+            "mode='mail'\ntimeout_secs=7201",
+            "mode='mail'\nsubject=''",
+            "mode='mail'\nextra='x'",
+        ] {
+            assert!(
+                Spec::parse(&format!("{prefix}{suffix}\n")).is_err(),
+                "{suffix}"
+            );
+        }
+    }
+
+    const MAIL_SPEC: &str = "name='mail'\n[[step]]\nid='work'\nagent='codex'\nmode='mail'\nprompt='{task}'\nuntil='VERDICT: APPROVED'\ntimeout_secs=1\nnext='end'\n";
+
+    async fn mail_reply_case(body: &'static str, expected: bool) {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        let (_, mut events) = hub.subscribe();
+        let sender = hub.clone();
+        let reply = tokio::spawn(async move {
+            loop {
+                if let Event::Mail {
+                    from: AgentKind::Orchestrator,
+                    to: AgentKind::Codex,
+                    thread,
+                    subject,
+                    ..
+                } = events.recv().await.unwrap().event
+                {
+                    assert_eq!(subject, "work");
+                    sender
+                        .send_mail(
+                            AgentKind::Claude,
+                            AgentKind::Orchestrator,
+                            "other".into(),
+                            "unrelated".into(),
+                            None,
+                        )
+                        .unwrap();
+                    sender
+                        .send_mail(
+                            AgentKind::Codex,
+                            AgentKind::Orchestrator,
+                            "reply".into(),
+                            body.into(),
+                            Some(thread),
+                        )
+                        .unwrap();
+                    break;
+                }
+            }
+        });
+        let (_tx, stop) = watch::channel(false);
+        let spec = Spec::parse(MAIL_SPEC).unwrap();
+        assert_eq!(
+            execute(&hub, None, None, &spec, "task", "run", stop).await,
+            expected
+        );
+        reply.await.unwrap();
+        let unread = hub.unread(AgentKind::Orchestrator);
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].body, "unrelated");
+        let (history, _) = hub.subscribe();
+        assert!(
+            !history
+                .iter()
+                .any(|e| matches!(e.event, Event::Handoff { .. }))
+        );
+        if expected {
+            assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::StepDone, detail, .. } if detail == body)));
+            assert!(history.iter().any(|e| matches!(
+                e.event,
+                Event::MailRead {
+                    agent: AgentKind::Orchestrator,
+                    ..
+                }
+            )));
+        } else {
+            assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail.contains("until not satisfied"))));
+        }
+    }
+
+    #[tokio::test]
+    async fn mail_reply_verdict_and_other_thread() {
+        mail_reply_case("finished\nVERDICT: APPROVED", true).await;
+        mail_reply_case("unable to finish", false).await;
+    }
+
+    #[tokio::test]
+    async fn mail_timeout() {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        let (_tx, stop) = watch::channel(false);
+        assert!(
+            !execute(
+                &hub,
+                None,
+                None,
+                &Spec::parse(MAIL_SPEC).unwrap(),
+                "task",
+                "run",
+                stop
+            )
+            .await
+        );
+        let (history, _) = hub.subscribe();
+        let thread = history
+            .iter()
+            .find_map(|event| match &event.event {
+                Event::Mail { thread, .. } => Some(thread),
+                _ => None,
+            })
+            .unwrap();
+        let expected = format!("mail timeout: no reply in thread {thread} within 1s");
+        assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail == &expected)));
+    }
+
+    #[tokio::test]
+    async fn mail_stop_while_waiting() {
+        let hub = Hub::new();
+        hub.set_mail_enabled(true);
+        let (_, mut events) = hub.subscribe();
+        let (tx, stop) = watch::channel(false);
+        let stopper = tokio::spawn(async move {
+            while let Ok(event) = events.recv().await {
+                if matches!(
+                    event.event,
+                    Event::Mail {
+                        from: AgentKind::Orchestrator,
+                        ..
+                    }
+                ) {
+                    tx.send(true).unwrap();
+                    break;
+                }
+            }
+        });
+        assert!(
+            !execute(
+                &hub,
+                None,
+                None,
+                &Spec::parse(MAIL_SPEC).unwrap(),
+                "task",
+                "run",
+                stop
+            )
+            .await
+        );
+        stopper.await.unwrap();
+        assert!(hub.subscribe().0.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail == "stopped")));
+    }
+
+    #[tokio::test]
+    async fn disabled_mail_fails_before_first_step() {
+        let hub = Hub::new();
+        let (_tx, stop) = watch::channel(false);
+        let spec = Spec::parse("name='mixed'\n[[step]]\nid='first'\nagent='claude'\nprompt='first'\n[[step]]\nid='mail'\nagent='codex'\nmode='mail'\nprompt='second'\n").unwrap();
+        assert!(!execute(&hub, None, None, &spec, "task", "run", stop).await);
+        let (history, _) = hub.subscribe();
+        assert!(history.iter().any(|e| matches!(&e.event, Event::Workflow { status:WorkflowStatus::Failed, detail, .. } if detail == "mail steps require `agentsflow serve`")));
+        assert!(!history.iter().any(|e| matches!(
+            e.event,
+            Event::Workflow {
+                status: WorkflowStatus::StepStarted,
+                ..
+            } | Event::Mail { .. }
+        )));
     }
 
     #[test]

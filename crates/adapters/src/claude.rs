@@ -126,6 +126,7 @@ fn tool_diff(name: &str, input: &Value) -> Option<Event> {
 pub struct ClaudeOptions {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
+    pub mail: Option<crate::MailConfig>,
 }
 
 pub struct ClaudeSession {
@@ -136,6 +137,12 @@ pub struct ClaudeSession {
 impl ClaudeSession {
     pub async fn start(opts: ClaudeOptions) -> Result<Self> {
         let mut builder = ClaudeCliBuilder::new().permission_prompt_tool("stdio");
+        if let Some(mail) = opts.mail {
+            let config = serde_json::json!({"mcpServers":{"mail":{"command":mail.exe,"args":["mail-mcp","--as","claude"],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token}}}});
+            builder = builder
+                .mcp_config([config.to_string()])
+                .allowed_tools(["mcp__mail__send_mail", "mcp__mail__check_inbox"]);
+        }
         if let Some(model) = opts.model {
             builder = builder.model(model);
         }
@@ -376,6 +383,7 @@ mod tests {
         let mut session = ClaudeSession::start(ClaudeOptions {
             model: Some("haiku".into()),
             cwd: None,
+            mail: None,
         })
         .await?;
         session

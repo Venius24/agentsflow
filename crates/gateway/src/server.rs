@@ -117,6 +117,8 @@ impl ServeOptions {
             codex_bin: self.codex_bin.clone(),
             yes: self.yes,
             log: self.log.clone(),
+            mail: None,
+            mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
         }
     }
 }
@@ -238,6 +240,98 @@ struct Permission {
     id: String,
     allow: bool,
 }
+#[derive(Deserialize)]
+struct SendMail {
+    from: String,
+    to: String,
+    subject: String,
+    body: String,
+    thread: Option<String>,
+}
+#[derive(Deserialize)]
+struct Inbox {
+    agent: String,
+}
+fn parse_agent(name: &str) -> Option<agentsflow_events::AgentKind> {
+    match name {
+        "claude" => Some(agentsflow_events::AgentKind::Claude),
+        "codex" => Some(agentsflow_events::AgentKind::Codex),
+        "orchestrator" => Some(agentsflow_events::AgentKind::Orchestrator),
+        _ => None,
+    }
+}
+fn recipient_enabled(agent: agentsflow_events::AgentKind, claude: bool, codex: bool) -> bool {
+    match agent {
+        agentsflow_events::AgentKind::Claude => claude,
+        agentsflow_events::AgentKind::Codex => codex,
+        agentsflow_events::AgentKind::Orchestrator => true,
+    }
+}
+async fn send_mail(
+    State(state): State<AppState>,
+    input: Result<Json<SendMail>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(input)) = input else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid mail request"})),
+        )
+            .into_response();
+    };
+    let Some(from) = parse_agent(&input.from) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"unknown sender"})),
+        )
+            .into_response();
+    };
+    let Some(to) = parse_agent(&input.to) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"unknown recipient"})),
+        )
+            .into_response();
+    };
+    if !recipient_enabled(to, state.claude.is_some(), state.codex.is_some()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"recipient agent is disabled"})),
+        )
+            .into_response();
+    }
+    match state
+        .hub
+        .send_mail(from, to, input.subject, input.body, input.thread)
+    {
+        Ok(mail) => Json(json!({"id":mail.id,"thread":mail.thread})).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":error.to_string()})),
+        )
+            .into_response(),
+    }
+}
+async fn inbox(
+    State(state): State<AppState>,
+    input: Result<Json<Inbox>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(input)) = input else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid inbox request"})),
+        )
+            .into_response();
+    };
+    let Some(agent) = parse_agent(&input.agent) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"unknown agent"})),
+        )
+            .into_response();
+    };
+    let messages: Vec<_> = state.hub.take_inbox(agent).into_iter().map(|mail| json!({"id":mail.id,"thread":mail.thread,"from":mail.from,"subject":mail.subject,"body":mail.body})).collect();
+    Json(json!({"messages":messages})).into_response()
+}
 fn failure(error: HubError) -> Response {
     match error {
         HubError::Busy => (StatusCode::CONFLICT, Json(json!({"error":"busy"}))).into_response(),
@@ -324,6 +418,8 @@ fn app(state: AppState) -> Router {
         .route("/api/events", get(events))
         .route("/api/prompt", post(prompt))
         .route("/api/permission", post(permission))
+        .route("/api/mail/send", post(send_mail))
+        .route("/api/mail/inbox", post(inbox))
         .route("/api/state", get(get_state))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflow/run", post(run_workflow))
@@ -350,6 +446,13 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         codex_bin: options.codex_bin,
         yes: options.yes,
         log: options.log,
+        mail: Some(agentsflow_adapters::MailConfig {
+            url: format!("http://127.0.0.1:{port}"),
+            token: token.clone(),
+            exe: std::env::current_exe()?,
+            thread_limit: crate::hub::MAX_THREAD_MAILS,
+        }),
+        mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
     })?;
     let manager = Manager::new(
         runtime.hub.clone(),
@@ -400,6 +503,34 @@ mod tests {
         assert!(!host_allowed("evil:7878", 7878));
         assert!(origin_allowed("http://localhost:7878", "localhost:7878"));
         assert!(!origin_allowed("http://127.0.0.1:7878", "localhost:7878"));
+        assert_eq!(
+            parse_agent("claude"),
+            Some(agentsflow_events::AgentKind::Claude)
+        );
+        assert_eq!(
+            parse_agent("codex"),
+            Some(agentsflow_events::AgentKind::Codex)
+        );
+        assert_eq!(
+            parse_agent("orchestrator"),
+            Some(agentsflow_events::AgentKind::Orchestrator)
+        );
+        assert_eq!(parse_agent("other"), None);
+        assert!(!recipient_enabled(
+            agentsflow_events::AgentKind::Claude,
+            false,
+            true
+        ));
+        assert!(recipient_enabled(
+            agentsflow_events::AgentKind::Codex,
+            false,
+            true
+        ));
+        assert!(recipient_enabled(
+            agentsflow_events::AgentKind::Orchestrator,
+            false,
+            false
+        ));
     }
     #[test]
     fn parse_serve_options() {
@@ -428,6 +559,14 @@ mod tests {
     #[test]
     fn workflow_request_validation() {
         let specs = workflow::builtins().unwrap();
+        let summaries = serde_json::json!(specs.iter().map(Spec::summary).collect::<Vec<_>>());
+        assert!(
+            summaries
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["name"] == "mail-review" && item["steps"][0]["mode"] == "mail")
+        );
         assert!(validate_workflow_request(&specs, "implement-and-review", "task").is_ok());
         assert_eq!(
             validate_workflow_request(&specs, "implement-and-review", " \n").unwrap_err(),

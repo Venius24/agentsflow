@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs::{File, OpenOptions},
     future::Future,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -33,6 +33,72 @@ struct Inner {
 }
 struct Data {
     history: VecDeque<Envelope>,
+    mail: Vec<MailMsg>,
+    read: HashSet<String>,
+    mail_thread_limit: usize,
+    mail_enabled: bool,
+}
+
+pub const MAX_THREAD_MAILS: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MailMsg {
+    pub id: String,
+    pub thread: String,
+    pub from: AgentKind,
+    pub to: AgentKind,
+    pub subject: String,
+    pub body: String,
+    pub seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailError {
+    SameAgent,
+    Subject,
+    Body,
+    UnknownThread,
+    ThreadLimit,
+}
+
+impl std::fmt::Display for MailError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SameAgent => "sender and recipient must differ",
+            Self::Subject => "subject must contain 1 to 200 characters",
+            Self::Body => "body must contain 1 to 65536 bytes",
+            Self::UnknownThread => "unknown mail thread",
+            Self::ThreadLimit => "mail thread limit exceeded",
+        })
+    }
+}
+
+fn mail_state(history: &VecDeque<Envelope>) -> (Vec<MailMsg>, HashSet<String>) {
+    let mut mail = Vec::new();
+    let mut read = HashSet::new();
+    for envelope in history {
+        match &envelope.event {
+            Event::Mail {
+                id,
+                thread,
+                from,
+                to,
+                subject,
+                body,
+            } => mail.push(MailMsg {
+                id: id.clone(),
+                thread: thread.clone(),
+                from: *from,
+                to: *to,
+                subject: subject.clone(),
+                body: body.clone(),
+                seq: envelope.seq,
+            }),
+            Event::MailRead { ids, .. } => read.extend(ids.iter().cloned()),
+            _ => {}
+        }
+    }
+    (mail, read)
 }
 
 const HISTORY_LIMIT: usize = 5000;
@@ -111,7 +177,9 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentKind, String, Event)> 
             },
             _ => {}
         }
-        if agent != AgentKind::Orchestrator {
+        if agent != AgentKind::Orchestrator
+            && !matches!(envelope.event, Event::Mail { .. } | Event::MailRead { .. })
+        {
             let done = matches!(envelope.event, Event::Done { .. });
             match turns.iter_mut().find(|(known, _, _)| *known == agent) {
                 Some(turn) => *turn = (agent, envelope.session.clone(), done),
@@ -168,6 +236,10 @@ impl Hub {
                 seq: AtomicU64::new(0),
                 data: Mutex::new(Data {
                     history: VecDeque::new(),
+                    mail: Vec::new(),
+                    read: HashSet::new(),
+                    mail_thread_limit: MAX_THREAD_MAILS,
+                    mail_enabled: false,
                 }),
                 tx,
                 log: None,
@@ -220,11 +292,18 @@ impl Hub {
             }
         }
         let closers = interrupted(&history);
+        let (mail, read) = mail_state(&history);
         let (tx, _) = broadcast::channel(1024);
         let hub = Self {
             inner: Arc::new(Inner {
                 seq: AtomicU64::new(seq),
-                data: Mutex::new(Data { history }),
+                data: Mutex::new(Data {
+                    history,
+                    mail,
+                    read,
+                    mail_thread_limit: MAX_THREAD_MAILS,
+                    mail_enabled: false,
+                }),
                 tx,
                 log: Some(LogWriter::start(path)),
             }),
@@ -236,6 +315,15 @@ impl Hub {
     }
     pub fn publish(&self, agent: AgentKind, session: &str, event: Event) {
         let mut data = self.inner.data.lock().unwrap();
+        self.publish_locked(&mut data, agent, session, event);
+    }
+    fn publish_locked(
+        &self,
+        data: &mut Data,
+        agent: AgentKind,
+        session: &str,
+        event: Event,
+    ) -> u64 {
         let envelope = Envelope {
             session: session.into(),
             agent,
@@ -256,7 +344,139 @@ impl Hub {
                 let _ = tx.send(envelope.clone());
             }
         }
+        let seq = envelope.seq;
         let _ = self.inner.tx.send(envelope);
+        seq
+    }
+    pub fn set_mail_thread_limit(&self, limit: usize) {
+        self.inner.data.lock().unwrap().mail_thread_limit = limit;
+    }
+    pub fn set_mail_enabled(&self, enabled: bool) {
+        self.inner.data.lock().unwrap().mail_enabled = enabled;
+    }
+    pub fn mail_enabled(&self) -> bool {
+        self.inner.data.lock().unwrap().mail_enabled
+    }
+    pub fn send_mail(
+        &self,
+        from: AgentKind,
+        to: AgentKind,
+        subject: String,
+        body: String,
+        thread: Option<String>,
+    ) -> std::result::Result<MailMsg, MailError> {
+        if from == to {
+            return Err(MailError::SameAgent);
+        }
+        if subject.is_empty() || subject.chars().count() > 200 {
+            return Err(MailError::Subject);
+        }
+        if body.is_empty() || body.len() > 65536 {
+            return Err(MailError::Body);
+        }
+        let mut data = self.inner.data.lock().unwrap();
+        let short_id = || Uuid::new_v4().simple().to_string()[..8].to_owned();
+        let thread = if let Some(thread) = thread {
+            if !data.mail.iter().any(|mail| mail.thread == thread) {
+                return Err(MailError::UnknownThread);
+            }
+            thread
+        } else {
+            loop {
+                let id = short_id();
+                if !data.mail.iter().any(|mail| mail.thread == id) {
+                    break id;
+                }
+            }
+        };
+        if data
+            .mail
+            .iter()
+            .filter(|mail| mail.thread == thread)
+            .count()
+            >= data.mail_thread_limit
+        {
+            self.publish_locked(
+                &mut data,
+                AgentKind::Orchestrator,
+                "mail",
+                Event::Error {
+                    message: MailError::ThreadLimit.to_string(),
+                },
+            );
+            return Err(MailError::ThreadLimit);
+        }
+        let id = loop {
+            let id = short_id();
+            if !data.mail.iter().any(|mail| mail.id == id) {
+                break id;
+            }
+        };
+        let event = Event::Mail {
+            id: id.clone(),
+            thread: thread.clone(),
+            from,
+            to,
+            subject: subject.clone(),
+            body: body.clone(),
+        };
+        let seq = self.publish_locked(&mut data, from, "mail", event);
+        let mail = MailMsg {
+            id,
+            thread,
+            from,
+            to,
+            subject,
+            body,
+            seq,
+        };
+        data.mail.push(mail.clone());
+        Ok(mail)
+    }
+    pub fn unread(&self, agent: AgentKind) -> Vec<MailMsg> {
+        let data = self.inner.data.lock().unwrap();
+        data.mail
+            .iter()
+            .filter(|mail| mail.to == agent && !data.read.contains(&mail.id))
+            .cloned()
+            .collect()
+    }
+    pub fn unread_count(&self, agent: AgentKind) -> usize {
+        self.unread(agent).len()
+    }
+    pub fn take_inbox(&self, agent: AgentKind) -> Vec<MailMsg> {
+        let mut data = self.inner.data.lock().unwrap();
+        let mail: Vec<_> = data
+            .mail
+            .iter()
+            .filter(|mail| mail.to == agent && !data.read.contains(&mail.id))
+            .cloned()
+            .collect();
+        if !mail.is_empty() {
+            let ids: Vec<_> = mail.iter().map(|mail| mail.id.clone()).collect();
+            data.read.extend(ids.iter().cloned());
+            self.publish_locked(&mut data, agent, "mail", Event::MailRead { agent, ids });
+        }
+        mail
+    }
+    pub fn take_thread_for(&self, agent: AgentKind, thread: &str) -> Option<MailMsg> {
+        let mut data = self.inner.data.lock().unwrap();
+        let mail = data
+            .mail
+            .iter()
+            .find(|mail| mail.to == agent && mail.thread == thread && !data.read.contains(&mail.id))
+            .cloned()?;
+        data.read.insert(mail.id.clone());
+        self.publish_locked(
+            &mut data,
+            agent,
+            "mail",
+            Event::MailRead {
+                agent,
+                ids: vec![mail.id.clone()],
+            },
+        );
+        Some(mail)
     }
     pub fn subscribe(&self) -> (Vec<Envelope>, broadcast::Receiver<Envelope>) {
         let data = self.inner.data.lock().unwrap();
@@ -537,6 +757,137 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mailbox_limits_and_replay() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("agentsflow-mail-{}.jsonl", Uuid::new_v4()));
+        let (first, second);
+        {
+            let hub = Hub::with_log(&path);
+            hub.set_mail_thread_limit(2);
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Claude,
+                    "s".into(),
+                    "b".into(),
+                    None
+                ),
+                Err(MailError::SameAgent)
+            );
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "".into(),
+                    "b".into(),
+                    None
+                ),
+                Err(MailError::Subject)
+            );
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "я".repeat(201),
+                    "b".into(),
+                    None
+                ),
+                Err(MailError::Subject)
+            );
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "s".into(),
+                    "я".repeat(32769),
+                    None
+                ),
+                Err(MailError::Body)
+            );
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "s".into(),
+                    "".into(),
+                    None
+                ),
+                Err(MailError::Body)
+            );
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "s".into(),
+                    "b".into(),
+                    Some("missing".into())
+                ),
+                Err(MailError::UnknownThread)
+            );
+            first = hub
+                .send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "s".into(),
+                    "b".into(),
+                    None,
+                )
+                .unwrap();
+            second = hub
+                .send_mail(
+                    AgentKind::Claude,
+                    AgentKind::Codex,
+                    "s2".into(),
+                    "b2".into(),
+                    Some(first.thread.clone()),
+                )
+                .unwrap();
+            assert!(first.seq < second.seq);
+            assert_eq!(
+                hub.send_mail(
+                    AgentKind::Codex,
+                    AgentKind::Claude,
+                    "s".into(),
+                    "b".into(),
+                    Some(first.thread.clone())
+                ),
+                Err(MailError::ThreadLimit)
+            );
+            assert_eq!(hub.unread_count(AgentKind::Codex), 2);
+            assert_eq!(
+                hub.take_inbox(AgentKind::Codex),
+                vec![first.clone(), second.clone()]
+            );
+            assert!(hub.take_inbox(AgentKind::Codex).is_empty());
+            hub.send_mail(
+                AgentKind::Claude,
+                AgentKind::Codex,
+                "new".into(),
+                "body".into(),
+                None,
+            )
+            .unwrap();
+        }
+        {
+            let hub = Hub::with_log(&path);
+            let unread = hub.unread(AgentKind::Codex);
+            assert_eq!(unread.len(), 1);
+            assert_eq!(unread[0].subject, "new");
+            let (history, _) = hub.subscribe();
+            assert!(
+                history
+                    .iter()
+                    .any(|e| matches!(e.event, Event::MailRead { .. }))
+            );
+            assert!(
+                history
+                    .iter()
+                    .any(|e| matches!(e.event, Event::Error { .. }))
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn log_restores_history_and_continues_sequence() {
         use super::*;

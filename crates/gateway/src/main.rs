@@ -1,5 +1,7 @@
 mod cli;
 mod hub;
+mod mail;
+mod mail_mcp;
 mod runtime;
 mod server;
 mod workflow;
@@ -12,6 +14,22 @@ async fn main() -> ExitCode {
     if args == ["--version"] {
         println!("agentsflow {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
+    }
+    if args.first().is_some_and(|arg| arg == "mail-mcp") {
+        if args.len() != 3
+            || args[1] != "--as"
+            || !matches!(args[2].as_str(), "claude" | "codex" | "orchestrator")
+        {
+            eprintln!("Usage: agentsflow mail-mcp --as <claude|codex|orchestrator>");
+            return ExitCode::from(2);
+        }
+        return match mail_mcp::run(&args[2]).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("mail-mcp: {error:#}");
+                ExitCode::FAILURE
+            }
+        };
     }
     if args.first().is_some_and(|arg| arg == "flow") {
         let command = match cli::FlowCommand::parse(&args[1..]) {

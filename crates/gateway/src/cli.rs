@@ -44,6 +44,16 @@ pub fn format_event(agent: &str, event: &Event) -> String {
         Event::Done { reason } => format!("[done] {reason}"),
         Event::Error { message } => format!("[error] {message}"),
         Event::Diff { path, patch } => format!("[diff] {path}\n{patch}"),
+        Event::Mail {
+            from, to, subject, ..
+        } => format!(
+            "[mail] {} -> {}: {subject}",
+            agent_label(from),
+            agent_label(to)
+        ),
+        Event::MailRead { agent, ids } => {
+            format!("[mail:read] {} {}", agent_label(agent), ids.join(", "))
+        }
         Event::Handoff {
             from,
             to,
@@ -150,6 +160,7 @@ pub async fn run(command: Command) -> Result<()> {
         let session = ClaudeSession::start(ClaudeOptions {
             model: command.model,
             cwd: command.cwd,
+            mail: None,
         })
         .await?;
         run_turn(session, "claude", &command.prompt, command.yes).await
@@ -159,6 +170,7 @@ pub async fn run(command: Command) -> Result<()> {
             cwd: command.cwd,
             sandbox: command.sandbox,
             bin: command.bin,
+            mail: None,
         })
         .await?;
         run_turn(session, "codex", &command.prompt, command.yes).await
