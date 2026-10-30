@@ -280,6 +280,40 @@ async fn guard(State(state): State<AppState>, mut request: Request, next: Next) 
     next.run(request).await
 }
 
+async fn export(
+    State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let (format, content_type, extension) =
+        match query.get("format").map(String::as_str).unwrap_or("md") {
+            "md" => (
+                crate::export::render_markdown as fn(&[_]) -> String,
+                "text/markdown; charset=utf-8",
+                "md",
+            ),
+            "jsonl" => (
+                crate::export::render_jsonl as fn(&[_]) -> String,
+                "application/x-ndjson",
+                "jsonl",
+            ),
+            _ => return StatusCode::BAD_REQUEST.into_response(),
+        };
+    let (snapshot, _) = state.hub.subscribe();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let disposition = format!("attachment; filename=\"agentsflow-{timestamp}.{extension}\"");
+    (
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        format(&snapshot),
+    )
+        .into_response()
+}
+
 async fn index() -> Html<&'static str> {
     Html(include_str!("../../../web/index.html"))
 }
@@ -512,6 +546,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/api/events", get(events))
+        .route("/api/export", get(export))
         .route("/api/prompt", post(prompt))
         .route("/api/permission", post(permission))
         .route("/api/mail/send", post(send_mail))
@@ -623,6 +658,7 @@ mod tests {
             for (method, path) in [
                 (axum::http::Method::POST, "/api/prompt"),
                 (axum::http::Method::GET, "/api/state"),
+                (axum::http::Method::GET, "/api/export"),
                 (axum::http::Method::POST, "/api/permission"),
                 (axum::http::Method::POST, "/api/workflow/run"),
             ] {
@@ -633,6 +669,7 @@ mod tests {
         for (method, path) in [
             (axum::http::Method::POST, "/api/prompt"),
             (axum::http::Method::GET, "/api/state"),
+            (axum::http::Method::GET, "/api/export"),
             (axum::http::Method::POST, "/api/permission"),
             (axum::http::Method::POST, "/api/workflow/run"),
         ] {
