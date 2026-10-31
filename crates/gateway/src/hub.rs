@@ -755,7 +755,14 @@ impl Hub {
             task.progress = 100;
         }
         validate_task(&task)?;
-        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        self.publish_locked(
+            &mut data,
+            by,
+            "tasks",
+            Event::Task {
+                task: Box::new(task.clone()),
+            },
+        );
         Ok(task)
     }
     /// Creates a department task (`serve --home`).
@@ -798,7 +805,14 @@ impl Hub {
             work: Some(work),
         };
         validate_task(&task)?;
-        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        self.publish_locked(
+            &mut data,
+            by,
+            "tasks",
+            Event::Task {
+                task: Box::new(task.clone()),
+            },
+        );
         Ok(task)
     }
     /// Changes a department task in place; the board status follows its state.
@@ -827,7 +841,14 @@ impl Hub {
         task.work = Some(work);
         task.updated_ms = now_ms();
         validate_task(&task)?;
-        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        self.publish_locked(
+            &mut data,
+            by,
+            "tasks",
+            Event::Task {
+                task: Box::new(task.clone()),
+            },
+        );
         Ok(task)
     }
     /// Keeps the board in `path` as well as in the event history. Cards saved
@@ -943,7 +964,14 @@ impl Hub {
         }
         task.updated_ms = now_ms();
         validate_task(&task)?;
-        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        self.publish_locked(
+            &mut data,
+            by,
+            "tasks",
+            Event::Task {
+                task: Box::new(task.clone()),
+            },
+        );
         Ok(task)
     }
     pub fn send_mail(
@@ -1077,7 +1105,9 @@ impl Hub {
             &mut data,
             AgentId::orchestrator(),
             "tasks",
-            Event::Task { task: task.clone() },
+            Event::Task {
+                task: Box::new(task.clone()),
+            },
         );
         Ok(task)
     }

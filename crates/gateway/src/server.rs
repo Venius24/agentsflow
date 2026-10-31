@@ -917,6 +917,9 @@ fn app(state: AppState) -> Router {
         .route("/api/runs", get(work::list_runs))
         .route("/api/home/reload", post(work::reload_home))
         .route("/api/spend", get(work::spend))
+        .route("/api/orchestrator", post(work::orchestrator))
+        .route("/api/tasks/{id}/answer", post(work::answer))
+        .route("/api/tasks/{id}/proposal", post(work::proposal))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -1039,15 +1042,10 @@ async fn run_session(
                         .join(", ")
                 ),
             );
-            Some(crate::runs::Runs::start(
-                runtime.hub.clone(),
-                home,
-                ledger,
-                crate::runs::RunEnv {
-                    codex_bin: options.codex_bin.clone(),
-                    ..Default::default()
-                },
-            ))
+            let env = crate::runs::RunEnv::new(options.codex_bin.clone());
+            let runs = crate::runs::Runs::start(runtime.hub.clone(), home, ledger, env.clone());
+            runs.set_orchestrator(crate::orchestrator::Orchestrator::start(runs.clone(), env));
+            Some(runs)
         }
         None => None,
     };

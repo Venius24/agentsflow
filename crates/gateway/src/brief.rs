@@ -56,6 +56,21 @@ pub fn build(
     out.push_str(&format!("\n\n# Задача {}: {}\n\n", task.id, task.title));
     out.push_str(task.description.trim());
     out.push('\n');
+    if !work.review_notes.is_empty() {
+        out.push_str(
+            "
+# Замечания приёмки
+
+Прошлый результат вернули с замечаниями; исправь их:
+",
+        );
+        for note in &work.review_notes {
+            out.push_str(&format!(
+                "- {note}
+"
+            ));
+        }
+    }
     let answered: Vec<_> = work
         .questions
         .iter()

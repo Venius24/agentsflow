@@ -10,6 +10,7 @@ mod hub;
 mod ledger;
 mod mail;
 mod mail_mcp;
+mod orchestrator;
 mod projects;
 mod runs;
 mod runtime;

@@ -21,9 +21,9 @@ pub fn render_markdown(events: &[Envelope]) -> String {
     for envelope in events {
         if let Event::Task { task } = &envelope.event {
             if let Some(current) = tasks.iter_mut().find(|t| t.id == task.id) {
-                *current = task.clone();
+                *current = (**task).clone();
             } else {
-                tasks.push(task.clone());
+                tasks.push((**task).clone());
             }
         }
     }
@@ -374,8 +374,22 @@ mod tests {
         updated.progress = 80;
         updated.note = "ready".into();
         let out = render_markdown(&[
-            env(1, 1, AgentId::orchestrator(), Event::Task { task }),
-            env(2, 2, AgentId::from("codex"), Event::Task { task: updated }),
+            env(
+                1,
+                1,
+                AgentId::orchestrator(),
+                Event::Task {
+                    task: Box::new(task),
+                },
+            ),
+            env(
+                2,
+                2,
+                AgentId::from("codex"),
+                Event::Task {
+                    task: Box::new(updated),
+                },
+            ),
         ]);
         assert!(out.contains("## Задачи"));
         assert!(out.contains("### Review"));

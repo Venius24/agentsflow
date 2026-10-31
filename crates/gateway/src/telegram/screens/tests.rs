@@ -223,7 +223,9 @@ async fn review_and_blocked_notifications_have_buttons() {
         agent: AgentId::from("lead"),
         seq: 1,
         ts_ms: 1,
-        event: Event::Task { task },
+        event: Event::Task {
+            task: Box::new(task),
+        },
     });
     bridge.flush().await;
     assert!(last_text(&calls).contains("сдал задачу «Сдать» на проверку"));
@@ -239,7 +241,9 @@ async fn review_and_blocked_notifications_have_buttons() {
         agent: AgentId::from("lead"),
         seq: 2,
         ts_ms: 2,
-        event: Event::Task { task },
+        event: Event::Task {
+            task: Box::new(task),
+        },
     });
     bridge.last_sent.clear();
     bridge.flush().await;

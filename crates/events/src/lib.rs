@@ -181,6 +181,27 @@ pub struct WorkInfo {
     /// `owner`, `orchestrator`, `schedule` or the requesting department.
     #[serde(default)]
     pub source: String,
+    /// Remarks of the acceptance that sent the result back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_notes: Vec<String>,
+    /// The result waits for the owner's acceptance (external, or the
+    /// orchestrator handed it over).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_review: bool,
+    /// A new department the orchestrator proposes for this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<DepartmentProposal>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DepartmentProposal {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub rules: String,
+    #[serde(default)]
+    pub default_risk: Risk,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,7 +213,7 @@ pub enum Event {
         cost_usd: Option<f64>,
     },
     Task {
-        task: TaskSnapshot,
+        task: Box<TaskSnapshot>,
     },
     Message {
         role: Role,
@@ -307,7 +328,7 @@ mod tests {
                 cost_usd: None,
             },
             Event::Task {
-                task: TaskSnapshot {
+                task: Box::new(TaskSnapshot {
                     id: "12345678".into(),
                     title: "task".into(),
                     description: String::new(),
@@ -320,7 +341,7 @@ mod tests {
                     created_ms: 1,
                     updated_ms: 2,
                     work: None,
-                },
+                }),
             },
             Event::Message {
                 role: Role::Assistant,

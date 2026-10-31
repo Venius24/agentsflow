@@ -143,6 +143,7 @@ pub(super) enum InputKind {
     MailNew(AgentId),
     WorkflowTask(usize),
     WorkflowConfirm(usize, String),
+    Answer(String),
 }
 pub(super) struct Input {
     pub kind: InputKind,
@@ -383,6 +384,13 @@ impl Bridge {
             WorkState::Done | WorkState::Cancelled => {
                 rows.push(vec![button("🔁 Запустить снова", format!("s:ta:{id}:rq"))])
             }
+            WorkState::Waiting if work.proposal.is_some() => rows.push(vec![
+                button("✅ Создать отдел", format!("s:ta:{id}:pc")),
+                button("В общий отдел", format!("s:ta:{id}:pg")),
+            ]),
+            WorkState::Waiting if work.questions.iter().any(|q| q.answer.is_none()) => {
+                rows.push(vec![button("✍ Ответить", format!("s:ta:{id}:ans"))])
+            }
             WorkState::Queued | WorkState::Waiting => {}
         }
         if work.state != WorkState::Running && work.state != WorkState::Cancelled {
@@ -500,6 +508,42 @@ impl Bridge {
                 .hub
                 .update_task(AgentId::orchestrator(), id, patch(TaskStatus::Todo))
                 .map(|_| "Поставлено в очередь"),
+            "pc" | "pg" => {
+                let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+                    return String::new();
+                };
+                let flash = match runs.resolve_proposal(id, action == "pc") {
+                    Ok(department) if action == "pc" => format!("✔ Отдел {department} создан"),
+                    Ok(_) => "✔ Задачи переданы в общий отдел".to_owned(),
+                    Err(error) => error,
+                };
+                self.open_task(chat, message, id, &flash).await;
+                return flash;
+            }
+            "ans" => {
+                let questions = self
+                    .hub
+                    .task(id)
+                    .and_then(|t| t.work)
+                    .map(|w| {
+                        w.questions
+                            .iter()
+                            .filter(|q| q.answer.is_none())
+                            .map(|q| format!("• {}", q.text))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                self.prompt_input(
+                    chat,
+                    message,
+                    InputKind::Answer(id.into()),
+                    &format!("{questions}\n\nОтветьте одним сообщением на все вопросы."),
+                    &format!("s:t:{id}"),
+                )
+                .await;
+                return String::new();
+            }
             "run" => self.hub.dispatch_task(id).map(|_| "Запущено"),
             "accy" => self
                 .hub
@@ -1292,6 +1336,24 @@ impl Bridge {
         let message = input.message;
         match input.kind {
             InputKind::NewTask => self.create_task_from(chat, None, text).await,
+            InputKind::Answer(id) => {
+                let answered = self
+                    .control
+                    .as_ref()
+                    .and_then(|c| c.runs.clone())
+                    .map(|runs| runs.answer(&id, text));
+                let flash = match answered {
+                    Some(Ok(task)) => match task.work.map(|w| w.state) {
+                        Some(agentsflow_events::WorkState::Queued) => {
+                            "✔ Ответ записан, задача в очереди".to_owned()
+                        }
+                        _ => "✔ Ответ записан".to_owned(),
+                    },
+                    Some(Err(error)) => error,
+                    None => "Ответы доступны только в режиме serve --home".to_owned(),
+                };
+                self.open_task(chat, None, &id, &flash).await;
+            }
             InputKind::EditTitle(id) => {
                 let patch = TaskPatch {
                     title: Some(text.to_owned()),

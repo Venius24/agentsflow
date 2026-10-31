@@ -56,7 +56,15 @@ pub struct RunEnv {
 }
 
 impl RunEnv {
-    fn spawn(
+    pub fn new(codex_bin: Option<PathBuf>) -> Self {
+        Self {
+            codex_bin,
+            #[cfg(test)]
+            spawner: None,
+        }
+    }
+
+    pub(crate) fn spawn(
         &self,
         hub: &Hub,
         member: &crate::team::Member,
@@ -100,6 +108,7 @@ pub struct NewWork {
     pub budget_usd: Option<f64>,
     pub source: String,
     pub questions: Vec<agentsflow_events::Question>,
+    pub proposal: Option<agentsflow_events::DepartmentProposal>,
 }
 
 #[derive(Clone)]
@@ -112,6 +121,7 @@ pub struct Runs {
 struct Shared {
     home: Arc<Home>,
     running: BTreeMap<String, RunInfo>,
+    orchestrator: Option<crate::orchestrator::Orchestrator>,
 }
 
 enum Cmd {
@@ -171,6 +181,7 @@ impl Runs {
             shared: Arc::new(Mutex::new(Shared {
                 home: Arc::new(home),
                 running: BTreeMap::new(),
+                orchestrator: None,
             })),
             tx: tx.clone(),
         };
@@ -185,6 +196,26 @@ impl Runs {
         };
         tokio::task::spawn_local(engine.run(rx));
         runs
+    }
+
+    pub fn set_orchestrator(&self, orchestrator: crate::orchestrator::Orchestrator) {
+        self.shared.lock().unwrap().orchestrator = Some(orchestrator);
+    }
+
+    /// A free-form owner message for the orchestrator.
+    pub fn message(&self, text: &str) -> Result<(), String> {
+        let orchestrator = self.shared.lock().unwrap().orchestrator.clone();
+        orchestrator
+            .ok_or_else(|| "оркестратор не запущен".to_owned())?
+            .message(text)
+    }
+
+    pub fn hub(&self) -> &Hub {
+        &self.hub
+    }
+
+    pub(crate) fn ledger(&self) -> &Ledger {
+        &self.ledger
     }
 
     pub fn home(&self) -> Arc<Home> {
@@ -242,10 +273,25 @@ impl Runs {
     /// Puts a department task in the queue.
     pub fn create(&self, by: AgentId, new: NewWork) -> Result<TaskSnapshot, String> {
         let home = self.home();
-        let dept = home
-            .departments
-            .get(&new.department)
-            .ok_or_else(|| format!("нет отдела {}", new.department))?;
+        let (department, default_risk) = match &new.proposal {
+            // Waits for the owner to create the proposed department.
+            Some(proposal) => {
+                if home.departments.contains_key(&proposal.id) {
+                    return Err(format!("отдел {} уже есть", proposal.id));
+                }
+                if !crate::department::valid_id(&proposal.id) {
+                    return Err(format!("недопустимый id отдела {:?}", proposal.id));
+                }
+                (proposal.id.clone(), proposal.default_risk)
+            }
+            None => {
+                let dept = home
+                    .departments
+                    .get(&new.department)
+                    .ok_or_else(|| format!("нет отдела {}", new.department))?;
+                (dept.id.clone(), dept.default_risk)
+            }
+        };
         for dep in &new.depends_on {
             if self.hub.task(dep).and_then(|t| t.work).is_none() {
                 return Err(format!("нет задачи отдела {dep}"));
@@ -262,21 +308,21 @@ impl Runs {
         {
             return Err("бюджет задачи должен быть больше 0 и не больше 1000".into());
         }
-        let waiting = new.questions.iter().any(|q| q.answer.is_none());
-        let work = WorkInfo {
-            department: dept.id.clone(),
-            state: if waiting {
-                WorkState::Waiting
-            } else {
-                WorkState::Queued
-            },
-            risk: new.risk.unwrap_or(dept.default_risk),
+        let mut work = WorkInfo {
+            department,
+            risk: new.risk.unwrap_or(default_risk),
             parent: new.parent,
             depends_on: new.depends_on,
             budget_usd: new.budget_usd,
             source: new.source,
             questions: new.questions,
+            proposal: new.proposal,
             ..Default::default()
+        };
+        work.state = if ready(&work) {
+            WorkState::Queued
+        } else {
+            WorkState::Waiting
         };
         let task = self
             .hub
@@ -285,6 +331,176 @@ impl Runs {
         self.kick();
         Ok(task)
     }
+
+    /// The owner's answer to every open question of the task; a task with
+    /// nothing else to wait for goes to the queue.
+    pub fn answer(&self, task: &str, text: &str) -> Result<TaskSnapshot, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("пустой ответ".into());
+        }
+        let updated = self
+            .hub
+            .update_work(AgentId::orchestrator(), task, |_, work| {
+                let open: Vec<_> = work
+                    .questions
+                    .iter_mut()
+                    .filter(|q| q.answer.is_none())
+                    .collect();
+                if open.is_empty() {
+                    return Err(TaskError::Invalid("no open questions"));
+                }
+                for question in open {
+                    question.answer = Some(text.to_owned());
+                }
+                if work.state == WorkState::Waiting && ready(work) {
+                    work.state = WorkState::Queued;
+                }
+                Ok(())
+            })
+            .map_err(|error| match error {
+                TaskError::Invalid("no open questions") => "у задачи нет открытых вопросов".into(),
+                other => other.to_string(),
+            })?;
+        self.kick();
+        Ok(updated)
+    }
+
+    /// The owner's decision on a proposed department: create it, or hand the
+    /// waiting tasks to `general`. Returns the department the tasks went to.
+    pub fn resolve_proposal(&self, task: &str, create: bool) -> Result<String, String> {
+        let proposal = self
+            .hub
+            .task(task)
+            .and_then(|t| t.work)
+            .and_then(|w| w.proposal)
+            .ok_or("у задачи нет предложенного отдела")?;
+        let target = if create {
+            let root = self.home().root.clone();
+            crate::home::create_department(&root, &proposal).map_err(|e| format!("{e:#}"))?;
+            self.reload().map_err(|e| format!("{e:#}"))?;
+            proposal.id.clone()
+        } else {
+            "general".to_owned()
+        };
+        for waiting in self.hub.tasks(false) {
+            let matches = waiting
+                .work
+                .as_ref()
+                .and_then(|w| w.proposal.as_ref())
+                .is_some_and(|p| p.id == proposal.id);
+            if !matches {
+                continue;
+            }
+            let _ = self
+                .hub
+                .update_work(AgentId::orchestrator(), &waiting.id, |_, work| {
+                    work.proposal = None;
+                    work.department = target.clone();
+                    if work.state == WorkState::Waiting && ready(work) {
+                        work.state = WorkState::Queued;
+                    }
+                    Ok(())
+                });
+        }
+        self.kick();
+        Ok(target)
+    }
+
+    /// Acceptance of an internal result by the orchestrator.
+    pub fn accept(&self, by: AgentId, task: &str) -> Result<TaskSnapshot, String> {
+        self.hub
+            .update_work(by, task, |_, work| {
+                if work.state != WorkState::Review {
+                    return Err(TaskError::Invalid("task is not waiting for acceptance"));
+                }
+                if work.risk == Risk::External || work.owner_review {
+                    return Err(TaskError::Invalid("only the owner accepts this task"));
+                }
+                work.state = WorkState::Done;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    /// Sends a result back once; the second time it goes to the owner.
+    pub fn return_task(
+        &self,
+        by: AgentId,
+        task: &str,
+        reason: &str,
+    ) -> Result<TaskSnapshot, String> {
+        let updated = self
+            .hub
+            .update_work(by, task, |_, work| {
+                if work.state != WorkState::Review {
+                    return Err(TaskError::Invalid("task is not waiting for acceptance"));
+                }
+                work.review_notes.push(reason.trim().to_owned());
+                if work.returns >= 1 {
+                    work.owner_review = true;
+                } else {
+                    work.returns += 1;
+                    work.state = WorkState::Queued;
+                }
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        self.kick();
+        Ok(updated)
+    }
+
+    /// Hands a result to the owner's acceptance.
+    pub fn to_owner(&self, by: AgentId, task: &str) -> Result<TaskSnapshot, String> {
+        self.hub
+            .update_work(by, task, |_, work| {
+                if work.state != WorkState::Review {
+                    return Err(TaskError::Invalid("task is not waiting for acceptance"));
+                }
+                work.owner_review = true;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    /// Questions from the orchestrator about an existing task.
+    pub fn ask(
+        &self,
+        by: AgentId,
+        task: &str,
+        questions: &[String],
+    ) -> Result<TaskSnapshot, String> {
+        if questions.iter().all(|q| q.trim().is_empty()) {
+            return Err("пустые вопросы".into());
+        }
+        self.hub
+            .update_work(by.clone(), task, |_, work| {
+                if work.state == WorkState::Running {
+                    return Err(TaskError::Invalid("task is running"));
+                }
+                for text in questions.iter().filter(|q| !q.trim().is_empty()) {
+                    work.questions.push(agentsflow_events::Question {
+                        text: text.trim().to_owned(),
+                        answer: None,
+                        from: by.to_string(),
+                    });
+                }
+                if matches!(
+                    work.state,
+                    WorkState::Queued | WorkState::Review | WorkState::Stuck
+                ) {
+                    work.state = WorkState::Waiting;
+                }
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// A waiting task may run once every question is answered and its
+/// department exists.
+fn ready(work: &WorkInfo) -> bool {
+    work.proposal.is_none() && work.questions.iter().all(|q| q.answer.is_some())
 }
 
 struct AgentMeta {
@@ -989,5 +1205,165 @@ mod tests {
                 assert_eq!(work.risk, Risk::External);
             }));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Engine without agents: tasks are kept Waiting or moved by hand, so
+    /// nothing is spawned.
+    fn offline(check: impl AsyncFnOnce(Runs, Hub, PathBuf)) {
+        let dir = temp();
+        let home = home_with(&dir, crate::department::tests::SAMPLE);
+        let hub = Hub::new();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(tokio::task::LocalSet::new().run_until(async {
+                let runs = Runs::start(hub.clone(), home, Ledger::memory(), RunEnv::default());
+                check(runs, hub, dir.clone()).await;
+            }));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn waiting(department: &str) -> NewWork {
+        NewWork {
+            title: "t".into(),
+            text: "x".into(),
+            department: department.into(),
+            questions: vec![agentsflow_events::Question {
+                text: "где?".into(),
+                answer: None,
+                from: "orchestrator".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Puts a waiting task into Review as if a run had finished.
+    fn to_review(hub: &Hub, id: &str, risk: Risk) {
+        hub.update_work(AgentId::orchestrator(), id, |_, work| {
+            work.state = WorkState::Review;
+            work.risk = risk;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn answers_release_waiting_tasks() {
+        offline(async |runs, hub, _| {
+            let mut new = waiting("pr");
+            new.depends_on = vec![];
+            let task = runs.create(AgentId::from("owner"), new).unwrap();
+            // A second open question keeps it waiting until answered too.
+            runs.ask(AgentId::orchestrator(), &task.id, &["когда?".into()])
+                .unwrap();
+            // Block the queue so the released task is not launched.
+            hub.update_work(AgentId::orchestrator(), &task.id, |_, work| {
+                work.depends_on = vec!["missing".into()];
+                Ok(())
+            })
+            .unwrap();
+            let answered = runs.answer(&task.id, "в Алматы, завтра").unwrap();
+            let work = answered.work.unwrap();
+            assert!(work.questions.iter().all(|q| q.answer.is_some()));
+            assert_eq!(work.questions.len(), 2);
+            assert_eq!(work.state, WorkState::Queued);
+            assert!(runs.answer(&task.id, "ещё").is_err());
+            assert!(runs.answer(&task.id, "  ").is_err());
+        });
+    }
+
+    #[test]
+    fn proposals_create_departments_or_fall_back_to_general() {
+        offline(async |runs, hub, dir| {
+            let proposal = agentsflow_events::DepartmentProposal {
+                id: "hr".into(),
+                title: "Кадры".into(),
+                description: "Поиск людей".into(),
+                rules: "Пиши коротко.".into(),
+                default_risk: Risk::Internal,
+            };
+            let mut first = waiting("");
+            first.questions.clear();
+            first.proposal = Some(proposal.clone());
+            let first = runs.create(AgentId::from("owner"), first).unwrap();
+            assert_eq!(first.work.as_ref().unwrap().state, WorkState::Waiting);
+            assert_eq!(first.work.as_ref().unwrap().department, "hr");
+            // Still asks a question: created department alone does not run it.
+            let mut second = waiting("");
+            second.proposal = Some(proposal.clone());
+            let second = runs.create(AgentId::from("owner"), second).unwrap();
+
+            assert_eq!(runs.resolve_proposal(&first.id, true).unwrap(), "hr");
+            assert!(runs.home().departments.contains_key("hr"));
+            let rules = std::fs::read_to_string(dir.join("departments/hr/AGENTS.md")).unwrap();
+            assert!(rules.contains("Пиши коротко."));
+            let second = hub.task(&second.id).unwrap().work.unwrap();
+            assert!(second.proposal.is_none());
+            assert_eq!(second.state, WorkState::Waiting);
+            assert!(
+                runs.create(AgentId::from("owner"), {
+                    let mut again = waiting("");
+                    again.proposal = Some(proposal.clone());
+                    again
+                })
+                .is_err()
+            );
+
+            let mut other = waiting("");
+            other.proposal = Some(agentsflow_events::DepartmentProposal {
+                id: "legal".into(),
+                ..proposal
+            });
+            let other = runs.create(AgentId::from("owner"), other).unwrap();
+            assert_eq!(runs.resolve_proposal(&other.id, false).unwrap(), "general");
+            let other = hub.task(&other.id).unwrap().work.unwrap();
+            assert_eq!(other.department, "general");
+            assert!(!dir.join("departments/legal").exists());
+        });
+    }
+
+    #[test]
+    fn acceptance_respects_risk_and_returns_once() {
+        offline(async |runs, hub, _| {
+            let internal = runs.create(AgentId::from("owner"), waiting("pr")).unwrap();
+            to_review(&hub, &internal.id, Risk::Internal);
+            let done = runs.accept(AgentId::orchestrator(), &internal.id).unwrap();
+            assert_eq!(done.work.unwrap().state, WorkState::Done);
+
+            let external = runs.create(AgentId::from("owner"), waiting("pr")).unwrap();
+            to_review(&hub, &external.id, Risk::External);
+            assert!(runs.accept(AgentId::orchestrator(), &external.id).is_err());
+            let sent = runs
+                .to_owner(AgentId::orchestrator(), &external.id)
+                .unwrap();
+            assert!(sent.work.unwrap().owner_review);
+
+            let redo = runs.create(AgentId::from("owner"), waiting("pr")).unwrap();
+            to_review(&hub, &redo.id, Risk::Internal);
+            // Keep it from launching once requeued.
+            hub.update_work(AgentId::orchestrator(), &redo.id, |_, work| {
+                work.depends_on = vec!["missing".into()];
+                Ok(())
+            })
+            .unwrap();
+            let back = runs
+                .return_task(AgentId::orchestrator(), &redo.id, "нет цифр")
+                .unwrap()
+                .work
+                .unwrap();
+            assert_eq!(back.returns, 1);
+            assert_eq!(back.review_notes, vec!["нет цифр".to_owned()]);
+            assert!(matches!(back.state, WorkState::Queued | WorkState::Stuck));
+            to_review(&hub, &redo.id, Risk::Internal);
+            let owner = runs
+                .return_task(AgentId::orchestrator(), &redo.id, "опять нет")
+                .unwrap()
+                .work
+                .unwrap();
+            assert!(owner.owner_review);
+            assert_eq!(owner.state, WorkState::Review);
+            assert!(runs.accept(AgentId::orchestrator(), &redo.id).is_err());
+        });
     }
 }

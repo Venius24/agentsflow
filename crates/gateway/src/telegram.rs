@@ -274,6 +274,8 @@ struct Bridge {
     mail_seen: HashSet<String>,
     exported: bool,
     task_seen: HashMap<String, agentsflow_events::TaskStatus>,
+    /// Last notified state of department tasks.
+    work_seen: HashMap<String, String>,
 }
 
 impl Bridge {
@@ -287,6 +289,15 @@ impl Bridge {
             .tasks(true)
             .into_iter()
             .map(|task| (task.id, task.status))
+            .collect();
+        let work_seen = hub
+            .tasks(true)
+            .into_iter()
+            .filter_map(|task| {
+                task.work
+                    .as_ref()
+                    .map(|work| (task.id.clone(), work_signature(work)))
+            })
             .collect();
         Self {
             pending_switch: None,
@@ -318,6 +329,7 @@ impl Bridge {
             mail_seen: HashSet::new(),
             exported: false,
             task_seen,
+            work_seen,
         }
     }
     fn queue(&mut self, chat: i64, text: &str, key: Option<u64>) {
@@ -531,9 +543,10 @@ impl Bridge {
                 );
             }
             Event::Task { task } if task.work.is_some() => {
-                let previous = self.task_seen.insert(task.id.clone(), task.status.clone());
                 let work = task.work.as_ref().expect("guarded");
-                if previous.as_ref() != Some(&task.status) {
+                let signature = work_signature(work);
+                let previous = self.work_seen.insert(task.id.clone(), signature.clone());
+                if previous.as_ref() != Some(&signature) {
                     let title = message_text(&task.title, &self.config.token, 200);
                     let dept = message_text(&work.department, &self.config.token, 40);
                     let summary = message_text(&work.result_summary, &self.config.token, 700);
@@ -541,7 +554,42 @@ impl Bridge {
                     let open = json!({"text":"Открыть","callback_data":format!("s:t:{id}")});
                     let again =
                         json!({"text":"🔁 Ещё круг","callback_data":format!("s:ta:{id}:rq")});
+                    let close = json!({"text":"🗄 Закрыть","callback_data":format!("s:ta:{id}:ar")});
                     match work.state {
+                        agentsflow_events::WorkState::Waiting => {
+                            if let Some(proposal) = &work.proposal {
+                                let name = message_text(&proposal.title, &self.config.token, 80);
+                                let about =
+                                    message_text(&proposal.description, &self.config.token, 300);
+                                let pid = message_text(&proposal.id, &self.config.token, 40);
+                                self.broadcast_buttons(
+                                    &format!("🏢 Оркестратор предлагает отдел <b>{name}</b> (<code>{pid}</code>): {about}\n\nДля задачи «{title}»."),
+                                    json!({"inline_keyboard":[[{"text":"✅ Создать отдел","callback_data":format!("s:ta:{id}:pc")},{"text":"В общий отдел","callback_data":format!("s:ta:{id}:pg")}],[close,open]]}),
+                                );
+                            } else {
+                                let questions: Vec<String> = work
+                                    .questions
+                                    .iter()
+                                    .filter(|q| q.answer.is_none())
+                                    .map(|q| {
+                                        format!(
+                                            "• {}",
+                                            message_text(&q.text, &self.config.token, 300)
+                                        )
+                                    })
+                                    .collect();
+                                if !questions.is_empty() {
+                                    self.broadcast_buttons(
+                                        &format!("❓ <b>{dept}</b>: «{title}» ждёт ответа\n\n{}", questions.join("\n")),
+                                        json!({"inline_keyboard":[[{"text":"✍ Ответить","callback_data":format!("s:ta:{id}:ans")}],[close,open]]}),
+                                    );
+                                }
+                            }
+                        }
+                        // Internal results are accepted by the orchestrator.
+                        agentsflow_events::WorkState::Review
+                            if work.risk == agentsflow_events::Risk::Internal
+                                && !work.owner_review => {}
                         agentsflow_events::WorkState::Review => {
                             let who = if work.risk == agentsflow_events::Risk::External {
                                 "уйдёт наружу, нужна ваша приёмка"
@@ -1588,6 +1636,24 @@ impl Bridge {
             if self.handle_command(chat, raw).await {
                 return;
             }
+            // Home mode: free text is a message for the orchestrator.
+            if !is_menu
+                && !raw.trim().is_empty()
+                && let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone())
+            {
+                let answer = if !self.config.prompts {
+                    "Отправка заданий из Telegram выключена владельцем".to_owned()
+                } else if raw.chars().count() > 8000 {
+                    "Сообщение длиннее 8000 символов".to_owned()
+                } else {
+                    match runs.message(raw) {
+                        Ok(()) => "🧭 Принял, разбираю…".to_owned(),
+                        Err(error) => format!("Не получилось: {error}"),
+                    }
+                };
+                self.queue(chat, &answer, None);
+                return;
+            }
             if let Some(args) = raw.strip_prefix("/ask ") {
                 if !self.config.prompts {
                     self.queue(
@@ -1735,6 +1801,17 @@ impl Bridge {
             self.queue(chat, &answer, None);
         }
     }
+}
+
+/// What the owner is told about: a change of any part of it is news.
+fn work_signature(work: &agentsflow_events::WorkInfo) -> String {
+    format!(
+        "{:?}|{}|{}|{}",
+        work.state,
+        work.owner_review,
+        work.questions.iter().filter(|q| q.answer.is_none()).count(),
+        work.proposal.is_some()
+    )
 }
 
 fn retry_after(result: &Result<Value, frankenstein::Error>) -> Option<u64> {
@@ -2545,5 +2622,81 @@ mod tests {
         stop.send(true).unwrap();
         task.await.unwrap();
         server.abort();
+    }
+
+    #[test]
+    fn department_tasks_notify_questions_proposals_and_owner_reviews() {
+        use agentsflow_events::{Question, Risk, TaskSnapshot, WorkInfo, WorkState};
+        let config =
+            Config::parse("test-secret".into(), "11", "http://127.0.0.1:1".into()).unwrap();
+        let mut bridge = Bridge::new(config, Agents::new(), Team::preset("pair").unwrap());
+        let task = |state: WorkState, work: WorkInfo| TaskSnapshot {
+            id: "t1".into(),
+            title: "Отчёт".into(),
+            description: String::new(),
+            status: state.status(),
+            assignee: None,
+            progress: 0,
+            labels: Vec::new(),
+            note: String::new(),
+            thread: None,
+            created_ms: 1,
+            updated_ms: 1,
+            work: Some(WorkInfo { state, ..work }),
+        };
+        let send = |bridge: &mut Bridge, snapshot: TaskSnapshot| {
+            bridge.handle_event(Envelope {
+                session: "s".into(),
+                agent: AgentId::orchestrator(),
+                seq: 1,
+                ts_ms: 1,
+                event: Event::Task {
+                    task: Box::new(snapshot),
+                },
+            });
+            bridge
+                .queues
+                .get_mut(&11)
+                .and_then(VecDeque::pop_back)
+                .map(|item| (item.text, item.buttons.unwrap_or_default().to_string()))
+        };
+        let asking = WorkInfo {
+            department: "general".into(),
+            risk: Risk::Internal,
+            questions: vec![Question {
+                text: "За какой месяц?".into(),
+                answer: None,
+                from: "оркестратор".into(),
+            }],
+            ..Default::default()
+        };
+        let (text, buttons) = send(&mut bridge, task(WorkState::Waiting, asking.clone())).unwrap();
+        assert!(text.contains("За какой месяц?"));
+        assert!(buttons.contains("s:ta:t1:ans"));
+        // Same state again: nothing new.
+        assert!(send(&mut bridge, task(WorkState::Waiting, asking.clone())).is_none());
+        // Internal result: the orchestrator accepts it, the owner is not bothered.
+        assert!(send(&mut bridge, task(WorkState::Review, asking.clone())).is_none());
+        let escalated = WorkInfo {
+            owner_review: true,
+            ..asking.clone()
+        };
+        let (text, buttons) = send(&mut bridge, task(WorkState::Review, escalated)).unwrap();
+        assert!(text.contains("готово"));
+        assert!(buttons.contains("s:ta:t1:acc"));
+        let proposing = WorkInfo {
+            questions: Vec::new(),
+            proposal: Some(agentsflow_events::DepartmentProposal {
+                id: "hr".into(),
+                title: "Кадры".into(),
+                description: "Найм".into(),
+                rules: String::new(),
+                default_risk: Risk::Internal,
+            }),
+            ..asking
+        };
+        let (text, buttons) = send(&mut bridge, task(WorkState::Waiting, proposing)).unwrap();
+        assert!(text.contains("Кадры"));
+        assert!(buttons.contains("s:ta:t1:pc") && buttons.contains("s:ta:t1:pg"));
     }
 }

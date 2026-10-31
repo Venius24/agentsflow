@@ -12,14 +12,14 @@ fn no_home() -> Response {
         .into_response()
 }
 
-fn runs(state: &AppState) -> Result<&Runs, Response> {
-    state.runs.as_ref().ok_or_else(no_home)
+fn runs(state: &AppState) -> Result<&Runs, Box<Response>> {
+    state.runs.as_ref().ok_or_else(|| Box::new(no_home()))
 }
 
 pub(super) async fn departments(State(state): State<AppState>) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let home = runs.home();
     let spend = runs.month_spend();
@@ -40,6 +40,7 @@ pub(super) async fn departments(State(state): State<AppState>) -> Response {
                 "description": dept.description,
                 "default_risk": dept.default_risk,
                 "max_parallel": dept.max_parallel,
+                "schedules": dept.schedules.iter().map(|s| json!({"cron":s.cron,"title":s.title})).collect::<Vec<_>>(),
                 "limits": {
                     "task_usd": dept.limits.task_usd,
                     "month_usd": dept.limits.month_usd,
@@ -90,7 +91,7 @@ pub(super) async fn create_work(
 ) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Ok(Json(input)) = input else {
         return (
@@ -134,7 +135,7 @@ pub(super) async fn stop_task(
 ) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if runs.stop(&id) {
         Json(json!({"ok":true})).into_response()
@@ -152,7 +153,7 @@ pub(super) async fn retry_task(
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
     if let Err(response) = runs(&state) {
-        return response;
+        return *response;
     }
     let patch = TaskPatch {
         status: Some(agentsflow_events::TaskStatus::Todo),
@@ -170,7 +171,7 @@ pub(super) async fn task_result(
 ) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Some(task) = state.hub.task(&id) else {
         return task_failure(TaskError::NotFound);
@@ -210,14 +211,14 @@ pub(super) async fn task_result(
 pub(super) async fn list_runs(State(state): State<AppState>) -> Response {
     match runs(&state) {
         Ok(runs) => Json(json!({"runs":runs.running()})).into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
 pub(super) async fn reload_home(State(state): State<AppState>) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match runs.reload() {
         Ok(()) => Json(json!({"ok":true})).into_response(),
@@ -232,11 +233,82 @@ pub(super) async fn reload_home(State(state): State<AppState>) -> Response {
 pub(super) async fn spend(State(state): State<AppState>) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let month = runs.month_spend();
-    let total: f64 = month.values().sum();
+    let total = month.values().fold(0.0, |sum, usd| sum + usd);
     Json(json!({"month": month, "total_usd": total})).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Text {
+    text: String,
+}
+
+fn bad_request(error: String) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response()
+}
+
+/// A free-form owner message: the orchestrator turns it into tasks.
+pub(super) async fn orchestrator(
+    State(state): State<AppState>,
+    input: Result<Json<Text>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid message".into());
+    };
+    match runs.message(&input.text) {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+pub(super) async fn answer(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    input: Result<Json<Text>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid answer".into());
+    };
+    match runs.answer(&id, &input.text) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Decision {
+    create: bool,
+}
+
+/// The owner's decision on a proposed department.
+pub(super) async fn proposal(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    input: Result<Json<Decision>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid decision".into());
+    };
+    match runs.resolve_proposal(&id, input.create) {
+        Ok(department) => Json(json!({"department":department})).into_response(),
+        Err(error) => bad_request(error),
+    }
 }
 
 #[cfg(test)]

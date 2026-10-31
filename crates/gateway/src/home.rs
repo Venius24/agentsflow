@@ -40,6 +40,9 @@ pub struct OrchestratorConfig {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Off: every result goes to the owner, messages are not parsed.
+    #[serde(default = "enabled")]
+    pub enabled: bool,
 }
 impl Default for OrchestratorConfig {
     fn default() -> Self {
@@ -47,8 +50,12 @@ impl Default for OrchestratorConfig {
             kind: default_kind(),
             model: None,
             effort: None,
+            enabled: true,
         }
     }
+}
+fn enabled() -> bool {
+    true
 }
 fn default_kind() -> AgentKind {
     AgentKind::Claude
@@ -284,6 +291,68 @@ pub fn init(root: &Path) -> Result<()> {
         root.display()
     );
     Ok(())
+}
+
+/// Writes a new department from an approved proposal: the roster and
+/// workflow of the general department, the proposal's title, description and
+/// rules. Returns the department folder.
+pub fn create_department(
+    root: &Path,
+    proposal: &agentsflow_events::DepartmentProposal,
+) -> Result<PathBuf> {
+    if !department::valid_id(&proposal.id) {
+        bail!("invalid department id {:?}", proposal.id);
+    }
+    let dir = root.join("departments").join(&proposal.id);
+    if dir.exists() {
+        bail!("department {} already exists", proposal.id);
+    }
+    let quote = |text: &str| toml::Value::String(text.trim().to_owned()).to_string();
+    let risk = match proposal.default_risk {
+        agentsflow_events::Risk::Internal => "internal",
+        agentsflow_events::Risk::External => "external",
+    };
+    let body = GENERAL
+        .split_once("\n[limits]")
+        .map(|(_, rest)| format!("\n[limits]{rest}"))
+        .expect("template has limits");
+    let text = format!(
+        "id = {}\ntitle = {}\ndescription = {}\ndefault_risk = \"{risk}\"\nmax_parallel = 1\n{body}",
+        quote(&proposal.id),
+        quote(&proposal.title),
+        quote(&proposal.description),
+    );
+    let rules = if proposal.rules.trim().is_empty() {
+        format!(
+            "# Правила отдела «{}»\n\n{}",
+            proposal.title.trim(),
+            GENERAL_RULES
+                .split_once('\n')
+                .map_or("", |(_, rest)| rest)
+                .trim_start()
+        )
+    } else {
+        format!("{}\n", proposal.rules.trim())
+    };
+    let created = (|| -> Result<()> {
+        write_new(&dir.join(department::FILE), &text)?;
+        write_new(&dir.join(department::RULES), &rules)?;
+        write_new(&dir.join("memory").join("notes.md"), NOTES)?;
+        Department::load(&dir)?;
+        Ok(())
+    })();
+    if let Err(error) = created {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(error);
+    }
+    if let Err(error) = commit(
+        root,
+        &[&dir],
+        &format!("department({}): {}", proposal.id, proposal.title.trim()),
+    ) {
+        crate::server_diag!("department commit: {error:#}");
+    }
+    Ok(dir)
 }
 
 pub fn print_check(home: &Home) {
