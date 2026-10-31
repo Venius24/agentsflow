@@ -39,6 +39,15 @@ struct Data {
     mail_enabled: bool,
     tasks: Vec<TaskSnapshot>,
     stats: Statistics,
+    resolution_origins: HashMap<u64, ResolutionOrigin>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ResolutionOrigin {
+    Response,
+    Interrupt,
+    Guard,
+    Automatic,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -436,6 +445,7 @@ impl Hub {
                     mail_enabled: false,
                     tasks: Vec::new(),
                     stats: Statistics::default(),
+                    resolution_origins: HashMap::new(),
                 }),
                 tx,
                 log: None,
@@ -509,6 +519,7 @@ impl Hub {
                     mail_enabled: false,
                     tasks,
                     stats,
+                    resolution_origins: HashMap::new(),
                 }),
                 tx,
                 log: Some(LogWriter::start(path)),
@@ -523,6 +534,27 @@ impl Hub {
         let mut data = self.inner.data.lock().unwrap();
         self.publish_locked(&mut data, agent, session, event);
     }
+    fn publish_resolution(
+        &self,
+        agent: AgentId,
+        session: &str,
+        event: Event,
+        origin: ResolutionOrigin,
+    ) {
+        let mut data = self.inner.data.lock().unwrap();
+        let seq = self.inner.seq.load(Ordering::Relaxed) + 1;
+        data.resolution_origins.insert(seq, origin);
+        self.publish_locked(&mut data, agent, session, event);
+    }
+    pub(crate) fn resolution_origin(&self, seq: u64) -> Option<ResolutionOrigin> {
+        self.inner
+            .data
+            .lock()
+            .unwrap()
+            .resolution_origins
+            .get(&seq)
+            .copied()
+    }
     fn publish_locked(&self, data: &mut Data, agent: AgentId, session: &str, event: Event) -> u64 {
         let envelope = Envelope {
             session: session.into(),
@@ -536,7 +568,9 @@ impl Hub {
             store_task(&mut data.tasks, task);
         }
         if data.history.len() == HISTORY_LIMIT {
-            data.history.pop_front();
+            if let Some(old) = data.history.pop_front() {
+                data.resolution_origins.remove(&old.seq);
+            }
         }
         data.history.push_back(envelope.clone());
         if let Some(log) = &self.inner.log {
@@ -1289,10 +1323,11 @@ async fn run_actor<A, F, Fut>(
                                 match active.respond_with_reason(&id, allow, deny_reason.as_deref()).await {
                                     Ok(()) => {
                                         state.lock().unwrap().pending.retain(|open| open != &id);
-                                        hub.publish(
+                                        hub.publish_resolution(
                                             agent.clone(),
                                             &session_id,
                                             Event::PermissionResolved { id, allow, blocked_by_guard: blocked },
+                                            if blocked { ResolutionOrigin::Guard } else if interrupt_reply.is_some() || interrupted.is_some() { ResolutionOrigin::Interrupt } else if response.is_some() { ResolutionOrigin::Response } else { ResolutionOrigin::Automatic },
                                         );
                                         if let Some(reply) = response {
                                             let _ = reply.send(Ok(()));

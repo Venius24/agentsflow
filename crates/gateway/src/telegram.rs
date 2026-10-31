@@ -1,5 +1,5 @@
 use crate::{
-    hub::{Hub, HubError, NewTask},
+    hub::{Hub, HubError, NewTask, ResolutionOrigin},
     runtime::Agents,
     team::Team,
 };
@@ -69,13 +69,7 @@ impl Config {
 }
 
 fn message_text(text: &str, token: &str, limit: usize) -> String {
-    let mut source = text.replace(token, "[redacted]");
-    while let Some(start) = source.to_ascii_lowercase().find("token=") {
-        let end = source[start..]
-            .find(|c: char| c.is_whitespace() || c == '&')
-            .map_or(source.len(), |i| start + i);
-        source.replace_range(start..end, "[redacted]");
-    }
+    let source = redact(text, token);
     let mut result = String::new();
     for c in source.chars() {
         let encoded = match c {
@@ -100,6 +94,24 @@ fn message_text(text: &str, token: &str, limit: usize) -> String {
         }
     }
     result
+}
+
+fn redact(text: &str, token: &str) -> String {
+    let mut source = text.replace(token, "[redacted]");
+    while let Some(start) = source.to_ascii_lowercase().find("token=") {
+        let end = source[start..]
+            .find(|c: char| c.is_whitespace() || c == '&')
+            .map_or(source.len(), |i| start + i);
+        source.replace_range(start..end, "[redacted]");
+    }
+    source
+}
+
+struct TemporaryCommand(std::path::PathBuf);
+impl Drop for TemporaryCommand {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 fn menu_keyboard() -> Value {
@@ -150,6 +162,24 @@ fn now_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+fn resolution_label(origin: Option<ResolutionOrigin>, allow: bool, rule: &str) -> String {
+    match origin {
+        Some(ResolutionOrigin::Interrupt) => "⏹ Ход остановлен".into(),
+        Some(ResolutionOrigin::Guard) => format!("🛡 Отклонено guard: {rule}"),
+        Some(ResolutionOrigin::Response) if allow => "✅ Разрешено на странице".into(),
+        Some(ResolutionOrigin::Response) => "⛔ Отклонено на странице".into(),
+        _ => "Запрос закрыт".into(),
+    }
+}
+
+fn own_decision(allow: bool) -> &'static str {
+    if allow {
+        "✅ Разрешено вами"
+    } else {
+        "⛔ Отклонено вами"
+    }
+}
+
 #[cfg(test)]
 async fn send(bot: &Bot, chat: i64, text: &str) -> std::result::Result<Value, frankenstein::Error> {
     bot.request(
@@ -168,7 +198,7 @@ struct Outgoing {
 struct Pending {
     agent: AgentId,
     id: String,
-    messages: HashMap<i64, i64>,
+    messages: HashMap<i64, Vec<i64>>,
     detail: String,
     guarded: bool,
     confirming: HashSet<i64>,
@@ -180,12 +210,15 @@ struct Screen {
     agent: Option<AgentId>,
     rendered: String,
     refresh: bool,
+    requests: bool,
+    updated: tokio::time::Instant,
 }
 struct Draft {
     agent: AgentId,
     text: Option<String>,
     expires: tokio::time::Instant,
     key: u64,
+    message: Option<i64>,
 }
 struct Bridge {
     hub: Hub,
@@ -338,7 +371,14 @@ impl Bridge {
                 } else {
                     command.to_owned()
                 };
-                let short = message_text(&detail, &self.config.token, 600);
+                let short = message_text(
+                    &redact(&detail, &self.config.token)
+                        .chars()
+                        .take(600)
+                        .collect::<String>(),
+                    &self.config.token,
+                    usize::MAX,
+                );
                 let safe_agent = message_text(agent.as_str(), &self.config.token, 100);
                 let text = if let Some(note) = &guard {
                     format!(
@@ -378,10 +418,10 @@ impl Bridge {
                 blocked_by_guard,
             } => {
                 let note = self.guard_notes.remove(&(agent.clone(), id.clone()));
-                if let (true, Some((reason, command))) = (blocked_by_guard, note) {
+                if let (true, Some((reason, command))) = (blocked_by_guard, note.as_ref()) {
                     let agent = message_text(agent.as_str(), &self.config.token, 100);
-                    let reason = message_text(&reason, &self.config.token, 500);
-                    let command = message_text(&command, &self.config.token, 600);
+                    let reason = message_text(reason, &self.config.token, 500);
+                    let command = message_text(command, &self.config.token, 600);
                     for chat in self.config.users.clone() {
                         self.queue_item(chat, format!("⚠️ guard остановил <b>{agent}</b>: <code>{command}</code> ({reason})"), None, true);
                     }
@@ -394,22 +434,26 @@ impl Bridge {
                     .collect();
                 for key in keys {
                     if let Some(pending) = self.pending.remove(&key) {
-                        for (chat, message) in pending.messages {
-                            edits.push((
-                                chat,
-                                message,
-                                format!(
-                                    "{} · {} · {}: {}",
-                                    if allow {
-                                        "✅ Разрешено на странице"
-                                    } else {
-                                        "⛔ Отклонено на странице"
-                                    },
-                                    format_time(now_ms(), now_ms()),
-                                    agent,
-                                    pending.detail.chars().take(100).collect::<String>()
-                                ),
-                            ));
+                        let label = resolution_label(
+                            self.hub.resolution_origin(envelope.seq),
+                            allow,
+                            note.as_ref()
+                                .map_or("", |(rule, _)| rule.split(" - ").next().unwrap_or("")),
+                        );
+                        for (chat, messages) in pending.messages {
+                            for message in messages {
+                                edits.push((
+                                    chat,
+                                    message,
+                                    format!(
+                                        "{} · {} · {}: {}",
+                                        label,
+                                        format_time(now_ms(), now_ms()),
+                                        agent,
+                                        pending.detail.chars().take(100).collect::<String>()
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
@@ -440,6 +484,29 @@ impl Bridge {
                 self.broadcast(&text, None)
             }
             Event::Done { reason } => {
+                let keys: Vec<_> = self
+                    .pending
+                    .iter()
+                    .filter(|(_, pending)| pending.agent == agent)
+                    .map(|(key, _)| *key)
+                    .collect();
+                for key in keys {
+                    if let Some(pending) = self.pending.remove(&key) {
+                        for (chat, messages) in pending.messages {
+                            for message in messages {
+                                edits.push((
+                                    chat,
+                                    message,
+                                    if reason == "interrupted" {
+                                        "⏹ Ход остановлен".into()
+                                    } else {
+                                        "Запрос закрыт".into()
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
                 if reason == "error" {
                     self.errors.insert(agent.clone());
                 }
@@ -512,7 +579,7 @@ impl Bridge {
                         value.pointer("/result/message_id").and_then(Value::as_i64),
                     ) {
                         if let Some(pending) = self.pending.get_mut(&key) {
-                            pending.messages.insert(chat, message);
+                            pending.messages.entry(chat).or_default().push(message);
                         }
                     }
                     if let Some(count) = self.dropped.remove(&chat).filter(|count| *count > 0) {
@@ -704,6 +771,8 @@ impl Bridge {
                     agent,
                     rendered: text,
                     refresh: true,
+                    requests: false,
+                    updated: tokio::time::Instant::now(),
                 },
             );
         }
@@ -712,7 +781,9 @@ impl Bridge {
         let screens: Vec<_> = self
             .screens
             .iter()
-            .filter(|(_, screen)| screen.refresh)
+            .filter(|(_, screen)| {
+                screen.refresh && screen.updated.elapsed() >= Duration::from_secs(5)
+            })
             .map(|(chat, screen)| {
                 (
                     *chat,
@@ -729,6 +800,7 @@ impl Bridge {
                 self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"parse_mode":"HTML","reply_markup":keyboard})).await;
                 if let Some(screen) = self.screens.get_mut(&chat) {
                     screen.rendered = text;
+                    screen.updated = tokio::time::Instant::now();
                 }
             }
         }
@@ -764,21 +836,152 @@ impl Bridge {
                     agent: None,
                     rendered: text.into(),
                     refresh: false,
+                    requests: false,
+                    updated: tokio::time::Instant::now(),
                 },
             );
         }
     }
-    async fn prompt_offer(&self, chat: i64, text: &str, buttons: Value) {
-        let _: Result<Value, _> = self.bot.request("sendMessage", Some(json!({"chat_id":chat,"text":message_text(text, &self.config.token, 3500),"reply_markup":{"inline_keyboard":buttons}}))).await;
+    async fn open_requests(&mut self, chat: i64, existing: Option<i64>) {
+        self.next_key = self.next_key.wrapping_add(1);
+        let key = self.next_key;
+        let mut pending: Vec<_> = self
+            .pending
+            .iter()
+            .filter(|(_, request)| {
+                self.agents
+                    .get(&request.agent)
+                    .is_some_and(|actor| actor.state().pending.contains(&request.id))
+            })
+            .collect();
+        pending.sort_by_key(|(id, _)| **id);
+        let mut text = "<b>🔐 Запросы</b>".to_owned();
+        let mut rows = Vec::new();
+        for (request_key, request) in pending {
+            text.push_str(&format!(
+                "\n{}: {}",
+                message_text(request.agent.as_str(), &self.config.token, 40),
+                message_text(&request.detail, &self.config.token, 120)
+            ));
+            rows.push(vec![json!({"text":format!("Показать: {}", request.agent),"callback_data":format!("ui:request:{key}:{request_key}")})]);
+        }
+        if rows.is_empty() {
+            text = "Ничего не ждёт вашего решения ✔".into();
+        }
+        rows.insert(
+            0,
+            vec![json!({"text":"← Назад","callback_data":format!("ui:team:{key}")})],
+        );
+        rows.push(vec![
+            json!({"text":"🔄 Обновить","callback_data":format!("ui:requests:{key}")}),
+        ]);
+        let mut payload = json!({"chat_id":chat,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}});
+        let method = if let Some(message) = existing {
+            payload["message_id"] = json!(message);
+            "editMessageText"
+        } else {
+            "sendMessage"
+        };
+        let result: Result<Value, _> = self.bot.request(method, Some(payload)).await;
+        let message = existing.or_else(|| {
+            result
+                .ok()
+                .and_then(|r| r.pointer("/result/message_id").and_then(Value::as_i64))
+        });
+        if let Some(message) = message {
+            self.screens.insert(
+                chat,
+                Screen {
+                    key,
+                    message,
+                    agent: None,
+                    rendered: text,
+                    refresh: false,
+                    requests: true,
+                    updated: tokio::time::Instant::now(),
+                },
+            );
+        }
+    }
+    async fn refresh_requests(&mut self) {
+        let screens: Vec<_> = self
+            .screens
+            .iter()
+            .filter(|(_, screen)| screen.requests)
+            .map(|(chat, screen)| (*chat, screen.message))
+            .collect();
+        for (chat, message) in screens {
+            self.open_requests(chat, Some(message)).await;
+        }
+    }
+    async fn prompt_offer(
+        &self,
+        chat: i64,
+        text: &str,
+        buttons: Value,
+        message: Option<i64>,
+    ) -> Option<i64> {
+        let mut body = json!({"chat_id":chat,"text":message_text(text, &self.config.token, 3500),"parse_mode":"HTML","reply_markup":{"inline_keyboard":buttons}});
+        let method = if let Some(message) = message {
+            body["message_id"] = json!(message);
+            "editMessageText"
+        } else {
+            "sendMessage"
+        };
+        let result: Result<Value, _> = self.bot.request(method, Some(body)).await;
+        message.or_else(|| {
+            result
+                .ok()
+                .and_then(|v| v.pointer("/result/message_id").and_then(Value::as_i64))
+        })
+    }
+    async fn show_full_command(&mut self, chat: i64, command: &str) {
+        let clean = redact(command, &self.config.token);
+        let escaped = message_text(&clean, &self.config.token, usize::MAX);
+        if clean.chars().count() <= 3500 {
+            self.queue_html(chat, format!("<pre>{escaped}</pre>"), None);
+            return;
+        }
+        let path =
+            std::env::temp_dir().join(format!("agentsflow-command-{}.txt", uuid::Uuid::new_v4()));
+        let file = TemporaryCommand(path.clone());
+        if std::fs::write(&path, &clean).is_ok() {
+            let result: Result<Value, _> = self
+                .bot
+                .request_with_form_data(
+                    "sendDocument",
+                    json!({"chat_id":chat}),
+                    vec![("document", path)],
+                )
+                .await;
+            if result.is_ok_and(|value| value.get("ok").and_then(Value::as_bool) == Some(true)) {
+                return;
+            }
+        }
+        drop(file);
+        let mut chunk = String::new();
+        for ch in clean.chars() {
+            chunk.push(ch);
+            if chunk.chars().count() == 500 {
+                let text = message_text(&chunk, &self.config.token, 3489);
+                self.queue_item(chat, format!("<pre>{text}</pre>"), None, true);
+                chunk.clear();
+            }
+        }
+        if !chunk.is_empty() {
+            let text = message_text(&chunk, &self.config.token, 3489);
+            self.queue_item(chat, format!("<pre>{text}</pre>"), None, true);
+        }
     }
     async fn submit_draft(&mut self, chat: i64, stopped: bool, confirmed: bool) {
         if !self.config.prompts {
-            self.queue(
+            let message = self.drafts.remove(&chat).and_then(|draft| draft.message);
+            self.draft_feedback(
                 chat,
+                message,
                 "Отправка заданий из Telegram выключена владельцем",
-                None,
-            );
-            self.drafts.remove(&chat);
+            )
+            .await;
             return;
         }
         let Some(draft) = self.drafts.get(&chat) else {
@@ -786,8 +989,9 @@ impl Bridge {
             return;
         };
         if draft.expires <= tokio::time::Instant::now() {
-            self.drafts.remove(&chat);
-            self.queue(chat, "Время ввода истекло", None);
+            let message = self.drafts.remove(&chat).and_then(|draft| draft.message);
+            self.draft_feedback(chat, message, "Время ввода истекло")
+                .await;
             return;
         }
         let Some(text) = draft.text.clone() else {
@@ -795,9 +999,11 @@ impl Bridge {
         };
         let agent = draft.agent.clone();
         let key = draft.key;
+        let message = draft.message;
         let Some(actor) = self.agents.get(&agent).cloned() else {
-            self.queue(chat, "Нет такого агента", None);
             self.drafts.remove(&chat);
+            self.draft_feedback(chat, message, "Нет такого агента")
+                .await;
             return;
         };
         let bypass = self
@@ -805,19 +1011,26 @@ impl Bridge {
             .get(&agent)
             .is_some_and(|member| member.mode == Some(crate::team::AccessMode::Bypass));
         if bypass && !self.bypass_confirmed.contains(&agent) && !confirmed {
-            self.prompt_offer(chat, &format!("⚠ У {agent} режим BYPASS: его команды выполняются без запросов и без песочницы. Отправить?"), json!([[{"text":"Да, отправить","callback_data":format!("draft:confirm:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]])).await;
+            let message = self.prompt_offer(chat, &format!("⚠ У {agent} режим BYPASS: его команды выполняются без запросов и без песочницы. Отправить?"), json!([[{"text":"Да, отправить","callback_data":format!("draft:confirm:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+            if let Some(draft) = self.drafts.get_mut(&chat) {
+                draft.message = message;
+            }
             return;
         }
         if confirmed && bypass {
             self.bypass_confirmed.insert(agent.clone());
         }
         if actor.state().busy && !stopped {
-            self.prompt_offer(chat, &format!("{agent} сейчас занят."), json!([[{"text":"⏹ Остановить и отправить","callback_data":format!("draft:stop:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]])).await;
+            let message = self.prompt_offer(chat, &format!("{agent} сейчас занят."), json!([[{"text":"⏹ Остановить и отправить","callback_data":format!("draft:stop:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+            if let Some(draft) = self.drafts.get_mut(&chat) {
+                draft.message = message;
+            }
             return;
         }
         if stopped && actor.state().busy {
             if actor.interrupt().await.is_err() {
-                self.queue(chat, "Не удалось остановить агента", None);
+                self.draft_feedback(chat, message, "Не удалось остановить агента")
+                    .await;
                 return;
             }
             let idle = tokio::time::timeout(Duration::from_secs(15), async {
@@ -827,16 +1040,34 @@ impl Bridge {
             })
             .await;
             if idle.is_err() {
-                self.queue(chat, "Агент не остановился", None);
+                self.draft_feedback(chat, message, "Агент не остановился")
+                    .await;
                 return;
             }
         }
         match actor.prompt(text).await {
             Ok(()) => {
                 self.drafts.remove(&chat);
-                self.queue(chat, &format!("✔ Передано {agent}"), None);
+                if let Some(message) = message {
+                    self.edit(vec![(chat, message, format!("✔ Передано {agent}"))])
+                        .await;
+                    self.screens.remove(&chat);
+                } else {
+                    self.queue(chat, &format!("✔ Передано {agent}"), None);
+                }
             }
-            Err(_) => self.queue(chat, "Не удалось передать задание", None),
+            Err(_) => {
+                self.draft_feedback(chat, message, "Не удалось передать задание")
+                    .await
+            }
+        }
+    }
+    async fn draft_feedback(&mut self, chat: i64, message: Option<i64>, text: &str) {
+        if let Some(message) = message {
+            self.edit(vec![(chat, message, text.into())]).await;
+            self.screens.remove(&chat);
+        } else {
+            self.queue(chat, text, None);
         }
     }
     async fn update(&mut self, update: &Value) {
@@ -871,8 +1102,12 @@ impl Bridge {
                 }
                 match parts.get(1).copied() {
                     Some("cancel") => {
-                        self.drafts.remove(&chat);
-                        self.queue(chat, "Отменено", None);
+                        let message = self.drafts.remove(&chat).and_then(|draft| draft.message);
+                        if let Some(message) = message {
+                            self.open_team(chat, None, Some(message)).await;
+                        } else {
+                            self.queue(chat, "Отменено", None);
+                        }
                     }
                     Some("confirm") => self.submit_draft(chat, false, true).await,
                     Some("stop") => self.submit_draft(chat, true, false).await,
@@ -889,13 +1124,37 @@ impl Bridge {
                 let screen = self.screens.get(&chat);
                 if !screen.is_some_and(|s| Some(s.key) == key) {
                     self.answer(id, "Экран устарел - открыл заново").await;
-                    self.open_team(chat, None, None).await;
+                    let message = callback
+                        .pointer("/message/message_id")
+                        .and_then(Value::as_i64);
+                    if let Some(message) = message {
+                        self.open_team(chat, None, Some(message)).await;
+                    }
                     return;
                 }
                 let message = screen.map(|s| s.message);
                 let active_agent = screen.and_then(|s| s.agent.clone());
                 match parts.get(1).copied() {
                     Some("team") => self.open_team(chat, None, message).await,
+                    Some("requests") => self.open_requests(chat, message).await,
+                    Some("request") => {
+                        let request = parts.get(3).and_then(|v| v.parse::<u64>().ok());
+                        let card = request.and_then(|request| {
+                            self.pending
+                                .get(&request)
+                                .filter(|pending| {
+                                    self.agents.get(&pending.agent).is_some_and(|actor| {
+                                        actor.state().pending.contains(&pending.id)
+                                    })
+                                })
+                                .map(|pending| (request, pending.text.clone()))
+                        });
+                        if let Some((request, text)) = card {
+                            self.queue_html(chat, text, Some(request));
+                        } else {
+                            self.open_requests(chat, message).await;
+                        }
+                    }
                     Some("mute") => {
                         if !self.muted.remove(&chat) {
                             self.muted.insert(chat);
@@ -930,9 +1189,13 @@ impl Bridge {
                                     text: None,
                                     expires: tokio::time::Instant::now() + Duration::from_secs(600),
                                     key,
+                                    message,
                                 },
                             );
-                            self.prompt_offer(chat, &format!("Что передать {agent}? Следующее сообщение уйдёт ему как задание."), json!([[{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]])).await;
+                            self.prompt_offer(chat, &format!("Что передать {agent}? Следующее сообщение уйдёт ему как задание."), json!([[{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+                            if let Some(screen) = self.screens.get_mut(&chat) {
+                                screen.refresh = false;
+                            }
                         }
                     }
                     Some("tasks") => {
@@ -994,20 +1257,22 @@ impl Bridge {
             };
             if action == "f" {
                 let detail = pending.detail.clone();
-                self.queue(user.unwrap_or_default(), &detail, None);
-                if detail.chars().count() > 3500 {
-                    self.queue(
-                        user.unwrap_or_default(),
-                        "Команда слишком длинная: показана только первая часть",
-                        None,
-                    );
-                }
+                self.show_full_command(user.unwrap_or_default(), &detail)
+                    .await;
                 self.answer(id, "").await;
                 return;
             }
             if action == "c" && pending.guarded {
                 let chat = user.unwrap_or_default();
-                let message = pending.messages.get(&chat).copied();
+                let message = callback
+                    .pointer("/message/message_id")
+                    .and_then(Value::as_i64)
+                    .or_else(|| {
+                        pending
+                            .messages
+                            .get(&chat)
+                            .and_then(|messages| messages.last().copied())
+                    });
                 if let Some(pending) = self.pending.get_mut(&key) {
                     pending.confirming.insert(chat);
                 }
@@ -1019,18 +1284,37 @@ impl Bridge {
             }
             if action == "n" {
                 let chat = user.unwrap_or_default();
+                let clicked = callback
+                    .pointer("/message/message_id")
+                    .and_then(Value::as_i64);
                 let data = if let Some(pending) = self.pending.get_mut(&key) {
                     pending.confirming.remove(&chat);
-                    pending
-                        .messages
-                        .get(&chat)
-                        .copied()
-                        .map(|message| (message, pending.text.clone()))
+                    clicked
+                        .or_else(|| {
+                            pending
+                                .messages
+                                .get(&chat)
+                                .and_then(|messages| messages.last().copied())
+                        })
+                        .map(|message| {
+                            (
+                                message,
+                                pending.text.clone(),
+                                pending.detail.chars().count() > 600,
+                            )
+                        })
                 } else {
                     None
                 };
-                if let Some((message, text)) = data {
-                    self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":[[{"text":"⛔ Отклонить","callback_data":format!("perm:d:{key}")},{"text":"Разрешить всё равно…","callback_data":format!("perm:c:{key}")}]]}})).await;
+                if let Some((message, text, long)) = data {
+                    let mut rows = vec![vec![
+                        json!({"text":"⛔ Отклонить","callback_data":format!("perm:d:{key}")}),
+                        json!({"text":"Разрешить всё равно…","callback_data":format!("perm:c:{key}")}),
+                    ]];
+                    if long {
+                        rows.push(vec![json!({"text":"Показать полностью","callback_data":format!("perm:f:{key}")})]);
+                    }
+                    self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}})).await;
                 }
                 self.answer(id, "Запрос остаётся открытым").await;
                 return;
@@ -1058,26 +1342,22 @@ impl Bridge {
                 )
                 .await;
                 if let Some(pending) = self.pending.remove(&key) {
+                    let label = format!(
+                        "{} · {} · {}: {}",
+                        own_decision(allow),
+                        format_time(now_ms(), now_ms()),
+                        pending.agent,
+                        pending.detail.chars().take(100).collect::<String>()
+                    );
                     self.edit(
                         pending
                             .messages
                             .into_iter()
-                            .map(|(chat, message)| {
-                                (
-                                    chat,
-                                    message,
-                                    format!(
-                                        "{} · {} · {}: {}",
-                                        if allow {
-                                            "✅ Разрешено вами"
-                                        } else {
-                                            "⛔ Отклонено вами"
-                                        },
-                                        format_time(now_ms(), now_ms()),
-                                        pending.agent,
-                                        pending.detail.chars().take(100).collect::<String>()
-                                    ),
-                                )
+                            .flat_map(|(chat, messages)| {
+                                let label = label.clone();
+                                messages
+                                    .into_iter()
+                                    .map(move |message| (chat, message, label.clone()))
                             })
                             .collect(),
                     )
@@ -1145,6 +1425,7 @@ impl Bridge {
                         text: Some(text.to_owned()),
                         expires: tokio::time::Instant::now() + Duration::from_secs(600),
                         key: self.next_key,
+                        message: None,
                     },
                 );
                 self.submit_draft(chat, false, false).await;
@@ -1156,6 +1437,10 @@ impl Bridge {
             }
             if matches!(raw, "/more" | "⚙ Ещё") {
                 self.open_more(chat, None).await;
+                return;
+            }
+            if matches!(raw, "/requests" | "🔐 Запросы") {
+                self.open_requests(chat, None).await;
                 return;
             }
             if let Some(id) = raw.strip_prefix("/agent ") {
@@ -1390,7 +1675,7 @@ pub async fn run(
             biased;
             _ = stop.wait_for(|v| *v) => break,
             event = events.recv() => match event {
-                Ok(event) => { let edits = bridge.handle_event(event); tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.edit(edits) => {} } }
+                Ok(event) => { let refresh = matches!(event.event, Event::PermissionRequest { .. } | Event::PermissionResolved { .. } | Event::Done { .. }); let edits = bridge.handle_event(event); tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.edit(edits).await; if refresh { bridge.refresh_requests().await; } } => {} } }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     let (history, receiver) = hub.subscribe(); events = receiver;
                     for event in &history {
@@ -1424,6 +1709,7 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
     type RequestLog = Arc<Mutex<Vec<(String, Value)>>>;
+    type RawRequestLog = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
     type AttemptLog = (Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<Value>>>);
 
     struct FakeAgent {
@@ -1460,6 +1746,25 @@ mod tests {
 
     #[test]
     fn whitelist_and_text() {
+        assert_eq!(own_decision(true), "✅ Разрешено вами");
+        assert_eq!(own_decision(false), "⛔ Отклонено вами");
+        assert_eq!(
+            resolution_label(Some(ResolutionOrigin::Response), true, ""),
+            "✅ Разрешено на странице"
+        );
+        assert_eq!(
+            resolution_label(Some(ResolutionOrigin::Response), false, ""),
+            "⛔ Отклонено на странице"
+        );
+        assert_eq!(
+            resolution_label(Some(ResolutionOrigin::Guard), false, "rm"),
+            "🛡 Отклонено guard: rm"
+        );
+        assert_eq!(
+            resolution_label(Some(ResolutionOrigin::Interrupt), false, ""),
+            "⏹ Ход остановлен"
+        );
+        assert_eq!(resolution_label(None, false, ""), "Запрос закрыт");
         assert_eq!(format_time(1_700_000_000_000, 1_700_000_000_000), "22:13");
         assert_eq!(
             format_time(1_700_000_000_000, 1_700_086_400_000),
@@ -1594,6 +1899,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn navigation_requests_and_full_command() {
+        use axum::body::Bytes;
+        let calls = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let app = Router::new()
+            .route(
+                "/{path}/{method}",
+                post(
+                    |Path((path, method)): Path<(String, String)>,
+                     State(calls): State<RawRequestLog>,
+                     body: Bytes| async move {
+                        calls
+                            .lock()
+                            .unwrap()
+                            .push((format!("{path}/{method}"), body.to_vec()));
+                        Json(json!({"ok":true,"result":{"message_id":42}}))
+                    },
+                ),
+            )
+            .with_state(calls.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = Config::parse("secret".into(), "11", format!("http://{address}")).unwrap();
+        let mut bridge = Bridge::new(config, Agents::new(), Team::preset("pair").unwrap());
+        let msg = |text| json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":text}});
+        let cb = |data: String, user| json!({"callback_query":{"id":"cb","from":{"id":user},"data":data,"message":{"message_id":42,"chat":{"id":11,"type":"private"}}}});
+        bridge.update(&msg("/requests")).await;
+        assert!(
+            String::from_utf8_lossy(&calls.lock().unwrap().last().unwrap().1)
+                .contains("Ничего не ждёт")
+        );
+        bridge.update(&msg("/team")).await;
+        let key = bridge.screens[&11].key;
+        let before = calls.lock().unwrap().len();
+        bridge.update(&cb(format!("ui:agent:{key}:0"), 11)).await;
+        assert!(
+            calls.lock().unwrap()[before..]
+                .iter()
+                .any(|(path, _)| path.ends_with("/editMessageText"))
+        );
+        let key = bridge.screens[&11].key;
+        bridge.update(&cb(format!("ui:team:{key}"), 11)).await;
+        let before = calls.lock().unwrap().len();
+        bridge.update(&cb(format!("ui:agent:{key}:0"), 99)).await;
+        assert_eq!(calls.lock().unwrap().len(), before);
+        bridge.update(&cb(format!("ui:agent:{key}:0"), 11)).await;
+        assert!(
+            calls.lock().unwrap()[before..]
+                .iter()
+                .any(|(path, body)| path.ends_with("/answerCallbackQuery")
+                    && String::from_utf8_lossy(body).contains("устарел"))
+        );
+        let short = format!("{} <end>", "a".repeat(650));
+        bridge.show_full_command(11, &short).await;
+        assert!(
+            bridge.queues[&11]
+                .back()
+                .unwrap()
+                .text
+                .contains("&lt;end&gt;</pre>")
+        );
+        bridge.show_full_command(11, &"x".repeat(4000)).await;
+        assert!(calls.lock().unwrap().iter().any(|(path, body)| {
+            path == "botsecret/sendDocument"
+                && body
+                    .windows(4000)
+                    .any(|chunk| chunk == "x".repeat(4000).as_bytes())
+        }));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn requests_busy_prompt_and_interrupt_resolution() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        tokio::task::LocalSet::new().run_until(async {
+            let calls = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+            let app = Router::new().route("/{path}/{method}", post(|Path((path, method)): Path<(String,String)>, State(calls): State<RequestLog>, Json(body): Json<Value>| async move {
+                calls.lock().unwrap().push((format!("{path}/{method}"), body));
+                Json(json!({"ok":true,"result":{"message_id":42}}))
+            })).with_state(calls.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let hub = Hub::new();
+            let (_, mut rx) = hub.subscribe();
+            let interrupts = Arc::new(AtomicUsize::new(0));
+            let (actor, task) = crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, {
+                let interrupts = interrupts.clone(); move || { let interrupts = interrupts.clone(); async move { Ok(crate::testing::Silent::new(1, true).probes(Arc::default(), interrupts)) } }
+            });
+            let config = Config::parse("secret".into(), "11", format!("http://{address}")).unwrap();
+            let mut bridge = Bridge::with_hub(config, Agents::from([(AgentId::from("claude"), actor.clone())]), Team::preset("pair").unwrap(), hub);
+            let msg = |text| json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":text}});
+            let cb = |data: String| json!({"callback_query":{"id":"cb","from":{"id":11},"data":data,"message":{"message_id":42,"chat":{"id":11,"type":"private"}}}});
+            actor.prompt("first".into()).await.unwrap();
+            loop { let e = rx.recv().await.unwrap(); if matches!(e.event, Event::PermissionRequest { .. }) { bridge.handle_event(e); break; } }
+            bridge.flush().await;
+            bridge.update(&msg("/requests")).await;
+            let key = bridge.screens[&11].key;
+            assert!(calls.lock().unwrap().iter().any(|(_, value)| value["reply_markup"]["inline_keyboard"].to_string().contains("Показать")));
+            bridge.update(&cb(format!("ui:request:{key}:1"))).await;
+            bridge.last_sent.clear();
+            bridge.flush().await;
+            assert_eq!(bridge.pending[&1].messages[&11].len(), 2);
+            bridge.update(&msg("/ask claude second")).await;
+            let draft = bridge.drafts[&11].key;
+            bridge.update(&cb(format!("draft:cancel:{draft}"))).await;
+            assert!(actor.state().busy);
+            assert_eq!(interrupts.load(Ordering::SeqCst), 0);
+            bridge.update(&msg("/ask claude second")).await;
+            let draft = bridge.drafts[&11].key;
+            bridge.update(&cb(format!("draft:stop:{draft}"))).await;
+            assert_eq!(interrupts.load(Ordering::SeqCst), 1);
+            let resolved = loop { let e = rx.recv().await.unwrap(); if matches!(e.event, Event::PermissionResolved { .. }) { break e; } };
+            let edits = bridge.handle_event(resolved);
+            assert_eq!(edits.len(), 2);
+            assert!(edits.iter().all(|(_, _, text)| text.contains("Ход остановлен")));
+            actor.shutdown().await;
+            task.await.unwrap();
+            server.abort();
+        }).await;
+    }
+
+    #[tokio::test]
     async fn dangerous_permission_needs_confirmation() {
         tokio::task::LocalSet::new().run_until(async {
             let app = Router::new().route("/{path}/{method}", post(|| async { Json(json!({"ok":true,"result":{"message_id":42}})) }));
@@ -1668,6 +2096,7 @@ mod tests {
                 text: None,
                 expires: tokio::time::Instant::now() - Duration::from_secs(1),
                 key: 1,
+                message: None,
             },
         );
         bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"hello"}})).await;
@@ -1680,6 +2109,7 @@ mod tests {
                 text: None,
                 expires: tokio::time::Instant::now() + Duration::from_secs(60),
                 key: 2,
+                message: None,
             },
         );
         bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/board"}})).await;
@@ -1728,7 +2158,7 @@ mod tests {
             });
             let config = Config::parse("test-secret".into(), "11,22", format!("http://{address}")).unwrap();
             let agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
-            let mut bridge = Bridge::new(config, agents, Team::preset("pair").unwrap());
+            let mut bridge = Bridge::with_hub(config, agents, Team::preset("pair").unwrap(), hub.clone());
             actor.prompt("task".into()).await.unwrap();
             loop { let event = rx.recv().await.unwrap(); if matches!(event.event, Event::PermissionRequest { .. }) { bridge.handle_event(event); break; } }
             bridge.flush().await;
