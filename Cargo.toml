@@ -19,6 +19,7 @@ futures-util = "0.3.34"
 tokio-stream = "0.1.19"
 uuid = { version = "1.26.1", features = ["v4"] }
 toml = "1.1.8"
+frankenstein = { version = "0.52.1", default-features = false, features = ["client-reqwest"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 
 [workspace.lints.rust]

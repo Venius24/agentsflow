@@ -9,7 +9,7 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes] [--allow-bypass]\n       agentsflow flow FILE --task <text> --yes [--team pair|trio|FILE] [--allow-bypass] [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
+pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes] [--allow-bypass] [--telegram]\n       agentsflow flow FILE --task <text> --yes [--team pair|trio|FILE] [--allow-bypass] [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();

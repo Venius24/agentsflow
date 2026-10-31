@@ -7,6 +7,7 @@ mod mail_mcp;
 mod runtime;
 mod server;
 mod team;
+mod telegram;
 #[cfg(test)]
 mod testing;
 mod workflow;
