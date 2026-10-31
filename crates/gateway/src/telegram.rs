@@ -13,6 +13,14 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+mod screens;
+
+#[derive(Clone)]
+pub struct Control {
+    pub specs: Vec<crate::workflow::Spec>,
+    pub manager: crate::workflow::Manager,
+}
+
 #[derive(Clone)]
 pub struct Config {
     token: String,
@@ -123,9 +131,17 @@ fn bot_commands() -> Value {
         {"command":"team","description":"Команда"},
         {"command":"requests","description":"Запросы на разрешение"},
         {"command":"board","description":"Доска задач"},
+        {"command":"task","description":"Новая задача"},
         {"command":"mail","description":"Почта"},
         {"command":"ask","description":"Написать агенту"},
+        {"command":"agent","description":"Карточка агента"},
         {"command":"stop","description":"Остановить агента"},
+        {"command":"run","description":"Запустить workflow"},
+        {"command":"stats","description":"Статистика"},
+        {"command":"log","description":"Что делал агент"},
+        {"command":"export","description":"Экспорт переписки"},
+        {"command":"mute","description":"Тишина"},
+        {"command":"unmute","description":"Включить звук"},
         {"command":"status","description":"Состояние команды"},
         {"command":"more","description":"Другие действия"},
         {"command":"help","description":"Помощь"}
@@ -194,6 +210,7 @@ struct Outgoing {
     text: String,
     key: Option<u64>,
     critical: bool,
+    buttons: Option<Value>,
 }
 struct Pending {
     agent: AgentId,
@@ -242,6 +259,13 @@ struct Bridge {
     drafts: HashMap<i64, Draft>,
     bypass_confirmed: HashSet<AgentId>,
     muted: HashSet<i64>,
+    inputs: HashMap<i64, screens::Input>,
+    wf: Option<screens::WorkflowView>,
+    wf_live: HashMap<i64, (i64, String)>,
+    control: Option<Control>,
+    mail_seen: HashSet<String>,
+    exported: bool,
+    task_seen: HashMap<String, agentsflow_events::TaskStatus>,
 }
 
 impl Bridge {
@@ -251,6 +275,11 @@ impl Bridge {
     }
 
     fn with_hub(config: Config, agents: Agents, team: Team, hub: Hub) -> Self {
+        let task_seen = hub
+            .tasks(true)
+            .into_iter()
+            .map(|task| (task.id, task.status))
+            .collect();
         Self {
             hub,
             bot: config.bot(),
@@ -273,6 +302,13 @@ impl Bridge {
             drafts: HashMap::new(),
             bypass_confirmed: HashSet::new(),
             muted: HashSet::new(),
+            inputs: HashMap::new(),
+            wf: None,
+            wf_live: HashMap::new(),
+            control: None,
+            mail_seen: HashSet::new(),
+            exported: false,
+            task_seen,
         }
     }
     fn queue(&mut self, chat: i64, text: &str, key: Option<u64>) {
@@ -300,12 +336,23 @@ impl Bridge {
             text,
             key,
             critical,
+            buttons: None,
         });
     }
     fn broadcast(&mut self, text: &str, key: Option<u64>) {
         for chat in self.config.users.clone() {
             if key.is_some() || !self.muted.contains(&chat) {
                 self.queue(chat, text, key);
+            }
+        }
+    }
+    fn broadcast_buttons(&mut self, text: &str, buttons: Value) {
+        for chat in self.config.users.clone() {
+            if !self.muted.contains(&chat) {
+                self.queue_html(chat, text.to_owned(), None);
+                if let Some(item) = self.queues.get_mut(&chat).and_then(VecDeque::back_mut) {
+                    item.buttons = Some(buttons.clone());
+                }
             }
         }
     }
@@ -319,6 +366,7 @@ impl Bridge {
     fn handle_event(&mut self, envelope: Envelope) -> Vec<(i64, i64, String)> {
         let agent = envelope.agent;
         let mut edits = Vec::new();
+        self.track_workflow(&envelope.event);
         match envelope.event {
             Event::Message {
                 role: Role::Assistant,
@@ -463,12 +511,41 @@ impl Bridge {
                 to,
                 subject,
                 body,
+                thread,
                 ..
             } if to == AgentId::orchestrator() => {
                 let from = message_text(from.as_str(), &self.config.token, 100);
                 let subject = message_text(&subject, &self.config.token, 200);
                 let body = message_text(&body, &self.config.token, 400);
-                self.broadcast_html(&format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{body}"));
+                self.broadcast_buttons(
+                    &format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{body}"),
+                    json!({"inline_keyboard":[[{"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}]]}),
+                );
+            }
+            Event::Task { task } => {
+                let previous = self.task_seen.insert(task.id.clone(), task.status.clone());
+                if previous.as_ref() != Some(&task.status) {
+                    let who = message_text(
+                        task.assignee
+                            .as_ref()
+                            .map_or("исполнитель", AgentId::as_str),
+                        &self.config.token,
+                        100,
+                    );
+                    let title = message_text(&task.title, &self.config.token, 200);
+                    let open = json!({"text":"Открыть","callback_data":format!("s:t:{}", task.id)});
+                    match task.status {
+                        agentsflow_events::TaskStatus::Review => self.broadcast_buttons(
+                            &format!("👀 <b>{who}</b> сдал задачу «{title}» на проверку"),
+                            json!({"inline_keyboard":[[open,{"text":"✅ Принять","callback_data":format!("s:ta:{}:acc", task.id)}]]}),
+                        ),
+                        agentsflow_events::TaskStatus::Blocked => self.broadcast_buttons(
+                            &format!("🧱 <b>{who}</b>: задача «{title}» застряла"),
+                            json!({"inline_keyboard":[[open]]}),
+                        ),
+                        _ => {}
+                    }
+                }
             }
             Event::Workflow {
                 name,
@@ -565,6 +642,8 @@ impl Bridge {
                     }
                     request["reply_markup"] = json!({"inline_keyboard":rows});
                 }
+            } else if let Some(buttons) = &item.buttons {
+                request["reply_markup"] = buttons.clone();
             } else {
                 request["reply_markup"] = menu_keyboard();
             }
@@ -809,24 +888,27 @@ impl Bridge {
         self.next_key = self.next_key.wrapping_add(1);
         let key = self.next_key;
         let text = "<b>⚙ Ещё</b>";
-        let button = if self.muted.contains(&chat) {
+        let mute = if self.muted.contains(&chat) {
             "🔔 Звук"
         } else {
             "🔕 Тишина"
         };
-        let mut payload = json!({"chat_id":chat,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":[[{"text":"← Назад","callback_data":format!("ui:team:{key}")}],[{"text":button,"callback_data":format!("ui:mute:{key}")}]]}});
-        let method = if let Some(message) = existing {
-            payload["message_id"] = json!(message);
-            "editMessageText"
-        } else {
-            "sendMessage"
-        };
-        let response: Result<Value, _> = self.bot.request(method, Some(payload)).await;
-        let message = existing.or_else(|| {
-            response
-                .ok()
-                .and_then(|value| value.pointer("/result/message_id").and_then(Value::as_i64))
-        });
+        let rows = vec![
+            vec![
+                json!({"text":"📊 Статистика","callback_data":"s:st"}),
+                json!({"text":"⚙ Запуск workflow","callback_data":"s:w"}),
+            ],
+            vec![
+                json!({"text":"📜 Что делал агент","callback_data":"s:lg"}),
+                json!({"text":"⬇ Экспорт","callback_data":"s:ex"}),
+            ],
+            vec![
+                json!({"text":mute,"callback_data":format!("ui:mute:{key}")}),
+                json!({"text":"ℹ Помощь","callback_data":"s:help"}),
+            ],
+            vec![json!({"text":"← Назад","callback_data":format!("ui:team:{key}")})],
+        ];
+        let message = self.show(chat, existing, text.into(), rows).await;
         if let Some(message) = message {
             self.screens.insert(
                 chat,
@@ -1116,9 +1198,20 @@ impl Bridge {
                 self.answer(id, "").await;
                 return;
             }
+            if data.starts_with("s:") {
+                let chat = user.unwrap_or_default();
+                let message = callback
+                    .pointer("/message/message_id")
+                    .and_then(Value::as_i64);
+                self.screens.remove(&chat);
+                let flash = self.route(chat, message, data).await;
+                self.answer(id, &flash).await;
+                return;
+            }
             if data.starts_with("ui:") {
                 let chat = user.unwrap_or_default();
                 self.drafts.remove(&chat);
+                self.inputs.remove(&chat);
                 let parts: Vec<_> = data.split(':').collect();
                 let key = parts.get(2).and_then(|v| v.parse::<u64>().ok());
                 let screen = self.screens.get(&chat);
@@ -1180,6 +1273,7 @@ impl Bridge {
                     }
                     Some("write") if self.config.prompts => {
                         if let Some(agent) = active_agent {
+                            self.inputs.remove(&chat);
                             self.next_key = self.next_key.wrapping_add(1);
                             let key = self.next_key;
                             self.drafts.insert(
@@ -1384,6 +1478,10 @@ impl Bridge {
                     raw,
                     "👥 Команда" | "🔐 Запросы" | "📋 Доска" | "✉ Почта" | "⚙ Ещё"
                 );
+            if !is_menu && self.inputs.contains_key(&chat) {
+                self.process_input(chat, raw).await;
+                return;
+            }
             if !is_menu && self.drafts.contains_key(&chat) {
                 let text = raw.trim();
                 if text.is_empty() || text.chars().count() > 8000 {
@@ -1398,6 +1496,10 @@ impl Bridge {
             }
             if is_menu {
                 self.drafts.remove(&chat);
+                self.inputs.remove(&chat);
+            }
+            if self.handle_command(chat, raw).await {
+                return;
             }
             if let Some(args) = raw.strip_prefix("/ask ") {
                 if !self.config.prompts {
@@ -1443,6 +1545,10 @@ impl Bridge {
                 self.open_requests(chat, None).await;
                 return;
             }
+            if matches!(raw, "/agent") {
+                self.open_team(chat, None, None).await;
+                return;
+            }
             if let Some(id) = raw.strip_prefix("/agent ") {
                 let agent = AgentId::from(id.trim());
                 if self.team.get(&agent).is_some() {
@@ -1465,41 +1571,33 @@ impl Bridge {
                 _ => words.next().unwrap_or("").split('@').next().unwrap_or(""),
             };
             let answer = match command {
-                "/start" | "/help" => {
-                    "Здесь можно следить за командой и управлять агентами.\n👥 Команда - состояние агентов.\n🔐 Запросы - решения о разрешениях.\n📋 Доска и ✉ Почта - задачи и сообщения.\nЗапросы на разрешение придут сюда сами.\nНаписать агенту: /ask <имя> <текст>. Остановить: ⏹ на карточке агента. Время: UTC."
-                        .to_owned()
+                "/start" | "/help" => screens::HELP.to_owned(),
+                "/ask" => "Укажите агента и задание: /ask <имя> <текст>".to_owned(),
+                "/mute" => {
+                    self.muted.insert(chat);
+                    "Тишина включена".to_owned()
                 }
-                "/mail" => "Скоро".to_owned(),
-                "/more" => "Тишина: /mute · Звук: /unmute".to_owned(),
-                "/mute" => { self.muted.insert(chat); "Тишина включена".to_owned() },
-                "/unmute" => { self.muted.remove(&chat); "Звук включён".to_owned() },
-                "/requests" => if self.pending.is_empty() { "Ничего не ждёт вашего решения ✔".to_owned() } else {
-                    let list = self.pending.values().map(|pending| format!("{}: {}", pending.agent, pending.detail.chars().take(120).collect::<String>())).collect::<Vec<_>>().join("\n");
-                    format!("Ожидают вашего решения (карточки присланы выше):\n{list}")
-                },
-                "/board" => {
-                    let tasks = self.hub.tasks(true);
-                    let mut counts = std::collections::BTreeMap::from([
-                        ("backlog".to_owned(), 0usize), ("todo".to_owned(), 0),
-                        ("in_progress".to_owned(), 0), ("review".to_owned(), 0),
-                        ("done".to_owned(), 0), ("blocked".to_owned(), 0),
-                        ("archived".to_owned(), 0),
-                    ]);
-                    for task in &tasks {
-                        let status = serde_json::to_value(&task.status).unwrap_or_default();
-                        *counts.entry(status.as_str().unwrap_or("unknown").to_owned()).or_insert(0usize) += 1;
-                    }
-                    let mut text = counts.iter().map(|(s, n)| format!("{s}: {n}")).collect::<Vec<_>>().join(", ");
-                    for task in tasks.iter().filter(|t| t.status == agentsflow_events::TaskStatus::InProgress).take(10) {
-                        text.push_str(&format!("\n{}: {} - {} ({}%)", task.id, task.title, task.assignee.as_ref().map_or("-", AgentId::as_str), task.progress));
-                    }
-                    text
+                "/unmute" => {
+                    self.muted.remove(&chat);
+                    "Звук включён".to_owned()
                 }
-                "/task" => {
-                    let title = words.collect::<Vec<_>>().join(" ");
-                    match self.hub.create_task(AgentId::orchestrator(), NewTask { title, description: String::new(), assignee: None, status: None, labels: Vec::new() }) {
-                        Ok(task) => format!("Задача создана: {} - {}", task.id, task.title),
-                        Err(error) => format!("Не удалось создать задачу: {error}"),
+                "/requests" => {
+                    if self.pending.is_empty() {
+                        "Ничего не ждёт вашего решения ✔".to_owned()
+                    } else {
+                        let list = self
+                            .pending
+                            .values()
+                            .map(|pending| {
+                                format!(
+                                    "{}: {}",
+                                    pending.agent,
+                                    pending.detail.chars().take(120).collect::<String>()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        format!("Ожидают вашего решения (карточки присланы выше):\n{list}")
                     }
                 }
                 "/status" => self
@@ -1648,10 +1746,12 @@ pub async fn run(
     hub: Hub,
     agents: Agents,
     team: Team,
+    control: Option<Control>,
     mut stop: watch::Receiver<bool>,
 ) {
     let (history, mut events) = hub.subscribe();
     let mut bridge = Bridge::with_hub(config.clone(), agents, team, hub.clone());
+    bridge.control = control;
     for event in history {
         if matches!(
             event.event,
@@ -1672,27 +1772,28 @@ pub async fn run(
     let mut operation_stop = stop.clone();
     loop {
         tokio::select! {
-            biased;
-            _ = stop.wait_for(|v| *v) => break,
-            event = events.recv() => match event {
-                Ok(event) => { let refresh = matches!(event.event, Event::PermissionRequest { .. } | Event::PermissionResolved { .. } | Event::Done { .. }); let edits = bridge.handle_event(event); tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.edit(edits).await; if refresh { bridge.refresh_requests().await; } } => {} } }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    let (history, receiver) = hub.subscribe(); events = receiver;
-                    for event in &history {
-                        if matches!(event.event, Event::PermissionResolved { .. }) {
-                            let edits = bridge.handle_event(event.clone());
-                            tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.edit(edits) => {} }
-                        }
-                    }
-                    for event in history { if matches!(event.event, Event::PermissionRequest { .. }) { bridge.handle_event(event); } }
-                }
-                Err(_) => break,
-            },
-            Some(update) = updates.recv() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.update(&update) => {} },
-            _ = tick.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.flush() => {} },
-            _ = stats.tick() => if bridge.rejected > 0 { eprintln!("telegram: ignored {} unauthorized updates", bridge.rejected); bridge.rejected = 0; },
-            _ = screens.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.refresh_screens() => {} },
-        }
+                   biased;
+                   _ = stop.wait_for(|v| *v) => break,
+                   event = events.recv() => match event {
+                       Ok(event) => { let refresh = matches!(event.event, Event::PermissionRequest { .. } | Event::PermissionResolved { .. } | Event::Done { .. }); let workflow = matches!(event.event, Event::Workflow { .. }); let edits = bridge.handle_event(event); tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.edit(edits).await; if refresh { bridge.refresh_requests().await; }
+        if workflow { bridge.refresh_workflow().await; } } => {} } }
+                       Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                           let (history, receiver) = hub.subscribe(); events = receiver;
+                           for event in &history {
+                               if matches!(event.event, Event::PermissionResolved { .. }) {
+                                   let edits = bridge.handle_event(event.clone());
+                                   tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.edit(edits) => {} }
+                               }
+                           }
+                           for event in history { if matches!(event.event, Event::PermissionRequest { .. }) { bridge.handle_event(event); } }
+                       }
+                       Err(_) => break,
+                   },
+                   Some(update) = updates.recv() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.update(&update) => {} },
+                   _ = tick.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.flush() => {} },
+                   _ = stats.tick() => if bridge.rejected > 0 { eprintln!("telegram: ignored {} unauthorized updates", bridge.rejected); bridge.rejected = 0; },
+                   _ = screens.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.refresh_screens().await; bridge.refresh_workflow().await; } => {} },
+               }
     }
     polling.abort();
     let _ = polling.await;
@@ -1854,48 +1955,6 @@ mod tests {
         }));
         assert!(bridge.queues[&11][0].text.contains("guard"));
         assert!(bridge.queues[&11][0].critical);
-    }
-
-    #[tokio::test]
-    async fn board_and_task_commands_use_shared_hub() {
-        let hub = Hub::new();
-        let received = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
-        let app = Router::new().route("/{path}/{method}", post(|Path((path, method)): Path<(String, String)>, State(received): State<RequestLog>, Json(body): Json<Value>| async move {
-            received.lock().unwrap().push((format!("{path}/{method}"), body));
-            Json(json!({"ok":true,"result":{"message_id":1,"date":1,"chat":{"id":11,"type":"private"}}}))
-        })).with_state(received.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let config = Config::parse("secret".into(), "11", format!("http://{address}")).unwrap();
-        let mut bridge = Bridge::with_hub(
-            config,
-            Agents::new(),
-            Team::preset("pair").unwrap(),
-            hub.clone(),
-        );
-        bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/task New task"}})).await;
-        assert_eq!(hub.tasks(false)[0].title, "New task");
-        bridge.flush().await;
-        bridge.last_sent.clear();
-        bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/board"}})).await;
-        assert!(
-            bridge.queues[&11]
-                .iter()
-                .any(|item| item.text.contains("backlog: 1"))
-        );
-        bridge.flush().await;
-        assert!(
-            received
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(path, body)| path == "botsecret/sendMessage"
-                    && body["text"].as_str().unwrap().contains("backlog: 1"))
-        );
-        bridge.update(&json!({"message":{"from":{"id":99},"chat":{"id":99,"type":"private"},"text":"/task unwanted"}})).await;
-        assert_eq!(hub.tasks(false).len(), 1);
-        server.abort();
     }
 
     #[tokio::test]
