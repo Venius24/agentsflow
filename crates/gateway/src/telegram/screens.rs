@@ -7,6 +7,10 @@ use agentsflow_events::{TaskSnapshot, TaskStatus};
 
 pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
 
+pub(super) fn help_text() -> String {
+    format!("{HELP}\nВерсия: {}", env!("CARGO_PKG_VERSION"))
+}
+
 const STATUSES: [TaskStatus; 6] = [
     TaskStatus::Backlog,
     TaskStatus::Todo,
@@ -1236,14 +1240,14 @@ impl Bridge {
 
     // ---------- команды и кнопки ----------
     pub(super) async fn handle_command(&mut self, chat: i64, raw: &str) -> bool {
-        let (command, rest) = raw
-            .split_once(char::is_whitespace)
-            .map_or((raw, ""), |(c, r)| (c, r.trim()));
-        let command = match command {
-            "📋 Доска" => "/board",
-            "✉ Почта" => "/mail",
-            other => other.split('@').next().unwrap_or(""),
+        let (command, rest) = match raw {
+            "📋 Доска" => ("/board", ""),
+            "✉ Почта" => ("/mail", ""),
+            _ => raw
+                .split_once(char::is_whitespace)
+                .map_or((raw, ""), |(c, r)| (c, r.trim())),
         };
+        let command = command.split('@').next().unwrap_or("");
         match command {
             "/board" => self.open_board(chat, None, 9, 0).await,
             "/task" => {
@@ -1318,7 +1322,7 @@ impl Bridge {
         match arg(1) {
             "more" => self.open_more(chat, message).await,
             "team" => self.open_team(chat, None, message).await,
-            "help" => self.queue(chat, HELP, None),
+            "help" => self.queue(chat, &help_text(), None),
             "b" => {
                 self.open_board(chat, message, number(2).unwrap_or(9), number(3).unwrap_or(0))
                     .await

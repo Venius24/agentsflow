@@ -488,6 +488,11 @@ async fn stats_log_export_more_and_help() {
     ] {
         assert!(help.contains(command), "{command}");
     }
+    let version_line = format!("Версия: {}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(help.lines().last(), Some(version_line.as_str()));
+    bridge.update(&cb("s:help")).await;
+    let help = &bridge.queues[&11].back().unwrap().text;
+    assert_eq!(help.lines().last(), Some(version_line.as_str()));
     server.abort();
 }
 
@@ -517,5 +522,26 @@ async fn unknown_user_gets_silence_and_every_command_is_handled() {
             "/{name} is registered but not handled"
         );
     }
+    server.abort();
+}
+
+#[tokio::test]
+async fn persistent_keyboard_buttons_open_their_screens() {
+    let hub = Hub::new();
+    hub.set_mail_enabled(true);
+    let (mut bridge, calls, server) = fake(hub).await;
+    bridge.update(&msg("📋 Доска")).await;
+    assert!(last_text(&calls).contains("Доска"));
+    bridge.update(&msg("✉ Почта")).await;
+    assert!(last_text(&calls).contains("Почта"));
+    bridge.update(&msg("⚙ Ещё")).await;
+    assert!(last_text(&calls).contains("Ещё"));
+    assert!(
+        bridge
+            .queues
+            .values()
+            .flatten()
+            .all(|item| item.text != "Используйте /help")
+    );
     server.abort();
 }

@@ -1571,7 +1571,7 @@ impl Bridge {
                 _ => words.next().unwrap_or("").split('@').next().unwrap_or(""),
             };
             let answer = match command {
-                "/start" | "/help" => screens::HELP.to_owned(),
+                "/start" | "/help" => screens::help_text(),
                 "/ask" => "Укажите агента и задание: /ask <имя> <текст>".to_owned(),
                 "/mute" => {
                     self.muted.insert(chat);
