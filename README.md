@@ -31,7 +31,7 @@ cargo run -p agentsflow-gateway -- serve --cwd path/to/project
 
 | Команда | Что делает |
 |---|---|
-| `agentsflow serve [--port N] [--cwd DIR] [--team pair\|trio\|FILE] [--workflow FILE]…` | Сервер и веб-страница. `--port 0` — свободный порт. |
+| `agentsflow serve [--port N] [--cwd DIR] [--team pair\|trio\|FILE] [--allow-bypass] [--workflow FILE]…` | Сервер и веб-страница. `--port 0` — свободный порт. |
 | `agentsflow team init [FILE]` / `team check <pair\|trio\|FILE>` / `team show` | Создать конфигурацию, проверить команду или показать пресеты. |
 | `agentsflow claude "<prompt>" [--model M] [--cwd DIR] [--yes]` | Один ход Claude, события в консоль, разрешения через `y/N`. |
 | `agentsflow codex "<prompt>" [--sandbox read-only\|workspace-write] [--codex-bin PATH] …` | То же для Codex. |
@@ -62,6 +62,25 @@ roles = ["engineer"]
 ```
 
 Запуск: `agentsflow serve --team team.toml`. Допустимы 1–6 участников и ровно один лидер; ID состоят из строчных латинских букв, цифр, `_` и `-`. В почте участники адресуются по ID, в workflow — по ID или роли. Старый `--agents claude,codex` фильтрует `pair` и несовместим с `--team`. Модель из настроек участника имеет приоритет над общим флагом модели.
+
+Режим доступа задаётся отдельно для каждого участника:
+
+| Поле | Значения и наследование |
+|---|---|
+| `mode` | `ask` — спрашивать разрешения; `auto` — разрешать автоматически; `bypass` — обход разрешений и песочницы Codex. Если поле не задано, используется `auto` при `--yes`, иначе `ask`. |
+| `sandbox` | Только для Codex: `read-only` или `workspace-write`. Без поля наследуется `--sandbox`, иначе используется `read-only`. В `bypass` поле запрещено. |
+
+В пресете `trio` участники `main` и `junior` используют `workspace-write` и наследуют режим. Для bypass нужно явно подтвердить запуск флагом `--allow-bypass` у `serve` или `flow`; `team check` выводит предупреждение. **Bypass снимает проверки разрешений, а у Codex также песочницу:** используйте его только когда доверяете задаче и окружению. Пример участника без песочницы:
+
+```toml
+[[agent]]
+id = "worker"
+kind = "codex"
+lead = true
+mode = "bypass"
+```
+
+Запуск: `agentsflow serve --team team.toml --allow-bypass`. Глобальный `--sandbox` не принимает `danger-full-access`.
 
 Веб-страница получает состав команды из `/api/state` и показывает колонки в порядке конфигурации. События из старых журналов для неизвестных ID отображаются в отдельных нейтральных колонках.
 

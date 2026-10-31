@@ -1,6 +1,6 @@
 use crate::{
     hub::{Actor, Hub},
-    team::Team,
+    team::{AccessMode, Member, MemberSandbox, Team},
 };
 use agentsflow_adapters::{
     claude::{ClaudeOptions, ClaudeSession},
@@ -23,6 +23,7 @@ pub struct RuntimeOptions {
     pub sandbox: Option<SandboxMode>,
     pub codex_bin: Option<PathBuf>,
     pub yes: bool,
+    pub allow_bypass: bool,
     pub log: Option<PathBuf>,
     pub mail: Option<agentsflow_adapters::MailConfig>,
     pub mail_agent_tokens: MailAgentTokens,
@@ -38,6 +39,7 @@ impl Default for RuntimeOptions {
             sandbox: None,
             codex_bin: None,
             yes: false,
+            allow_bypass: false,
             log: None,
             mail: None,
             mail_agent_tokens: MailAgentTokens::new(),
@@ -53,9 +55,44 @@ pub struct Runtime {
     tasks: Vec<JoinHandle<()>>,
     mail_stop: Option<tokio::sync::watch::Sender<bool>>,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+struct EffectiveAccess {
+    mode: AccessMode,
+    sandbox: Option<MemberSandbox>,
+}
+
+fn effective_access(
+    member: &Member,
+    yes: bool,
+    global_sandbox: Option<SandboxMode>,
+) -> EffectiveAccess {
+    let mode = member.mode.unwrap_or(if yes {
+        AccessMode::Auto
+    } else {
+        AccessMode::Ask
+    });
+    let sandbox = if member.kind == AgentKind::Codex && mode != AccessMode::Bypass {
+        Some(member.sandbox.unwrap_or(match global_sandbox {
+            Some(SandboxMode::Workspace_write) => MemberSandbox::WorkspaceWrite,
+            _ => MemberSandbox::ReadOnly,
+        }))
+    } else {
+        None
+    };
+    EffectiveAccess { mode, sandbox }
+}
+
 impl Runtime {
     pub fn new(options: RuntimeOptions) -> Result<Self> {
         options.team.validate()?;
+        options.team.check_bypass(options.allow_bypass)?;
+        let mut team = options.team.clone();
+        for member in &mut team.members {
+            let access = effective_access(member, options.yes, options.sandbox.clone());
+            member.mode = Some(access.mode);
+            member.sandbox = access.sandbox;
+        }
         let cwd = std::path::absolute(options.cwd)?;
         let hub = options.log.as_deref().map_or_else(Hub::new, Hub::with_log);
         let mail = options.mail.map(|mut mail| {
@@ -74,7 +111,7 @@ impl Runtime {
         hub.set_mail_thread_limit(options.mail_thread_limit);
         let mut tasks = Vec::new();
         let mut agents = Agents::new();
-        for member in &options.team.members {
+        for member in &team.members {
             let cwd = cwd.clone();
             let model = member.model.clone().or_else(|| match member.kind {
                 AgentKind::Claude => options.claude_model.clone(),
@@ -92,21 +129,27 @@ impl Runtime {
                     .collect();
                 config
             });
+            let yes = member.mode != Some(AccessMode::Ask);
+            let bypass = member.mode == Some(AccessMode::Bypass);
             let (actor, task) = match member.kind {
                 AgentKind::Claude => {
-                    crate::hub::spawn(hub.clone(), member.id.clone(), options.yes, move || {
+                    crate::hub::spawn(hub.clone(), member.id.clone(), yes, move || {
                         ClaudeSession::start(ClaudeOptions {
                             cwd: Some(cwd.clone()),
                             model: model.clone(),
                             mail: mail_config.clone(),
                             effort: effort.clone(),
+                            bypass,
                         })
                     })
                 }
                 AgentKind::Codex => {
-                    let sandbox = options.sandbox.clone();
+                    let sandbox = member.sandbox.map(|sandbox| match sandbox {
+                        MemberSandbox::ReadOnly => SandboxMode::Read_only,
+                        MemberSandbox::WorkspaceWrite => SandboxMode::Workspace_write,
+                    });
                     let bin = options.codex_bin.clone();
-                    crate::hub::spawn(hub.clone(), member.id.clone(), options.yes, move || {
+                    crate::hub::spawn(hub.clone(), member.id.clone(), yes, move || {
                         CodexSession::start(CodexOptions {
                             cwd: Some(cwd.clone()),
                             model: model.clone(),
@@ -114,6 +157,7 @@ impl Runtime {
                             bin: bin.clone(),
                             mail: mail_config.clone(),
                             effort: effort.clone(),
+                            bypass,
                         })
                     })
                 }
@@ -131,7 +175,7 @@ impl Runtime {
             tasks.push(tokio::task::spawn_local(crate::mail::wake(
                 hub.clone(),
                 wake_agents,
-                options.team.clone(),
+                team.clone(),
                 rx,
             )));
             Some(tx)
@@ -141,7 +185,7 @@ impl Runtime {
         Ok(Self {
             hub,
             agents,
-            team: options.team,
+            team,
             cwd,
             tasks,
             mail_stop,
@@ -157,5 +201,66 @@ impl Runtime {
         for task in self.tasks {
             let _ = task.await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_inherits_flags_and_respects_member_overrides() {
+        let team = Team::preset("pair").unwrap();
+        let claude = &team.members[0];
+        let codex = &team.members[1];
+        assert_eq!(
+            effective_access(claude, false, None),
+            EffectiveAccess {
+                mode: AccessMode::Ask,
+                sandbox: None
+            }
+        );
+        assert_eq!(
+            effective_access(claude, true, None),
+            EffectiveAccess {
+                mode: AccessMode::Auto,
+                sandbox: None
+            }
+        );
+        assert_eq!(
+            effective_access(codex, true, Some(SandboxMode::Workspace_write)),
+            EffectiveAccess {
+                mode: AccessMode::Auto,
+                sandbox: Some(MemberSandbox::WorkspaceWrite)
+            }
+        );
+        let mut overridden = codex.clone();
+        overridden.mode = Some(AccessMode::Ask);
+        overridden.sandbox = Some(MemberSandbox::ReadOnly);
+        assert_eq!(
+            effective_access(&overridden, true, Some(SandboxMode::Workspace_write)),
+            EffectiveAccess {
+                mode: AccessMode::Ask,
+                sandbox: Some(MemberSandbox::ReadOnly)
+            }
+        );
+        overridden.mode = Some(AccessMode::Bypass);
+        overridden.sandbox = None;
+        assert_eq!(
+            effective_access(&overridden, false, None),
+            EffectiveAccess {
+                mode: AccessMode::Bypass,
+                sandbox: None
+            }
+        );
+        let trio = Team::preset("trio").unwrap();
+        assert_eq!(
+            effective_access(&trio.members[1], false, None),
+            effective_access(&trio.members[2], false, None)
+        );
+        assert_eq!(
+            effective_access(&trio.members[1], false, None).sandbox,
+            Some(MemberSandbox::WorkspaceWrite)
+        );
     }
 }

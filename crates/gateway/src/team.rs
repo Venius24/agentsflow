@@ -3,6 +3,21 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccessMode {
+    Ask,
+    Auto,
+    Bypass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemberSandbox {
+    ReadOnly,
+    WorkspaceWrite,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Member {
@@ -10,6 +25,8 @@ pub struct Member {
     pub kind: AgentKind,
     pub model: Option<String>,
     pub effort: Option<String>,
+    pub mode: Option<AccessMode>,
+    pub sandbox: Option<MemberSandbox>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
@@ -81,6 +98,15 @@ impl Team {
             if !ids.insert(&member.id) {
                 bail!("agent {}: duplicate id", member.id);
             }
+            if member.kind == AgentKind::Claude && member.sandbox.is_some() {
+                bail!(
+                    "agent {}: sandbox applies to codex only (claude has no sandbox)",
+                    member.id
+                );
+            }
+            if member.mode == Some(AccessMode::Bypass) && member.sandbox.is_some() {
+                bail!("agent {}: bypass has no sandbox", member.id);
+            }
             if let Some(effort) = &member.effort {
                 let valid = match member.kind {
                     AgentKind::Claude => {
@@ -97,6 +123,21 @@ impl Team {
         }
         if self.members.iter().filter(|m| m.lead).count() != 1 {
             bail!("team must have exactly one agent with lead = true");
+        }
+        Ok(())
+    }
+    pub fn check_bypass(&self, allowed: bool) -> Result<()> {
+        let ids: Vec<_> = self
+            .members
+            .iter()
+            .filter(|m| m.mode == Some(AccessMode::Bypass))
+            .map(|m| m.id.to_string())
+            .collect();
+        if !allowed && !ids.is_empty() {
+            bail!(
+                "bypass for {} disables permission prompts and sandbox; --allow-bypass is required",
+                ids.join(", ")
+            );
         }
         Ok(())
     }
@@ -144,11 +185,24 @@ pub fn format_compact(team: &Team) -> String {
             if member.lead {
                 details.push_str(", lead");
             }
+            if member.mode == Some(AccessMode::Bypass) {
+                details.push_str(", BYPASS");
+            }
             format!("{}({details})", member.id)
         })
         .collect::<Vec<_>>()
         .join(" ");
     format!("team: {members}")
+}
+
+fn bypass_warning(team: &Team) -> Option<String> {
+    let bypass: Vec<_> = team
+        .members
+        .iter()
+        .filter(|m| m.mode == Some(AccessMode::Bypass))
+        .map(|m| m.id.to_string())
+        .collect();
+    (!bypass.is_empty()).then(|| format!("WARNING: bypass: {}", bypass.join(", ")))
 }
 
 pub fn run_cli(args: &[String]) -> Result<()> {
@@ -160,7 +214,11 @@ pub fn run_cli(args: &[String]) -> Result<()> {
             }
         }
         [command, spec] if command == "check" => {
-            print_team(&Team::load(spec)?);
+            let team = Team::load(spec)?;
+            print_team(&team);
+            if let Some(warning) = bypass_warning(&team) {
+                println!("{warning}");
+            }
             println!("OK");
         }
         [command] if command == "init" => init(Path::new("team.toml"))?,
@@ -223,6 +281,11 @@ roles = ["engineer"]
 "#;
 
 pub const TEMPLATE: &str = r#"# У каждого участника отдельный процесс и почтовый ящик.
+# mode: ask (спрашивать), auto (разрешать), bypass (обход разрешений).
+# По умолчанию mode наследует --yes: auto при --yes, иначе ask.
+# bypass снимает разрешения и песочницу; для запуска нужен --allow-bypass.
+# mode = "bypass"
+# sandbox только для codex: read-only или workspace-write; без поля наследует --sandbox.
 # id: 1–24 символа из a-z, 0-9, _ и -, кроме user и orchestrator.
 [[agent]]
 id = "lead"
@@ -239,6 +302,7 @@ id = "main"
 kind = "codex"
 model = "gpt-6.1-terra"
 effort = "medium"
+sandbox = "workspace-write"
 title = "главный инженер"
 roles = ["engineer"]
 
@@ -247,6 +311,7 @@ id = "junior"
 kind = "codex"
 model = "gpt-6.1-terra"
 effort = "low"
+sandbox = "workspace-write"
 title = "младший инженер"
 roles = ["junior", "engineer"]
 
@@ -265,6 +330,36 @@ mod tests {
         assert_eq!(team.by_role("engineer").unwrap().id.as_str(), "main");
         assert_eq!(team.others(&AgentId::from("lead")).count(), 2);
         assert_eq!(Team::preset("pair").unwrap().ids().count(), 2);
+    }
+    #[test]
+    fn validates_access_settings() {
+        for (text, error) in [
+            (
+                "[[agent]]\nid='a'\nkind='claude'\nlead=true\nsandbox='read-only'",
+                "sandbox applies to codex only",
+            ),
+            (
+                "[[agent]]\nid='a'\nkind='codex'\nlead=true\nmode='bypass'\nsandbox='read-only'",
+                "bypass has no sandbox",
+            ),
+            (
+                "[[agent]]\nid='a'\nkind='codex'\nlead=true\nmode='bogus'",
+                "invalid team TOML",
+            ),
+        ] {
+            assert!(format!("{:#}", Team::from_toml(text).unwrap_err()).contains(error));
+        }
+        let team =
+            Team::from_toml("[[agent]]\nid='a'\nkind='claude'\nlead=true\nmode='bypass'").unwrap();
+        assert!(
+            team.check_bypass(false)
+                .unwrap_err()
+                .to_string()
+                .contains("--allow-bypass")
+        );
+        assert!(team.check_bypass(true).is_ok());
+        assert!(format_compact(&team).contains("BYPASS"));
+        assert_eq!(bypass_warning(&team).as_deref(), Some("WARNING: bypass: a"));
     }
     #[test]
     fn compact_team_format() {

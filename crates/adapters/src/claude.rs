@@ -138,6 +138,7 @@ pub struct ClaudeOptions {
     pub cwd: Option<PathBuf>,
     pub mail: Option<crate::MailConfig>,
     pub effort: Option<String>,
+    pub bypass: bool,
 }
 
 const STDOUT_BUFFER_SIZE: usize = 10 * 1024 * 1024;
@@ -177,6 +178,12 @@ async fn next_line(lines: &mut Lines) -> Result<String> {
     Ok(lines.recv().await.context("claude closed")??)
 }
 
+fn configure_bypass(command: &mut tokio::process::Command, bypass: bool) {
+    if bypass {
+        command.arg("--dangerously-skip-permissions");
+    }
+}
+
 impl ClaudeSession {
     pub async fn start(opts: ClaudeOptions) -> Result<Self> {
         let mut builder = ClaudeCliBuilder::new().permission_prompt_tool("stdio");
@@ -193,6 +200,7 @@ impl ClaudeSession {
             builder = builder.working_directory(cwd);
         }
         let mut command = builder.build_command()?;
+        configure_bypass(&mut command, opts.bypass);
         if let Some(effort) = opts.effort {
             command.arg("--effort").arg(effort);
         }
@@ -348,6 +356,21 @@ impl crate::Agent for ClaudeSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bypass_adds_cli_flag_only_when_requested() {
+        for bypass in [false, true] {
+            let mut command = tokio::process::Command::new("claude");
+            configure_bypass(&mut command, bypass);
+            assert_eq!(
+                command
+                    .as_std()
+                    .get_args()
+                    .any(|arg| arg == "--dangerously-skip-permissions"),
+                bypass
+            );
+        }
+    }
     use serde_json::json;
 
     fn map(frame: Value) -> Vec<Event> {
@@ -521,6 +544,7 @@ mod tests {
             cwd: None,
             mail: None,
             effort: None,
+            bypass: false,
         })
         .await?;
         session
