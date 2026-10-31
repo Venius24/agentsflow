@@ -14,6 +14,7 @@ agentsflow-adapters = { path = "../adapters" }
 agentsflow-events = { path = "../events" }
 anyhow.workspace = true
 axum.workspace = true
+frankenstein.workspace = true
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true

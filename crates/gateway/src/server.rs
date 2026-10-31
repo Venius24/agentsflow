@@ -38,6 +38,8 @@ pub struct ServeOptions {
     codex_bin: Option<PathBuf>,
     yes: bool,
     allow_bypass: bool,
+    telegram_requested: bool,
+    telegram: Option<crate::telegram::Config>,
     workflows: Vec<PathBuf>,
     log: Option<PathBuf>,
     mail_thread_limit: usize,
@@ -60,6 +62,9 @@ impl ServeOptions {
             options.team = Team::filtered_pair(options.claude, options.codex)?;
         }
         options.team.check_bypass(options.allow_bypass)?;
+        if options.telegram_requested {
+            options.telegram = Some(crate::telegram::Config::from_env()?);
+        }
         Ok(Some(options))
     }
     fn parse_basic(args: &[String]) -> Option<Self> {
@@ -75,6 +80,8 @@ impl ServeOptions {
             codex_bin: None,
             yes: false,
             allow_bypass: false,
+            telegram_requested: false,
+            telegram: None,
             workflows: Vec::new(),
             log: None,
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
@@ -87,6 +94,10 @@ impl ServeOptions {
             }
             if arg == "--allow-bypass" {
                 options.allow_bypass = true;
+                continue;
+            }
+            if arg == "--telegram" {
+                options.telegram_requested = true;
                 continue;
             }
             let value = args.next()?;
@@ -621,6 +632,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         runtime.team.clone(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let telegram_stop = shutdown_rx.clone();
     let state = AppState {
         hub: runtime.hub.clone(),
         token: token.clone(),
@@ -635,6 +647,15 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     };
     println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
     eprintln!("{}", crate::team::format_compact(&runtime.team));
+    let telegram_task = options.telegram.map(|config| {
+        tokio::task::spawn_local(crate::telegram::run(
+            config,
+            runtime.hub.clone(),
+            runtime.agents.clone(),
+            runtime.team.clone(),
+            telegram_stop,
+        ))
+    });
     let result = axum::serve(listener, app(state))
         .with_graceful_shutdown(async move {
             if let Err(error) = tokio::signal::ctrl_c().await {
@@ -643,6 +664,9 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
             let _ = shutdown_tx.send(true);
         })
         .await;
+    if let Some(task) = telegram_task {
+        let _ = task.await;
+    }
     manager.stop();
     while manager.state().running {
         tokio::task::yield_now().await;
