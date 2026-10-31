@@ -1,6 +1,6 @@
 use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Duration};
 
-use crate::hub::{Actor, Hub, HubError};
+use crate::hub::{Actor, Hub, HubError, NewTask, TaskError, TaskPatch};
 use crate::{
     runtime::{Agents, MailAgentTokens, Runtime, RuntimeOptions},
     team::Team,
@@ -18,7 +18,7 @@ use axum::{
         Html, IntoResponse, Response,
         sse::{Event as SseEvent, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use futures_util::{StreamExt, stream};
 use serde::Deserialize;
@@ -234,6 +234,12 @@ fn authorize(identity: Identity, method: &axum::http::Method, path: &str) -> boo
     identity == Identity::Main
         || (*method == axum::http::Method::POST
             && matches!(path, "/api/mail/send" | "/api/mail/inbox"))
+        || (*method == axum::http::Method::GET && path == "/api/tasks/mine")
+        || (*method == axum::http::Method::POST
+            && path
+                .strip_prefix("/api/tasks/")
+                .and_then(|s| s.strip_suffix("/update"))
+                .is_some_and(|id| !id.is_empty() && !id.contains('/')))
 }
 fn authenticate(
     header: &str,
@@ -331,12 +337,18 @@ async fn export(
         .unwrap_or_default()
         .as_millis();
     let disposition = format!("attachment; filename=\"agentsflow-{timestamp}.{extension}\"");
+    let tasks = state.hub.tasks(true);
+    let content = if extension == "md" && !tasks.is_empty() {
+        crate::export::render_markdown_with_tasks(&snapshot, &tasks)
+    } else {
+        format(&snapshot)
+    };
     (
         [
             (header::CONTENT_TYPE, content_type.to_string()),
             (header::CONTENT_DISPOSITION, disposition),
         ],
-        format(&snapshot),
+        content,
     )
         .into_response()
 }
@@ -583,6 +595,172 @@ async fn stop_workflow(State(state): State<AppState>) -> Response {
     }
 }
 
+fn task_failure(error: TaskError) -> Response {
+    let status = match error {
+        TaskError::NotFound => StatusCode::NOT_FOUND,
+        TaskError::Limit | TaskError::MailDisabled | TaskError::NoAssignee => StatusCode::CONFLICT,
+        TaskError::Forbidden => StatusCode::FORBIDDEN,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (status, Json(json!({"error":error.to_string()}))).into_response()
+}
+
+async fn list_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let include = match query.get("include_archived").map(String::as_str) {
+        None | Some("0") => false,
+        Some("1") => true,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"invalid include_archived"})),
+            )
+                .into_response();
+        }
+    };
+    Json(json!({"tasks":state.hub.tasks(include)})).into_response()
+}
+async fn create_task(
+    State(state): State<AppState>,
+    input: Result<Json<NewTask>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(input)) = input else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid task"})),
+        )
+            .into_response();
+    };
+    if let Some(id) = &input.assignee {
+        if state.team.get(id).is_none() {
+            return unknown_agent(&state, id.as_str(), StatusCode::BAD_REQUEST);
+        }
+    }
+    match state.hub.create_task(AgentId::orchestrator(), input) {
+        Ok(task) => (StatusCode::CREATED, Json(json!({"task":task}))).into_response(),
+        Err(error) => task_failure(error),
+    }
+}
+async fn patch_task(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    input: Result<Json<TaskPatch>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(patch)) = input else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid task patch"})),
+        )
+            .into_response();
+    };
+    if let Some(Some(agent)) = &patch.assignee {
+        if state.team.get(agent).is_none() {
+            return unknown_agent(&state, agent.as_str(), StatusCode::BAD_REQUEST);
+        }
+    }
+    match state.hub.update_task(AgentId::orchestrator(), &id, patch) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => task_failure(error),
+    }
+}
+async fn dispatch_task(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    match state.hub.dispatch_task(&id) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => task_failure(error),
+    }
+}
+async fn my_tasks(
+    State(state): State<AppState>,
+    Extension(identity): Extension<Identity>,
+) -> Response {
+    let tasks: Vec<_> = state
+        .hub
+        .tasks(false)
+        .into_iter()
+        .filter(|task| match &identity {
+            Identity::Main => true,
+            Identity::Agent(agent) => task.assignee.as_ref() == Some(agent),
+        })
+        .collect();
+    Json(json!({"tasks":tasks})).into_response()
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentTaskPatch {
+    status: Option<agentsflow_events::TaskStatus>,
+    progress: Option<u8>,
+    note: Option<String>,
+}
+async fn update_my_task(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Extension(identity): Extension<Identity>,
+    input: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let Ok(Json(value)) = input else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid task patch"})),
+        )
+            .into_response();
+    };
+    if identity == Identity::Main {
+        let Ok(patch) = serde_json::from_value::<TaskPatch>(value) else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"invalid task patch"})),
+            )
+                .into_response();
+        };
+        return patch_task(State(state), axum::extract::Path(id), Ok(Json(patch))).await;
+    }
+    let Identity::Agent(agent) = identity else {
+        unreachable!()
+    };
+    if !value.as_object().is_some_and(|obj| {
+        obj.keys()
+            .all(|key| matches!(key.as_str(), "status" | "progress" | "note"))
+    }) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"only status, progress and note may be updated"})),
+        )
+            .into_response();
+    }
+    let Ok(input) = serde_json::from_value::<AgentTaskPatch>(value) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid task patch"})),
+        )
+            .into_response();
+    };
+    if matches!(
+        input.status,
+        Some(agentsflow_events::TaskStatus::Done | agentsflow_events::TaskStatus::Archived)
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"only the orchestrator can close a task; set review"})),
+        )
+            .into_response();
+    }
+    let patch = TaskPatch {
+        status: input.status,
+        progress: input.progress,
+        note: input.note,
+        ..Default::default()
+    };
+    match state.hub.update_task_owned(agent, &id, patch) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => task_failure(error),
+    }
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
@@ -593,6 +771,11 @@ fn app(state: AppState) -> Router {
         .route("/api/permission", post(permission))
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/inbox", post(inbox))
+        .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/mine", get(my_tasks))
+        .route("/api/tasks/{id}", patch(patch_task))
+        .route("/api/tasks/{id}/dispatch", post(dispatch_task))
+        .route("/api/tasks/{id}/update", post(update_my_task))
         .route("/api/state", get(get_state))
         .route("/api/team", get(get_team))
         .route("/api/workflows", get(list_workflows))
@@ -679,6 +862,191 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn task_routes_and_agent_permissions() {
+        LocalSet::new()
+            .run_until(async {
+                let runtime = Runtime::new(RuntimeOptions::default()).unwrap();
+                let manager = Manager::new(
+                    runtime.hub.clone(),
+                    runtime.agents.clone(),
+                    runtime.team.clone(),
+                );
+                let (_tx, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub: runtime.hub.clone(),
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::new(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents: runtime.agents.clone(),
+                    team: runtime.team.clone(),
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                let make = |assignee: Option<&str>| NewTask {
+                    title: "task".into(),
+                    description: "work".into(),
+                    assignee: assignee.map(AgentId::from),
+                    status: None,
+                    labels: vec![],
+                };
+                assert_eq!(
+                    create_task(State(state.clone()), Ok(Json(make(Some("unknown")))))
+                        .await
+                        .status(),
+                    StatusCode::BAD_REQUEST
+                );
+                assert_eq!(
+                    create_task(State(state.clone()), Ok(Json(make(Some("claude")))))
+                        .await
+                        .status(),
+                    StatusCode::CREATED
+                );
+                let task = runtime.hub.tasks(false).remove(0);
+                assert_eq!(
+                    dispatch_task(State(state.clone()), axum::extract::Path(task.id.clone()))
+                        .await
+                        .status(),
+                    StatusCode::CONFLICT
+                );
+                runtime.hub.set_mail_enabled(true);
+                let result =
+                    dispatch_task(State(state.clone()), axum::extract::Path(task.id.clone())).await;
+                assert_eq!(result.status(), StatusCode::OK);
+                assert_eq!(
+                    runtime.hub.task(&task.id).unwrap().status,
+                    agentsflow_events::TaskStatus::InProgress
+                );
+                assert_eq!(
+                    runtime.hub.unread(AgentId::from("claude"))[0].thread,
+                    runtime.hub.task(&task.id).unwrap().thread.unwrap()
+                );
+                let claude = Identity::Agent(AgentId::from("claude"));
+                let codex = Identity::Agent(AgentId::from("codex"));
+                let listed = list_tasks(State(state.clone()), Query(HashMap::new())).await;
+                let bytes = axum::body::to_bytes(listed.into_body(), 65536)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()["tasks"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                let mine = my_tasks(State(state.clone()), Extension(claude.clone())).await;
+                let bytes = axum::body::to_bytes(mine.into_body(), 65536).await.unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()["tasks"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+                let mine = my_tasks(State(state.clone()), Extension(codex.clone())).await;
+                let bytes = axum::body::to_bytes(mine.into_body(), 65536).await.unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()["tasks"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    0
+                );
+                let update = |status: &str| Ok(Json(json!({"status":status})));
+                assert_eq!(
+                    update_my_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Extension(codex),
+                        update("review")
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    update_my_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Extension(claude.clone()),
+                        update("archived")
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    update_my_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Extension(claude.clone()),
+                        Ok(Json(json!({"title":"bad"})))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    update_my_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Extension(claude.clone()),
+                        update("done")
+                    )
+                    .await
+                    .status(),
+                    StatusCode::FORBIDDEN
+                );
+                assert_eq!(
+                    update_my_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Extension(claude),
+                        update("review")
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                assert!(!authorize(
+                    Identity::Agent(AgentId::from("claude")),
+                    &axum::http::Method::PATCH,
+                    &format!("/api/tasks/{}", task.id)
+                ));
+                assert!(authorize(
+                    Identity::Agent(AgentId::from("claude")),
+                    &axum::http::Method::GET,
+                    "/api/tasks/mine"
+                ));
+                assert!(authorize(
+                    Identity::Agent(AgentId::from("claude")),
+                    &axum::http::Method::POST,
+                    &format!("/api/tasks/{}/update", task.id)
+                ));
+                let patch: TaskPatch = serde_json::from_value(json!({"assignee":null})).unwrap();
+                assert_eq!(
+                    patch_task(
+                        State(state.clone()),
+                        axum::extract::Path(task.id.clone()),
+                        Ok(Json(patch))
+                    )
+                    .await
+                    .status(),
+                    StatusCode::OK
+                );
+                assert_eq!(
+                    dispatch_task(State(state), axum::extract::Path(task.id))
+                        .await
+                        .status(),
+                    StatusCode::CONFLICT
+                );
+                runtime.shutdown().await;
+            })
+            .await;
+    }
 
     #[test]
     fn personal_token_access() {

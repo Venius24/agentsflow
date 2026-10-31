@@ -13,7 +13,9 @@ fn tools_for(peers: &str) -> Value {
     let peers: Vec<_> = peers.split(',').filter(|s| !s.is_empty()).collect();
     json!([
         {"name":"send_mail", "description":format!("Send a request or reply to a team member. Recipients: {}. Set thread to reply in the same conversation.", peers.join(", ")), "inputSchema":{"type":"object","properties":{"to":{"type":"string","enum":peers},"subject":{"type":"string"},"body":{"type":"string"},"thread":{"type":"string","description":"Thread ID for a reply in the same conversation."}},"required":["to","subject","body"]}},
-        {"name":"check_inbox", "description":"Check your inbox for unread requests and replies from other agents and mark them read. Reply with send_mail using the same thread when appropriate.","inputSchema":{"type":"object","properties":{}}}
+        {"name":"check_inbox", "description":"Check your inbox for unread requests and replies from other agents and mark them read. Reply with send_mail using the same thread when appropriate.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"list_my_tasks", "description":"List tasks assigned to you.", "inputSchema":{"type":"object","properties":{}}},
+        {"name":"update_task", "description":"Update your assigned task. Set review when finished; the orchestrator closes tasks.", "inputSchema":{"type":"object","properties":{"id":{"type":"string"},"status":{"type":"string","enum":["backlog","todo","in_progress","review","blocked"]},"progress":{"type":"integer","minimum":0,"maximum":100},"note":{"type":"string"}},"required":["id"]}}
     ])
 }
 fn text_result(text: String, error: bool) -> Value {
@@ -83,6 +85,29 @@ where
                 .collect::<Result<Vec<_>>>()
                 .map(|lines| lines.join("\n\n"))
         }
+        "list_my_tasks" => {
+            let response = send("/api/tasks/mine", json!({})).await?;
+            Ok(serde_json::to_string(&response["tasks"])?)
+        }
+        "update_task" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .context("missing id")?;
+            if id.len() != 8 || !id.bytes().all(|c| c.is_ascii_hexdigit()) {
+                bail!("invalid task id");
+            }
+            if args
+                .keys()
+                .any(|key| !matches!(key.as_str(), "id" | "status" | "progress" | "note"))
+            {
+                bail!("invalid update field");
+            }
+            let mut patch = args.clone();
+            patch.remove("id");
+            let response = send(&format!("/api/tasks/{id}/update"), Value::Object(patch)).await?;
+            Ok(serde_json::to_string(&response["task"])?)
+        }
         name => bail!("unknown tool: {name}"),
     }
 }
@@ -133,9 +158,18 @@ async fn post(url: &str, token: &str, path: &str, body: Value) -> Result<Value> 
         bail!("invalid token");
     }
     let mut stream = TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).await?;
-    let body = serde_json::to_vec(&body)?;
+    let method = if path == "/api/tasks/mine" {
+        "GET"
+    } else {
+        "POST"
+    };
+    let body = if method == "GET" {
+        Vec::new()
+    } else {
+        serde_json::to_vec(&body)?
+    };
     let headers = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-agentsflow-token: {token}\r\nConnection: close\r\n\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nx-agentsflow-token: {token}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(headers.as_bytes()).await?;
@@ -216,6 +250,87 @@ mod tests {
     use super::*;
     use tokio::net::TcpListener;
 
+    #[tokio::test]
+    async fn task_tools_call_expected_endpoints() {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let send = |path: &str, body: Value| {
+            let path = path.to_owned();
+            let calls = calls.clone();
+            async move {
+                calls.lock().unwrap().push((path.clone(), body));
+                Ok(if path.ends_with("mine") {
+                    json!({"tasks":[{"id":"1234abcd"}]})
+                } else {
+                    json!({"task":{"id":"1234abcd","status":"review"}})
+                })
+            }
+        };
+        let list = handle(
+            json!({"id":1,"method":"tools/call","params":{"name":"list_my_tasks","arguments":{}}}),
+            "claude",
+            &send,
+        )
+        .await
+        .unwrap();
+        assert!(
+            list["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("1234abcd")
+        );
+        let update = handle(json!({"id":2,"method":"tools/call","params":{"name":"update_task","arguments":{"id":"1234abcd","status":"review","progress":90}}}), "claude", &send).await.unwrap();
+        assert_eq!(update["result"]["isError"], false);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[0].0, "/api/tasks/mine");
+        assert_eq!(calls[1].0, "/api/tasks/1234abcd/update");
+        assert_eq!(calls[1].1, json!({"status":"review","progress":90}));
+    }
+
+    #[tokio::test]
+    async fn task_list_uses_get_over_loopback() {
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(&mut stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            assert_eq!(line, "GET /api/tasks/mine HTTP/1.1\r\n");
+            loop {
+                line.clear();
+                reader.read_line(&mut line).await.unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            drop(reader);
+            let body = b"{\"tasks\":[]}";
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(body).await.unwrap();
+        });
+        let result = post(
+            &format!("http://127.0.0.1:{port}"),
+            "token",
+            "/api/tasks/mine",
+            json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["tasks"], json!([]));
+        server.await.unwrap();
+    }
+
     #[test]
     fn tools_list_configured_peers() {
         let tools = tools_for("lead,main,junior,orchestrator");
@@ -256,7 +371,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            4
         );
         assert!(
             handle(

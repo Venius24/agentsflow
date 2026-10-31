@@ -1,4 +1,4 @@
-use agentsflow_events::{AgentId, Envelope, Event, Role, WorkflowStatus};
+use agentsflow_events::{AgentId, Envelope, Event, Role, TaskSnapshot, TaskStatus, WorkflowStatus};
 use std::fmt::Write;
 
 const TOOL_INPUT_LIMIT: usize = 200;
@@ -17,6 +17,20 @@ pub fn render_jsonl(events: &[Envelope]) -> String {
 /// A readable transcript. Event text never reaches the output as raw HTML or
 /// as a fence that could swallow the rest of the document.
 pub fn render_markdown(events: &[Envelope]) -> String {
+    let mut tasks: Vec<TaskSnapshot> = Vec::new();
+    for envelope in events {
+        if let Event::Task { task } = &envelope.event {
+            if let Some(current) = tasks.iter_mut().find(|t| t.id == task.id) {
+                *current = task.clone();
+            } else {
+                tasks.push(task.clone());
+            }
+        }
+    }
+    render_markdown_with_tasks(events, &tasks)
+}
+
+pub fn render_markdown_with_tasks(events: &[Envelope], current_tasks: &[TaskSnapshot]) -> String {
     let mut out = String::from("# agentsflow session transcript\n\n");
     let range = events
         .iter()
@@ -41,6 +55,37 @@ pub fn render_markdown(events: &[Envelope]) -> String {
             out.push_str(&block);
         }
     }
+    let mut tasks = current_tasks.to_vec();
+    if !tasks.is_empty() {
+        tasks.sort_by_key(|task| task.created_ms);
+        out.push_str("\n## Задачи\n");
+        for (status, title) in [
+            (TaskStatus::Backlog, "Backlog"),
+            (TaskStatus::Todo, "Todo"),
+            (TaskStatus::InProgress, "In progress"),
+            (TaskStatus::Review, "Review"),
+            (TaskStatus::Done, "Done"),
+            (TaskStatus::Blocked, "Blocked"),
+            (TaskStatus::Archived, "Archived"),
+        ] {
+            let group: Vec<_> = tasks.iter().filter(|task| task.status == status).collect();
+            if group.is_empty() {
+                continue;
+            }
+            let _ = writeln!(out, "\n### {title}");
+            for task in group {
+                let assignee = task.assignee.as_ref().map_or("-", AgentId::as_str);
+                let _ = writeln!(
+                    out,
+                    "- {} - {} - {}% - {}",
+                    escape_inline(&task.title),
+                    escape_inline(assignee),
+                    task.progress,
+                    escape_inline(&task.note)
+                );
+            }
+        }
+    }
     out
 }
 
@@ -48,6 +93,7 @@ fn render_event(envelope: &Envelope) -> Option<String> {
     let agent = agent_name(&envelope.agent);
     let mut out = String::new();
     match &envelope.event {
+        Event::Task { .. } => return None,
         Event::Message { role, text, .. } => {
             let role = match role {
                 Role::User => "user",
@@ -286,6 +332,57 @@ fn escape_inline(text: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tasks_section_uses_latest_snapshot() {
+        let task = TaskSnapshot {
+            id: "12345678".into(),
+            title: "Build".into(),
+            description: String::new(),
+            status: TaskStatus::Todo,
+            assignee: Some(AgentId::from("codex")),
+            progress: 0,
+            labels: vec![],
+            note: String::new(),
+            thread: None,
+            created_ms: 1,
+            updated_ms: 1,
+        };
+        let mut updated = task.clone();
+        updated.status = TaskStatus::Review;
+        updated.progress = 80;
+        updated.note = "ready".into();
+        let out = render_markdown(&[
+            env(1, 1, AgentId::orchestrator(), Event::Task { task }),
+            env(2, 2, AgentId::from("codex"), Event::Task { task: updated }),
+        ]);
+        assert!(out.contains("## Задачи"));
+        assert!(out.contains("### Review"));
+        assert!(
+            out.contains("Build")
+                && out.contains("codex")
+                && out.contains("80%")
+                && out.contains("ready")
+        );
+        assert!(!out.contains("### Todo"));
+        let out = render_markdown_with_tasks(
+            &[],
+            &[TaskSnapshot {
+                id: "outside".into(),
+                title: "Outside history".into(),
+                description: String::new(),
+                status: TaskStatus::Todo,
+                assignee: None,
+                progress: 0,
+                labels: vec![],
+                note: String::new(),
+                thread: None,
+                created_ms: 1,
+                updated_ms: 1,
+            }],
+        );
+        assert!(out.contains("Outside history"));
+    }
 
     fn env(seq: u64, ts_ms: u64, agent: AgentId, event: Event) -> Envelope {
         Envelope {
