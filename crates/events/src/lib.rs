@@ -86,6 +86,11 @@ pub struct TaskSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cost_usd: Option<f64>,
+    },
     Task {
         task: TaskSnapshot,
     },
@@ -191,6 +196,16 @@ mod tests {
     #[test]
     fn events_roundtrip_json() {
         let events = [
+            Event::Usage {
+                input_tokens: 31,
+                output_tokens: 7,
+                cost_usd: Some(0.12),
+            },
+            Event::Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cost_usd: None,
+            },
             Event::Task {
                 task: TaskSnapshot {
                     id: "12345678".into(),

@@ -206,7 +206,7 @@ fn installed_binary() -> Option<PathBuf> {
     None
 }
 
-fn find_binary(explicit: Option<PathBuf>) -> PathBuf {
+pub fn find_binary(explicit: Option<PathBuf>) -> PathBuf {
     choose_binary(
         explicit,
         std::env::var_os("CODEX_BIN")

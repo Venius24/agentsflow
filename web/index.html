@@ -548,6 +548,7 @@ function permButtons(agent, ev, fail) {
 }
 
 function handle(env) {
+  if (env.event.type === "usage") return;
   recordViewEvent(env);
   if (env.event.type === "mail") { handleMail(env); return; }
   if (env.event.type === "mail_read") { handleMailRead(env.event); return; }
@@ -1138,6 +1139,8 @@ function renderDash() {
     for (const [status, label] of Object.entries(statuses)) summary.append(el("span", "chip", label + ": " + (statsData.tasks[status] || 0)));
     const t = statsData.totals;
     summary.append(el("span", "chip", `Workflow: ${t.workflows_total} / ${t.workflows_finished} успешно / ${t.workflows_failed} ошибок`), el("span", "chip", "Писем: " + t.mails_total));
+    const totals = team.reduce((sum, member) => { const stats = statsData.agents[member.id] || {}; sum.input += stats.input_tokens || 0; sum.output += stats.output_tokens || 0; sum.cost += stats.cost_usd || 0; return sum; }, { input: 0, output: 0, cost: 0 });
+    summary.append(el("span", "chip", "Токены: " + totals.input + " / " + totals.output), el("span", "chip", "Стоимость: " + (totals.cost > 0 ? "$" + totals.cost.toFixed(2) : "нет данных")));
   }
   const grid = el("div", "dash-grid");
   for (const member of team) {
@@ -1146,6 +1149,7 @@ function renderDash() {
     card.append(el("h2", "", member.id), el("div", "dash-muted", [member.kind, member.model || "по умолчанию", member.effort || "по умолчанию", member.mode].join(" · ")));
     card.append(el("span", "chip", pane ? pane.chip.textContent : "свободен"));
     const list = el("dl");
+    list.append(el("dt", "", "Токены"), el("dd", "", (stats.input_tokens || 0) + " / " + (stats.output_tokens || 0)), el("dt", "", "Стоимость"), el("dd", "", stats.cost_usd > 0 ? "$" + stats.cost_usd.toFixed(2) : "нет данных"));
     for (const [label, value] of [["Ходы", stats.turns || 0], ["Ошибки", stats.turn_errors || 0], ["Остановки", stats.interrupted || 0], ["Время работы", duration(stats.busy_ms || 0)], ["Инструменты", stats.tool_calls || 0], ["Разрешения", stats.permission_requests || 0], ["Отказы guard", stats.guard_denied || 0], ["Писем отправлено / получено", (stats.mails_sent || 0) + " / " + (stats.mails_received || 0)], ["Последняя активность", stats.last_activity_ms ? duration(Math.max(0, Date.now() - stats.last_activity_ms)) + " назад" : "нет"]]) list.append(el("dt", "", label), el("dd", "", String(value)));
     const more = el("details", "dash-more");
     more.append(el("summary", "", "Все показатели"), list);

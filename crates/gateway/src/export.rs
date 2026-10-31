@@ -93,7 +93,7 @@ fn render_event(envelope: &Envelope) -> Option<String> {
     let agent = agent_name(&envelope.agent);
     let mut out = String::new();
     match &envelope.event {
-        Event::Task { .. } => return None,
+        Event::Task { .. } | Event::Usage { .. } => return None,
         Event::Message { role, text, .. } => {
             let role = match role {
                 Role::User => "user",
@@ -332,6 +332,26 @@ fn escape_inline(text: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn usage_is_only_in_jsonl() {
+        let event = env(
+            1,
+            0,
+            AgentId::from("claude"),
+            Event::Usage {
+                input_tokens: 123,
+                output_tokens: 45,
+                cost_usd: Some(0.12),
+            },
+        );
+        assert!(render_event(&event).is_none());
+        let line = render_jsonl(&[event]);
+        let envelope: Envelope = serde_json::from_str(line.trim()).unwrap();
+        assert!(
+            matches!(envelope.event, Event::Usage { input_tokens: 123, output_tokens: 45, cost_usd: Some(cost) } if cost == 0.12)
+        );
+    }
 
     #[test]
     fn tasks_section_uses_latest_snapshot() {

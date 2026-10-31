@@ -9,7 +9,7 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE | --no-log] [--mail-thread-limit N] [--yes] [--allow-bypass] [--telegram]\n       agentsflow flow FILE --task <text> --yes [--team pair|trio|FILE] [--allow-bypass] [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
+pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE | --no-log] [--mail-thread-limit N] [--yes] [--allow-bypass] [--telegram]\n       agentsflow flow FILE --task <text> --yes [--team pair|trio|FILE] [--allow-bypass] [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow doctor [--live] [--codex-bin PATH]\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();
@@ -23,6 +23,14 @@ fn truncate(text: &str) -> String {
 
 pub fn format_event(agent: &str, event: &Event) -> String {
     match event {
+        Event::Usage {
+            input_tokens,
+            output_tokens,
+            cost_usd,
+        } => format!(
+            "[usage] input {input_tokens}, output {output_tokens}, cost {}",
+            cost_usd.map_or_else(|| "unknown".into(), |cost| format!("${cost:.2}"))
+        ),
         Event::Task { task } => format!(
             "[task] {}: {} ({:?}, {}%)",
             task.id, task.title, task.status, task.progress

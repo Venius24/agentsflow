@@ -52,6 +52,9 @@ pub(crate) enum ResolutionOrigin {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct AgentStats {
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: f64,
     turns: u64,
     turn_errors: u64,
     interrupted: u64,
@@ -94,6 +97,17 @@ impl Statistics {
         let stats = self.agents.entry(agent.clone()).or_default();
         stats.last_activity_ms = stats.last_activity_ms.max(envelope.ts_ms);
         match &envelope.event {
+            Event::Usage {
+                input_tokens,
+                output_tokens,
+                cost_usd,
+            } => {
+                stats.input_tokens = stats.input_tokens.saturating_add(*input_tokens);
+                stats.output_tokens = stats.output_tokens.saturating_add(*output_tokens);
+                if let Some(cost) = cost_usd.filter(|cost| cost.is_finite() && *cost >= 0.0) {
+                    stats.cost_usd += cost;
+                }
+            }
             Event::Message {
                 role: Role::User, ..
             } => {
@@ -1479,6 +1493,24 @@ mod tests {
             )
             .unwrap();
             hub.publish(
+                agent.clone(),
+                "session",
+                Event::Usage {
+                    input_tokens: 60,
+                    output_tokens: 4,
+                    cost_usd: Some(0.125),
+                },
+            );
+            hub.publish(
+                agent.clone(),
+                "session",
+                Event::Usage {
+                    input_tokens: 10,
+                    output_tokens: 2,
+                    cost_usd: None,
+                },
+            );
+            hub.publish(
                 agent,
                 "session",
                 Event::Done {
@@ -1491,6 +1523,9 @@ mod tests {
             assert_eq!(before["agents"]["claude"]["tool_calls"], 1);
             assert_eq!(before["agents"]["claude"]["permission_requests"], 1);
             assert_eq!(before["agents"]["claude"]["guard_denied"], 1);
+            assert_eq!(before["agents"]["claude"]["input_tokens"], 70);
+            assert_eq!(before["agents"]["claude"]["output_tokens"], 6);
+            assert_eq!(before["agents"]["claude"]["cost_usd"], 0.125);
             assert_eq!(before["agents"]["orchestrator"]["mails_received"], 1);
         }
         let hub = Hub::with_log(&path);
