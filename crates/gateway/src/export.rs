@@ -229,7 +229,7 @@ fn status_name(status: &WorkflowStatus) -> &'static str {
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` for a Unix time in milliseconds.
-fn format_ts(ts_ms: u64) -> String {
+pub(crate) fn format_ts(ts_ms: u64) -> String {
     let secs = ts_ms / 1000;
     let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX / 2);
     let rem = secs % 86_400;

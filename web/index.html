@@ -421,6 +421,13 @@ function buildPane(a, enabled = true) {
   head.append(chip, stop);
   const stopError = el("div", "export-error");
   stopError.setAttribute("role", "alert");
+  const failure = el("div", "errline");
+  failure.setAttribute("aria-live", "polite");
+  failure.hidden = true;
+  const failureText = el("span");
+  const restart = el("button", "", "Перезапустить");
+  restart.type = "button";
+  failure.append(failureText, restart);
   const log = el("div", "log");
   const empty = el("div", "empty", "Событий пока нет. Отправьте промпт ниже.");
   log.append(empty);
@@ -429,14 +436,20 @@ function buildPane(a, enabled = true) {
   const btn = el("button", "send", "Отправить");
   btn.type = "submit";
   form.append(input, btn);
-  col.append(head, stopError, log, form);
+  col.append(head, stopError, failure, log, form);
   $("#panes").insertBefore(col, orch.col || null);
 
-  const p = { a, col, name, lead, bypass, guard, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
+  const p = { a, col, name, lead, bypass, guard, subtitle, chip, stop, stopError, failure, failureText, restart, lastError: null, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
               tools: new Map(), perms: new Map() };
   panes[a.id] = p;
   updatePaneInfo(p, a);
   watchSticky(p);
+  restart.onclick = async () => {
+    restart.disabled = true;
+    try { await post("/api/agent/restart", { agent: a.id }); await loadState(); }
+    catch (err) { stopError.textContent = "Не удалось перезапустить: " + err.message; }
+    finally { restart.disabled = false; }
+  };
 
   stop.addEventListener("click", async () => {
     if (!p.enabled || !p.busy || p.stopping) return;
@@ -1027,6 +1040,9 @@ async function loadState() {
       pane.enabled = !!(st && st.enabled);
       pane.busy = !!(st && st.busy);
       pane.pending = new Set(st && Array.isArray(st.pending) ? st.pending : []);
+      pane.lastError = st && st.last_error || null;
+      pane.failure.hidden = !pane.lastError;
+      pane.failureText.textContent = pane.lastError ? "Ошибка: " + pane.lastError + " " : "";
       refreshStatus(pane);
       $("#panes").insertBefore(pane.col, orch.col);
     }
@@ -1140,7 +1156,7 @@ function renderDash() {
     const t = statsData.totals;
     summary.append(el("span", "chip", `Workflow: ${t.workflows_total} / ${t.workflows_finished} успешно / ${t.workflows_failed} ошибок`), el("span", "chip", "Писем: " + t.mails_total));
     const totals = team.reduce((sum, member) => { const stats = statsData.agents[member.id] || {}; sum.input += stats.input_tokens || 0; sum.output += stats.output_tokens || 0; sum.cost += stats.cost_usd || 0; return sum; }, { input: 0, output: 0, cost: 0 });
-    summary.append(el("span", "chip", "Токены: " + totals.input + " / " + totals.output), el("span", "chip", "Стоимость: " + (totals.cost > 0 ? "$" + totals.cost.toFixed(2) : "нет данных")));
+    summary.append(el("span", "chip", "Токены: " + totals.input + " / " + totals.output), el("span", "chip", "Стоимость (только Claude): " + (totals.cost > 0 ? "$" + totals.cost.toFixed(2) : "нет данных")));
   }
   const grid = el("div", "dash-grid");
   for (const member of team) {
@@ -1472,7 +1488,7 @@ function timetable() {
 }
 let ovSig = "";
 function overviewSignature(width) {
-  return JSON.stringify([width, ov.focus, team.map(m => [m.id, agentState(m.id), m.mode, unreadFrom(m.id), (recentEvents.get(m.id) || []).slice(-1), statsData && statsData.agents[m.id] ? [statsData.agents[m.id].turns, ago(Math.max(0, Date.now() - (statsData.agents[m.id].last_activity_ms || 0)))] : 0]),
+  return JSON.stringify([width, ov.focus, team.map(m => [m.id, agentState(m.id), panes[m.id] && panes[m.id].lastError, m.mode, unreadFrom(m.id), (recentEvents.get(m.id) || []).slice(-1), statsData && statsData.agents[m.id] ? [statsData.agents[m.id].turns, ago(Math.max(0, Date.now() - (statsData.agents[m.id].last_activity_ms || 0)))] : 0]),
     [...taskCards.values()].map(t => [t.id, t.status, t.progress, t.title, t.assignee, t.note]), [...waits.perms.keys()], [...armedPerms]]);
 }
 function renderOverview(force) {
@@ -1509,6 +1525,15 @@ function renderOverview(force) {
   }
   diagBox.append(legend);
   main.append(el("h1", "page-title", "Обзор команды"), diagBox);
+  for (const member of team) {
+    const pane = panes[member.id];
+    if (!pane || !pane.lastError) continue;
+    const row = el("div", "errline"); row.setAttribute("aria-live", "polite");
+    const button = el("button", "", "Перезапустить"); button.type = "button";
+    button.onclick = () => pane.restart.click();
+    row.append(el("span", "", member.id + " - Ошибка: " + pane.lastError + " "), button);
+    main.append(row);
+  }
   if (ov.focus) main.append(focusPanel(ov.focus));
   const counts = {};
   for (const t of taskCards.values()) counts[t.status] = (counts[t.status] || 0) + 1;

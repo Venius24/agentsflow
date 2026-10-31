@@ -195,12 +195,12 @@ impl Bridge {
     }
     fn agent_status(&self, id: &AgentId) -> &'static str {
         let state = self.agents.get(id).map(|a| a.state()).unwrap_or_default();
-        if !state.pending.is_empty() {
+        if state.last_error.is_some() {
+            "🔴"
+        } else if !state.pending.is_empty() {
             "🟡"
         } else if state.busy {
             "🟢"
-        } else if self.errors.contains(id) {
-            "🔴"
         } else {
             "⚪"
         }
@@ -1027,7 +1027,7 @@ impl Bridge {
         }
         text.push_str(&format!("\nВсего токенов: {total_input}/{total_output}"));
         if total_cost > 0.0 {
-            text.push_str(&format!(" · ${total_cost:.2}"));
+            text.push_str(&format!(" · стоимость (только Claude) ${total_cost:.2}"));
         }
         self.show(
             chat,
