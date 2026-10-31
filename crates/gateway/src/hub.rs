@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fs::{File, OpenOptions},
     future::Future,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -38,6 +38,94 @@ struct Data {
     mail_thread_limit: usize,
     mail_enabled: bool,
     tasks: Vec<TaskSnapshot>,
+    stats: Statistics,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AgentStats {
+    turns: u64,
+    turn_errors: u64,
+    interrupted: u64,
+    busy_ms: u64,
+    tool_calls: u64,
+    permission_requests: u64,
+    guard_denied: u64,
+    mails_sent: u64,
+    mails_received: u64,
+    last_activity_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct StatsTotals {
+    workflows_total: u64,
+    workflows_finished: u64,
+    workflows_failed: u64,
+    workflows_stopped: u64,
+    mails_total: u64,
+}
+
+#[derive(Default)]
+struct Statistics {
+    agents: BTreeMap<AgentId, AgentStats>,
+    totals: StatsTotals,
+    turns: HashMap<AgentId, u64>,
+}
+
+#[derive(Serialize)]
+pub struct StatsSnapshot {
+    generated_ms: u64,
+    pub agents: BTreeMap<AgentId, AgentStats>,
+    totals: StatsTotals,
+    tasks: BTreeMap<String, usize>,
+}
+
+impl Statistics {
+    fn record(&mut self, envelope: &Envelope) {
+        let agent = envelope.agent.clone();
+        let stats = self.agents.entry(agent.clone()).or_default();
+        stats.last_activity_ms = stats.last_activity_ms.max(envelope.ts_ms);
+        match &envelope.event {
+            Event::Message {
+                role: Role::User, ..
+            } => {
+                self.turns.insert(agent, envelope.ts_ms);
+            }
+            Event::Done { reason } => {
+                stats.turns += 1;
+                stats.turn_errors += u64::from(reason == "error");
+                stats.interrupted += u64::from(reason.starts_with("interrupted"));
+                if let Some(start) = self.turns.remove(&agent) {
+                    stats.busy_ms += envelope.ts_ms.saturating_sub(start);
+                }
+            }
+            Event::ToolCall { .. } => stats.tool_calls += 1,
+            Event::PermissionRequest { .. } => stats.permission_requests += 1,
+            Event::PermissionResolved {
+                allow: false,
+                blocked_by_guard: true,
+                ..
+            } => stats.guard_denied += 1,
+            Event::Mail { from, to, .. } => {
+                self.agents.entry(from.clone()).or_default().mails_sent += 1;
+                let recipient = self.agents.entry(to.clone()).or_default();
+                recipient.mails_received += 1;
+                recipient.last_activity_ms = recipient.last_activity_ms.max(envelope.ts_ms);
+                self.totals.mails_total += 1;
+            }
+            Event::Workflow { status, detail, .. } => match status {
+                WorkflowStatus::Started => self.totals.workflows_total += 1,
+                WorkflowStatus::Finished => self.totals.workflows_finished += 1,
+                WorkflowStatus::Failed
+                    if detail == "stopped" || detail.starts_with("interrupted") =>
+                {
+                    self.totals.workflows_stopped += 1
+                }
+                WorkflowStatus::Failed => self.totals.workflows_failed += 1,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -347,6 +435,7 @@ impl Hub {
                     mail_thread_limit: MAX_THREAD_MAILS,
                     mail_enabled: false,
                     tasks: Vec::new(),
+                    stats: Statistics::default(),
                 }),
                 tx,
                 log: None,
@@ -401,7 +490,9 @@ impl Hub {
         let closers = interrupted(&history);
         let (mail, read) = mail_state(&history);
         let mut tasks = Vec::new();
+        let mut stats = Statistics::default();
         for envelope in &history {
+            stats.record(envelope);
             if let Event::Task { task } = &envelope.event {
                 store_task(&mut tasks, task);
             }
@@ -417,6 +508,7 @@ impl Hub {
                     mail_thread_limit: MAX_THREAD_MAILS,
                     mail_enabled: false,
                     tasks,
+                    stats,
                 }),
                 tx,
                 log: Some(LogWriter::start(path)),
@@ -439,6 +531,7 @@ impl Hub {
             ts_ms: now_ms(),
             event,
         };
+        data.stats.record(&envelope);
         if let Event::Task { task } = &envelope.event {
             store_task(&mut data.tasks, task);
         }
@@ -463,6 +556,32 @@ impl Hub {
     }
     pub fn mail_enabled(&self) -> bool {
         self.inner.data.lock().unwrap().mail_enabled
+    }
+    pub fn stats(&self) -> StatsSnapshot {
+        let data = self.inner.data.lock().unwrap();
+        let mut tasks = BTreeMap::new();
+        for status in [
+            "backlog",
+            "todo",
+            "in_progress",
+            "review",
+            "done",
+            "blocked",
+            "archived",
+        ] {
+            tasks.insert(status.to_string(), 0);
+        }
+        for task in &data.tasks {
+            if let Ok(serde_json::Value::String(status)) = serde_json::to_value(&task.status) {
+                *tasks.entry(status).or_default() += 1;
+            }
+        }
+        StatsSnapshot {
+            generated_ms: now_ms(),
+            agents: data.stats.agents.clone(),
+            totals: data.stats.totals.clone(),
+            tasks,
+        }
     }
     pub fn tasks(&self, include_archived: bool) -> Vec<TaskSnapshot> {
         self.inner
@@ -1261,6 +1380,82 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn statistics_count_and_replay() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("agentsflow-stats-{}.jsonl", Uuid::new_v4()));
+        let before;
+        {
+            let hub = Hub::with_log(&path);
+            let agent = AgentId::from("claude");
+            hub.publish(
+                agent.clone(),
+                "session",
+                Event::Message {
+                    role: Role::User,
+                    text: "work".into(),
+                    delta: false,
+                },
+            );
+            hub.publish(
+                agent.clone(),
+                "session",
+                Event::ToolCall {
+                    id: "t".into(),
+                    name: "shell".into(),
+                    input: serde_json::json!({}),
+                },
+            );
+            hub.publish(
+                agent.clone(),
+                "session",
+                Event::PermissionRequest {
+                    id: "p".into(),
+                    tool: "shell".into(),
+                    input: serde_json::json!({}),
+                    guard: None,
+                },
+            );
+            hub.publish(
+                agent.clone(),
+                "session",
+                Event::PermissionResolved {
+                    id: "p".into(),
+                    allow: false,
+                    blocked_by_guard: true,
+                },
+            );
+            hub.send_mail(
+                agent.clone(),
+                AgentId::orchestrator(),
+                "hi".into(),
+                "body".into(),
+                None,
+            )
+            .unwrap();
+            hub.publish(
+                agent,
+                "session",
+                Event::Done {
+                    reason: "error".into(),
+                },
+            );
+            before = serde_json::to_value(hub.stats()).unwrap();
+            assert_eq!(before["agents"]["claude"]["turns"], 1);
+            assert_eq!(before["agents"]["claude"]["turn_errors"], 1);
+            assert_eq!(before["agents"]["claude"]["tool_calls"], 1);
+            assert_eq!(before["agents"]["claude"]["permission_requests"], 1);
+            assert_eq!(before["agents"]["claude"]["guard_denied"], 1);
+            assert_eq!(before["agents"]["orchestrator"]["mails_received"], 1);
+        }
+        let hub = Hub::with_log(&path);
+        let after = serde_json::to_value(hub.stats()).unwrap();
+        assert_eq!(before["agents"], after["agents"]);
+        assert_eq!(before["totals"], after["totals"]);
+        drop(hub);
+        let _ = std::fs::remove_file(path);
+    }
+
     #[test]
     fn tasks_validate_limit_and_replay() {
         use super::*;
