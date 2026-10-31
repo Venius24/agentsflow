@@ -527,6 +527,31 @@ async fn interrupt(State(state): State<AppState>, Json(input): Json<Interrupt>) 
         Err(error) => failure(error),
     }
 }
+async fn restart(State(state): State<AppState>, Json(input): Json<Interrupt>) -> Response {
+    let Some(actor) = state.actor(&input.agent) else {
+        return unknown_agent(&state, &input.agent, StatusCode::NOT_FOUND);
+    };
+    match actor.restart().await {
+        Ok(()) => Json(json!({"ok":true})).into_response(),
+        Err(error) => failure(error),
+    }
+}
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    let agents: HashMap<_, _> = state
+        .agents
+        .iter()
+        .map(|(id, actor)| {
+            let state = actor.state();
+            (
+                id.to_string(),
+                json!({"enabled":state.enabled,"busy":state.busy,"last_error":state.last_error}),
+            )
+        })
+        .collect();
+    Json(
+        json!({"ok":true,"version":env!("CARGO_PKG_VERSION"),"uptime_s":state.hub.uptime_s(),"agents":agents}),
+    )
+}
 async fn permission(State(state): State<AppState>, Json(input): Json<Permission>) -> Response {
     let Some(actor) = state.actor(&input.agent) else {
         return unknown_agent(&state, &input.agent, StatusCode::NOT_FOUND);
@@ -783,6 +808,8 @@ fn app(state: AppState) -> Router {
         .route("/api/export", get(export))
         .route("/api/prompt", post(prompt))
         .route("/api/agent/interrupt", post(interrupt))
+        .route("/api/agent/restart", post(restart))
+        .route("/api/health", get(health))
         .route("/api/permission", post(permission))
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/inbox", post(inbox))
@@ -821,6 +848,12 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         .ids()
         .map(|id| (id.clone(), Uuid::new_v4().simple().to_string()))
         .collect();
+    let mut secrets: Vec<String> = mail_agent_tokens.values().cloned().collect();
+    secrets.push(token.clone());
+    if let Some(config) = &options.telegram {
+        secrets.push(config.token().to_owned());
+    }
+    crate::diag::init(&options.cwd, secrets)?;
     runtime_options.mail = Some(agentsflow_adapters::MailConfig {
         url: format!("http://127.0.0.1:{port}"),
         token: String::new(),
@@ -852,7 +885,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         manager: manager.clone(),
     };
     println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
-    eprintln!("{}", crate::team::format_compact(&runtime.team));
+    crate::diag::diag("INFO", &crate::team::format_compact(&runtime.team));
     let telegram_task = options.telegram.map(|config| {
         tokio::task::spawn_local(crate::telegram::run(
             config,
@@ -869,7 +902,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let result = axum::serve(listener, app(state))
         .with_graceful_shutdown(async move {
             if let Err(error) = tokio::signal::ctrl_c().await {
-                eprintln!("signal: {error}");
+                crate::server_diag!("signal: {error}");
             }
             let _ = shutdown_tx.send(true);
         })
@@ -1107,6 +1140,8 @@ mod tests {
                 (axum::http::Method::POST, "/api/prompt"),
                 (axum::http::Method::GET, "/api/state"),
                 (axum::http::Method::GET, "/api/stats"),
+                (axum::http::Method::GET, "/api/health"),
+                (axum::http::Method::POST, "/api/agent/restart"),
                 (axum::http::Method::GET, "/api/export"),
                 (axum::http::Method::POST, "/api/permission"),
                 (axum::http::Method::POST, "/api/workflow/run"),
@@ -1120,6 +1155,8 @@ mod tests {
             (axum::http::Method::POST, "/api/agent/interrupt"),
             (axum::http::Method::GET, "/api/state"),
             (axum::http::Method::GET, "/api/stats"),
+            (axum::http::Method::GET, "/api/health"),
+            (axum::http::Method::POST, "/api/agent/restart"),
             (axum::http::Method::GET, "/api/export"),
             (axum::http::Method::POST, "/api/permission"),
             (axum::http::Method::POST, "/api/workflow/run"),
@@ -1209,6 +1246,58 @@ mod tests {
                 assert_eq!(
                     serde_json::from_slice::<Value>(&body).unwrap(),
                     json!({"ok":true})
+                );
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn restart_and_health_statuses() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (actor, task) =
+                    crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
+                        Ok(NoAgent)
+                    });
+                let agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
+                let team = Team::preset("pair").unwrap();
+                let manager = Manager::new(hub.clone(), agents.clone(), team.clone());
+                let (_tx, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub,
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::default(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents,
+                    team,
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                let request = |name: &str| Json(Interrupt { agent: name.into() });
+                assert_eq!(
+                    restart(State(state.clone()), request("missing"))
+                        .await
+                        .status(),
+                    StatusCode::NOT_FOUND
+                );
+                assert_eq!(
+                    restart(State(state.clone()), request("claude"))
+                        .await
+                        .status(),
+                    StatusCode::OK
+                );
+                let value = health(State(state.clone())).await.0;
+                assert_eq!(value["ok"], true);
+                assert_eq!(value["agents"]["claude"]["last_error"], Value::Null);
+                actor.prompt("work".into()).await.unwrap();
+                assert_eq!(
+                    restart(State(state), request("claude")).await.status(),
+                    StatusCode::CONFLICT
                 );
                 actor.shutdown().await;
                 task.await.unwrap();

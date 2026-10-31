@@ -30,6 +30,9 @@ pub struct Config {
 }
 
 impl Config {
+    pub(crate) fn token(&self) -> &str {
+        &self.token
+    }
     pub fn from_env() -> Result<Self> {
         let token = std::env::var("AGENTSFLOW_TELEGRAM_TOKEN").unwrap_or_default();
         let users = std::env::var("AGENTSFLOW_TELEGRAM_USERS").unwrap_or_default();
@@ -255,7 +258,6 @@ struct Bridge {
     rejected: u64,
     screens: HashMap<i64, Screen>,
     recent: HashMap<AgentId, VecDeque<String>>,
-    errors: HashSet<AgentId>,
     drafts: HashMap<i64, Draft>,
     bypass_confirmed: HashSet<AgentId>,
     muted: HashSet<i64>,
@@ -298,7 +300,6 @@ impl Bridge {
             rejected: 0,
             screens: HashMap::new(),
             recent: HashMap::new(),
-            errors: HashSet::new(),
             drafts: HashMap::new(),
             bypass_confirmed: HashSet::new(),
             muted: HashSet::new(),
@@ -382,7 +383,6 @@ impl Bridge {
             Event::Message {
                 role: Role::User, ..
             } => {
-                self.errors.remove(&agent);
                 self.started.insert(agent, tokio::time::Instant::now());
             }
             Event::PermissionRequest {
@@ -584,9 +584,6 @@ impl Bridge {
                         }
                     }
                 }
-                if reason == "error" {
-                    self.errors.insert(agent.clone());
-                }
                 let elapsed = self.started.remove(&agent).map(|t| t.elapsed().as_secs());
                 if matches!(reason.as_str(), "error" | "interrupted") {
                     let agent = message_text(agent.as_str(), &self.config.token, 100);
@@ -706,12 +703,12 @@ impl Bridge {
         let safe = |s: &str| message_text(s, &self.config.token, 300);
         let status = |id: &AgentId| {
             let state = self.agents.get(id).map(|a| a.state()).unwrap_or_default();
-            if !state.pending.is_empty() {
+            if state.last_error.is_some() {
+                "🔴 ошибка"
+            } else if !state.pending.is_empty() {
                 "🟡 ждёт вас"
             } else if state.busy {
                 "🟢 работает"
-            } else if self.errors.contains(id) {
-                "🔴 ошибка"
             } else {
                 "⚪ свободен"
             }
@@ -765,6 +762,9 @@ impl Bridge {
             if let Some(task) = task_line(&member.id) {
                 text.push_str(&format!("\n{task}"));
             }
+            if let Some(error) = &state.last_error {
+                text.push_str(&format!("\n🔴 ошибка: {}", safe(error)));
+            }
             if let Some(recent) = self.recent.get(&member.id) {
                 text.push_str("\n\nПоследнее:");
                 for item in recent {
@@ -785,6 +785,11 @@ impl Bridge {
             if state.busy {
                 rows.push(vec![
                     json!({"text":"⏹ Стоп","callback_data":format!("ui:stop:{key}")}),
+                ]);
+            }
+            if state.last_error.is_some() {
+                rows.push(vec![
+                    json!({"text":"🔄 Перезапустить","callback_data":format!("ui:restart:{key}")}),
                 ]);
             }
             (text, json!({"inline_keyboard":rows}))
@@ -1272,6 +1277,15 @@ impl Bridge {
                         }
                         self.open_team(chat, active_agent, message).await;
                     }
+                    Some("restart") => {
+                        if let Some(actor) = active_agent
+                            .as_ref()
+                            .and_then(|agent| self.agents.get(agent))
+                        {
+                            let _ = actor.restart().await;
+                        }
+                        self.open_team(chat, active_agent, message).await;
+                    }
                     Some("write") if self.config.prompts => {
                         if let Some(agent) = active_agent {
                             self.inputs.remove(&chat);
@@ -1710,10 +1724,13 @@ async fn poll(config: Config, tx: mpsc::UnboundedSender<Value>, mut stop: watch:
                     } else {
                         username.as_str()
                     };
-                    eprintln!(
-                        "telegram: connected as @{}, {} user(s)",
-                        username,
-                        config.users.len()
+                    crate::diag::diag(
+                        "INFO",
+                        &format!(
+                            "telegram: connected as @{}, {} user(s)",
+                            username,
+                            config.users.len()
+                        ),
                     );
                     connected = true;
                     let _: Result<Value, _> =
@@ -1735,7 +1752,7 @@ async fn poll(config: Config, tx: mpsc::UnboundedSender<Value>, mut stop: watch:
             }
         }
         if !connected {
-            eprintln!("telegram: connection failed; retrying");
+            crate::server_diag!("telegram: connection failed; retrying");
         }
         let wait = retry_after(&result).unwrap_or(delay);
         tokio::select! { biased; _ = stop.wait_for(|v| *v) => break, _ = tokio::time::sleep(Duration::from_secs(wait)) => {} }
@@ -1793,7 +1810,7 @@ pub async fn run(
                    },
                    Some(update) = updates.recv() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.update(&update) => {} },
                    _ = tick.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.flush() => {} },
-                   _ = stats.tick() => if bridge.rejected > 0 { eprintln!("telegram: ignored {} unauthorized updates", bridge.rejected); bridge.rejected = 0; },
+                   _ = stats.tick() => if bridge.rejected > 0 { crate::server_diag!("telegram: ignored {} unauthorized updates", bridge.rejected); bridge.rejected = 0; },
                    _ = screens.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.refresh_screens().await; bridge.refresh_workflow().await; } => {} },
                }
     }
@@ -2109,6 +2126,32 @@ mod tests {
             bridge.update(&callback("a1")).await;
             assert_eq!(*answers.lock().unwrap(), [true]);
             actor.interrupt().await.unwrap();
+            actor.shutdown().await;
+            task.await.unwrap();
+            server.abort();
+        }).await;
+    }
+
+    #[tokio::test]
+    async fn error_card_has_restart() {
+        tokio::task::LocalSet::new().run_until(async {
+            let app = Router::new().route("/{path}/{method}", post(|| async { Json(json!({"ok":true,"result":{"message_id":42}})) }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let hub = Hub::new();
+            let (actor, task) = crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async { Err::<FakeAgent, _>(anyhow::anyhow!("failed")) });
+            actor.prompt("x".into()).await.unwrap();
+            while actor.state().busy { tokio::task::yield_now().await; }
+            let config = Config::parse("secret".into(), "11", format!("http://{address}")).unwrap();
+            let mut bridge = Bridge::with_hub(config, Agents::from([(AgentId::from("claude"), actor.clone())]), Team::preset("pair").unwrap(), hub);
+            let (text, buttons) = bridge.screen_content(Some(&AgentId::from("claude")), 1);
+            assert!(text.contains("ошибка: failed"));
+            assert!(buttons.to_string().contains("ui:restart:1"));
+            bridge.open_team(11, Some(AgentId::from("claude")), None).await;
+            let key = bridge.screens[&11].key;
+            bridge.update(&json!({"callback_query":{"id":"cb","from":{"id":11},"data":format!("ui:restart:{key}"),"message":{"message_id":42,"chat":{"id":11,"type":"private"}}}})).await;
+            assert!(actor.state().last_error.is_none());
             actor.shutdown().await;
             task.await.unwrap();
             server.abort();

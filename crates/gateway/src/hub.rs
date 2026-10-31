@@ -26,6 +26,7 @@ pub struct Hub {
     inner: Arc<Inner>,
 }
 struct Inner {
+    started: std::time::Instant,
     seq: AtomicU64,
     data: Mutex<Data>,
     tx: broadcast::Sender<Envelope>,
@@ -357,7 +358,7 @@ impl LogWriter {
                 Ok(())
             })();
             if let Err(error) = result {
-                eprintln!("event log write failed: {error}");
+                crate::server_diag!("event log write failed: {error}");
             }
         });
         Self {
@@ -450,6 +451,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(1024);
         Self {
             inner: Arc::new(Inner {
+                started: std::time::Instant::now(),
                 seq: AtomicU64::new(0),
                 data: Mutex::new(Data {
                     history: VecDeque::new(),
@@ -490,25 +492,27 @@ impl Hub {
                             }
                             Err(_) => {
                                 if !warned {
-                                    eprintln!("event log contains invalid lines; skipping them");
+                                    crate::server_diag!(
+                                        "event log contains invalid lines; skipping them"
+                                    );
                                     warned = true;
                                 }
                             }
                         },
                         Err(error) => {
-                            eprintln!("event log read failed: {error}");
+                            crate::server_diag!("event log read failed: {error}");
                             break;
                         }
                     }
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => eprintln!("event log read failed: {error}"),
+            Err(error) => crate::server_diag!("event log read failed: {error}"),
         }
         // Keep the file bounded: drop what no longer fits the replayed history.
         if lines > history.len() {
             if let Err(error) = compact(path, &history) {
-                eprintln!("event log compaction failed: {error}");
+                crate::server_diag!("event log compaction failed: {error}");
             }
         }
         let closers = interrupted(&history);
@@ -524,6 +528,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(1024);
         let hub = Self {
             inner: Arc::new(Inner {
+                started: std::time::Instant::now(),
                 seq: AtomicU64::new(seq),
                 data: Mutex::new(Data {
                     history,
@@ -547,6 +552,9 @@ impl Hub {
     pub fn publish(&self, agent: AgentId, session: &str, event: Event) {
         let mut data = self.inner.data.lock().unwrap();
         self.publish_locked(&mut data, agent, session, event);
+    }
+    pub fn uptime_s(&self) -> u64 {
+        self.inner.started.elapsed().as_secs()
     }
     fn publish_resolution(
         &self,
@@ -989,6 +997,7 @@ pub struct AgentState {
     pub enabled: bool,
     pub busy: bool,
     pub pending: Vec<String>,
+    pub last_error: Option<String>,
 }
 #[derive(Clone)]
 pub struct Actor {
@@ -1001,6 +1010,7 @@ enum Command {
     Prompt(String, Reply),
     Respond(String, bool, Reply),
     Interrupt(Reply),
+    Restart(Reply),
     Shutdown(Reply),
 }
 
@@ -1052,6 +1062,39 @@ impl Actor {
                 return Err(HubError::NotBusy);
             }
             if self.tx.send(Command::Interrupt(tx)).is_err() {
+                return Err(HubError::Closed);
+            }
+        }
+        rx.await.unwrap_or(Err(HubError::Closed))
+    }
+    pub async fn restart(&self) -> std::result::Result<(), HubError> {
+        if self.state().busy {
+            match tokio::time::timeout(INTERRUPT_GRACE + Duration::from_secs(2), self.interrupt())
+                .await
+            {
+                Ok(Ok(())) | Ok(Err(HubError::NotBusy)) => {}
+                _ => return Err(HubError::Busy),
+            }
+            if tokio::time::timeout(INTERRUPT_GRACE + Duration::from_secs(2), async {
+                while self.state().busy {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .is_err()
+            {
+                return Err(HubError::Busy);
+            }
+        }
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.busy {
+                return Err(HubError::Busy);
+            }
+            state.busy = true;
+            if self.tx.send(Command::Restart(tx)).is_err() {
+                state.busy = false;
                 return Err(HubError::Closed);
             }
         }
@@ -1156,7 +1199,7 @@ where
 async fn close<A: Agent>(session: &mut Option<A>) {
     if let Some(session) = session.take() {
         if let Err(error) = session.shutdown().await {
-            eprintln!("agent shutdown: {error:#}");
+            crate::server_diag!("agent shutdown: {error:#}");
         }
     }
 }
@@ -1182,7 +1225,7 @@ fn request_interrupt(
             Ok(())
         }
         Err(error) => {
-            eprintln!("agent interrupt: {error:#}");
+            crate::server_diag!("agent interrupt: {error:#}");
             Err(HubError::Closed)
         }
     }
@@ -1251,6 +1294,7 @@ async fn run_actor<A, F, Fut>(
                                         Some(Command::Interrupt(reply)) => {
                                             let _ = reply.send(request_interrupt(&interrupter, &mut interrupted, grace));
                                         }
+                                        Some(Command::Restart(reply)) => { let _ = reply.send(Err(HubError::Busy)); }
                                         Some(Command::Prompt(_, reply)) => {
                                             let _ = reply.send(Err(HubError::Busy));
                                         }
@@ -1285,6 +1329,15 @@ async fn run_actor<A, F, Fut>(
                                 },
                                 event => event,
                             };
+                            match &event {
+                                Event::Error { message } => state.lock().unwrap().last_error = Some(crate::diag::redact(message).chars().take(300).collect()),
+                                Event::Done { reason } if reason.contains("error") || reason == "failed" => {
+                                    let mut state = state.lock().unwrap();
+                                    if state.last_error.is_none() { state.last_error = Some(crate::diag::redact(reason).chars().take(300).collect()); }
+                                }
+                                Event::Done { reason } if !reason.starts_with("interrupted") => state.lock().unwrap().last_error = None,
+                                _ => {}
+                            }
                             if let (Some((cwd, true)), Event::PermissionRequest { tool, input, guard: note, .. }) = (&guard, &mut event) {
                                 if matches!(tool.to_ascii_lowercase().as_str(), "bash" | "powershell" | "shell") {
                                     if let Some(command) = input.get("command").and_then(serde_json::Value::as_str) {
@@ -1336,6 +1389,7 @@ async fn run_actor<A, F, Fut>(
                                                 interrupt_reply = Some(reply);
                                                 break (false, None);
                                             }
+                                            Some(Command::Restart(reply)) => { let _ = reply.send(Err(HubError::Busy)); }
                                             Some(Command::Shutdown(reply)) => {
                                                 let _ = reply.send(Ok(()));
                                                 return Ok(Turn::Shutdown);
@@ -1390,7 +1444,7 @@ async fn run_actor<A, F, Fut>(
                     Ok(Turn::Discard) => close(&mut session).await,
                     // A failure after an accepted interrupt is part of stopping the turn.
                     Err(error) if interrupted.is_some() => {
-                        eprintln!("agent error after interrupt: {error:#}");
+                        crate::server_diag!("agent error after interrupt: {error:#}");
                         hub.publish(
                             agent.clone(),
                             &session_id,
@@ -1401,7 +1455,13 @@ async fn run_actor<A, F, Fut>(
                         close(&mut session).await;
                     }
                     Err(error) => {
-                        eprintln!("agent error: {error:#}");
+                        state.lock().unwrap().last_error = Some(
+                            crate::diag::redact(&format!("{error:#}"))
+                                .chars()
+                                .take(300)
+                                .collect(),
+                        );
+                        crate::server_diag!("agent error: {error:#}");
                         hub.publish(
                             agent.clone(),
                             &session_id,
@@ -1426,6 +1486,14 @@ async fn run_actor<A, F, Fut>(
             }
             Command::Interrupt(reply) => {
                 let _ = reply.send(Err(HubError::NotBusy));
+            }
+            Command::Restart(reply) => {
+                close(&mut session).await;
+                let mut state = state.lock().unwrap();
+                state.pending.clear();
+                state.last_error = None;
+                state.busy = false;
+                let _ = reply.send(Ok(()));
             }
             Command::Shutdown(reply) => {
                 close(&mut session).await;
@@ -2181,13 +2249,53 @@ mod tests {
                 while actor.state().busy {
                     tokio::task::yield_now().await;
                 }
+                assert_eq!(actor.state().last_error.as_deref(), Some("failed"));
                 actor.prompt("two".into()).await.unwrap();
                 wait_event(
                     &mut rx,
                     |e| matches!(e, Event::Done {reason} if reason == "ok"),
                 )
                 .await;
+                assert_eq!(actor.state().last_error, None);
                 assert_eq!(starts.load(Ordering::SeqCst), 2);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+    #[tokio::test]
+    async fn restart_idle_and_busy_discards_session() {
+        LocalSet::new()
+            .run_until(async {
+                let starts = Arc::new(AtomicUsize::new(0));
+                let hub = Hub::new();
+                let (_, mut events) = hub.subscribe();
+                let (actor, task) = spawn(hub, AgentId::from("claude"), false, {
+                    let starts = starts.clone();
+                    move || {
+                        starts.fetch_add(1, Ordering::SeqCst);
+                        async { Ok(crate::testing::Silent::new(1, false)) }
+                    }
+                });
+                actor.restart().await.unwrap();
+                actor.prompt("one".into()).await.unwrap();
+                wait_event(&mut events, |e| {
+                    matches!(
+                        e,
+                        Event::Message {
+                            role: Role::User,
+                            ..
+                        }
+                    )
+                })
+                .await;
+                actor.restart().await.unwrap();
+                assert!(!actor.state().busy);
+                actor.prompt("two".into()).await.unwrap();
+                while starts.load(Ordering::SeqCst) < 2 {
+                    tokio::task::yield_now().await;
+                }
+                actor.restart().await.unwrap();
                 actor.shutdown().await;
                 task.await.unwrap();
             })

@@ -1,4 +1,5 @@
 mod cli;
+mod diag;
 mod doctor;
 mod export;
 mod guard;

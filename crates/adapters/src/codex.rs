@@ -224,6 +224,28 @@ pub struct CodexSession {
     turn_id: Option<String>,
     interrupt_tx: mpsc::UnboundedSender<()>,
     interrupt_rx: mpsc::UnboundedReceiver<()>,
+    /// Running thread totals (input, output) at the end of the previous turn.
+    usage_baseline: (u64, u64),
+    /// The latest running totals reported during the current turn.
+    usage_latest: Option<(u64, u64)>,
+}
+
+/// The tokens one turn spent: the difference of the running thread totals
+/// (`thread/tokenUsage/updated` reports totals for the whole conversation).
+/// Codex does not report a cost.
+fn turn_usage(baseline: &mut (u64, u64), latest: Option<(u64, u64)>) -> Option<Event> {
+    let latest = latest?;
+    let (input, output) = if latest.0 < baseline.0 || latest.1 < baseline.1 {
+        latest // the counters restarted
+    } else {
+        (latest.0 - baseline.0, latest.1 - baseline.1)
+    };
+    *baseline = latest;
+    Some(Event::Usage {
+        input_tokens: input,
+        output_tokens: output,
+        cost_usd: None,
+    })
 }
 
 impl CodexSession {
@@ -299,6 +321,8 @@ impl CodexSession {
             turn_id: None,
             interrupt_tx,
             interrupt_rx,
+            usage_baseline: (0, 0),
+            usage_latest: None,
         })
     }
 
@@ -332,7 +356,19 @@ impl CodexSession {
                 }
             }
         };
-        if let ServerMessage::Notification(Notification::TurnCompleted(_)) = &message {
+        if let ServerMessage::Notification(Notification::ThreadTokenUsageUpdated(update)) = &message
+        {
+            let total = &update.token_usage.total;
+            self.usage_latest = Some((
+                u64::try_from(total.input_tokens).unwrap_or(0),
+                u64::try_from(total.output_tokens).unwrap_or(0),
+            ));
+        }
+        let turn_done = matches!(
+            &message,
+            ServerMessage::Notification(Notification::TurnCompleted(_))
+        );
+        if turn_done {
             self.turn_id = None;
         }
         if let ServerMessage::Request { id, request } = &message {
@@ -351,7 +387,18 @@ impl CodexSession {
             }
             self.pending.insert(key, id.clone());
         }
-        Ok(map_message(&message))
+        let mut events = map_message(&message);
+        if turn_done {
+            let usage = turn_usage(&mut self.usage_baseline, self.usage_latest.take());
+            if let Some(usage) = usage {
+                let at = events
+                    .iter()
+                    .position(|event| matches!(event, Event::Done { .. }))
+                    .unwrap_or(events.len());
+                events.insert(at, usage);
+            }
+        }
+        Ok(events)
     }
 
     /// A JSON-RPC refusal means the turn is already over, its `turn/completed`
@@ -580,6 +627,38 @@ mod tests {
         );
         assert!(map(json!({"method":"future/noise", "params":{}})).is_empty());
     }
+    #[test]
+    fn turn_usage_is_the_difference_of_running_totals() {
+        let mut baseline = (0, 0);
+        assert_eq!(turn_usage(&mut baseline, None), None);
+        assert_eq!(
+            turn_usage(&mut baseline, Some((100, 10))),
+            Some(Event::Usage {
+                input_tokens: 100,
+                output_tokens: 10,
+                cost_usd: None
+            })
+        );
+        assert_eq!(
+            turn_usage(&mut baseline, Some((250, 40))),
+            Some(Event::Usage {
+                input_tokens: 150,
+                output_tokens: 30,
+                cost_usd: None
+            })
+        );
+        // counters that went back mean a new thread: count what arrived
+        assert_eq!(
+            turn_usage(&mut baseline, Some((20, 5))),
+            Some(Event::Usage {
+                input_tokens: 20,
+                output_tokens: 5,
+                cost_usd: None
+            })
+        );
+        assert_eq!(baseline, (20, 5));
+    }
+
     #[test]
     fn binary_priority() {
         let path = |s: &str| Some(PathBuf::from(s));
