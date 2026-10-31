@@ -1477,7 +1477,7 @@ mod tests {
                     );
                 }
                 assert_eq!(get_team(State(state.clone())).await.0, body["team"]);
-                assert_eq!(body["team"][0]["mode"], "ask");
+                assert_eq!(body["team"][0]["mode"], "smart");
                 assert_eq!(body["team"][0]["guard"], true);
                 assert!(body["team"][0]["sandbox"].is_null());
                 assert_eq!(body["team"][1]["sandbox"], "workspace-write");
@@ -1574,6 +1574,7 @@ mod tests {
         LocalSet::new()
             .run_until(async {
                 let mut team = Team::preset("pair").unwrap();
+                team.members[0].mode = None;
                 team.members[1].mode = Some(crate::team::AccessMode::Bypass);
                 let runtime = Runtime::new(RuntimeOptions {
                     team,

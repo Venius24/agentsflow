@@ -718,6 +718,7 @@ impl Bridge {
         };
         let mode = |m: &crate::team::Member| match m.mode {
             Some(crate::team::AccessMode::Auto) => "⚡ авто",
+            Some(crate::team::AccessMode::Smart) => "🧠 умный",
             Some(crate::team::AccessMode::Bypass) => "<b>⚠ BYPASS</b> (без запросов и песочницы)",
             _ => "✋ спрашивает",
         };
@@ -1613,6 +1614,7 @@ impl Bridge {
                         let mode = match m.mode {
                             Some(crate::team::AccessMode::Ask) => "ask",
                             Some(crate::team::AccessMode::Auto) => "auto",
+                            Some(crate::team::AccessMode::Smart) => "smart",
                             Some(crate::team::AccessMode::Bypass) => "bypass",
                             None => "ask",
                         };

@@ -131,6 +131,7 @@ impl Runtime {
             });
             let yes = member.mode != Some(AccessMode::Ask);
             let bypass = member.mode == Some(AccessMode::Bypass);
+            let smart = member.mode == Some(AccessMode::Smart);
             let (actor, task) = match member.kind {
                 AgentKind::Claude => crate::hub::spawn_guarded(
                     hub.clone(),
@@ -138,6 +139,7 @@ impl Runtime {
                     yes,
                     cwd.clone(),
                     member.guard && !bypass,
+                    smart,
                     move || {
                         ClaudeSession::start(ClaudeOptions {
                             cwd: Some(cwd.clone()),
@@ -160,6 +162,7 @@ impl Runtime {
                         yes,
                         cwd.clone(),
                         member.guard && !bypass,
+                        smart,
                         move || {
                             CodexSession::start(CodexOptions {
                                 cwd: Some(cwd.clone()),
@@ -222,7 +225,11 @@ mod tests {
 
     #[test]
     fn access_inherits_flags_and_respects_member_overrides() {
-        let team = Team::preset("pair").unwrap();
+        let mut team = Team::preset("pair").unwrap();
+        for member in &mut team.members {
+            assert_eq!(member.mode, Some(AccessMode::Smart));
+            member.mode = None;
+        }
         let claude = &team.members[0];
         let codex = &team.members[1];
         assert_eq!(

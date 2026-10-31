@@ -1073,6 +1073,7 @@ pub fn spawn_guarded<A, F, Fut>(
     yes: bool,
     cwd: std::path::PathBuf,
     enabled: bool,
+    smart: bool,
     factory: F,
 ) -> (Actor, JoinHandle<()>)
 where
@@ -1087,6 +1088,7 @@ where
         factory,
         INTERRUPT_GRACE,
         Some((cwd, enabled)),
+        smart,
     )
 }
 
@@ -1103,7 +1105,7 @@ where
     F: Fn() -> Fut + 'static,
     Fut: Future<Output = Result<A>> + 'static,
 {
-    spawn_configured(hub, agent, yes, factory, grace, None)
+    spawn_configured(hub, agent, yes, factory, grace, None, false)
 }
 
 fn spawn_configured<A, F, Fut>(
@@ -1113,6 +1115,7 @@ fn spawn_configured<A, F, Fut>(
     factory: F,
     grace: Duration,
     guard: Option<(std::path::PathBuf, bool)>,
+    smart: bool,
 ) -> (Actor, JoinHandle<()>)
 where
     A: Agent + 'static,
@@ -1131,7 +1134,7 @@ where
         state: state.clone(),
     };
     let task = tokio::task::spawn_local(run_actor(
-        hub, agent, yes, factory, grace, state, rx, stop_rx, guard,
+        hub, agent, yes, factory, grace, state, rx, stop_rx, guard, smart,
     ));
     (actor, task)
 }
@@ -1189,6 +1192,7 @@ async fn run_actor<A, F, Fut>(
     mut rx: mpsc::UnboundedReceiver<Command>,
     mut stop: watch::Receiver<bool>,
     guard: Option<(std::path::PathBuf, bool)>,
+    smart: bool,
 ) where
     A: Agent,
     F: Fn() -> Fut,
@@ -1274,7 +1278,10 @@ async fn run_actor<A, F, Fut>(
                                     }
                                 }
                             }
-                            let blocked = yes && matches!(&event, Event::PermissionRequest { guard: Some(_), .. });
+                            let flagged = matches!(&event, Event::PermissionRequest { guard: Some(_), .. });
+                            // Smart mode answers safe requests itself and hands guard-flagged ones to the owner.
+                            let human = !yes || (smart && flagged);
+                            let blocked = yes && !smart && flagged;
                             let deny_reason = if blocked {
                                 if let Event::PermissionRequest { guard: Some(note), .. } = &event { Some(format!("blocked by agentsflow guard ({}): {}", note.rule, note.reason)) } else { None }
                             } else { None };
@@ -1284,7 +1291,7 @@ async fn run_actor<A, F, Fut>(
                                 _ => None,
                             };
                             if let Some(id) = &permission {
-                                if !yes && interrupted.is_none() {
+                                if human && interrupted.is_none() {
                                     state.lock().unwrap().pending.push(id.clone());
                                 }
                             }
@@ -1293,7 +1300,7 @@ async fn run_actor<A, F, Fut>(
                                 let mut interrupt_reply = None;
                                 let (allow, response) = if interrupted.is_some() || blocked {
                                     (false, None)
-                                } else if yes {
+                                } else if !human {
                                     (true, None)
                                 } else {
                                     loop {
@@ -1900,17 +1907,21 @@ mod tests {
     #[tokio::test]
     async fn guard_checks_permissions_and_auto_denies() {
         LocalSet::new().run_until(async {
-            for (yes, enabled, command, warned, expected) in [
-                (true, true, Some("rm -rf /"), true, false),
-                (true, true, Some("cargo build"), false, true),
-                (false, true, Some("rm -rf /"), true, true),
-                (true, false, Some("rm -rf /"), false, true),
-                (true, true, None, false, true),
+            for (yes, smart, enabled, command, warned, expected) in [
+                (true, false, true, Some("rm -rf /"), true, false),
+                (true, false, true, Some("cargo build"), false, true),
+                (false, false, true, Some("rm -rf /"), true, true),
+                (true, false, false, Some("rm -rf /"), false, true),
+                (true, false, true, None, false, true),
+                // smart: safe commands pass by themselves, flagged ones wait for the owner
+                (true, true, true, Some("cargo build"), false, true),
+                (true, true, true, Some("rm -rf /"), true, true),
+                (true, true, false, Some("rm -rf /"), false, true),
             ] {
                 let hub = Hub::new();
                 let (_, mut rx) = hub.subscribe();
                 let answers = Arc::new(Mutex::new(Vec::new()));
-                let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), yes, std::env::current_dir().unwrap(), enabled, {
+                let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), yes, std::env::current_dir().unwrap(), enabled, smart, {
                     let answers = answers.clone();
                     move || {
                         let answers = answers.clone();
@@ -1923,9 +1934,10 @@ mod tests {
                 actor.prompt("test".into()).await.unwrap();
                 let request = wait_event(&mut rx, |event| matches!(event, Event::PermissionRequest { .. })).await;
                 assert_eq!(matches!(request, Event::PermissionRequest { guard: Some(_), .. }), warned);
-                if !yes { assert!(answers.lock().unwrap().is_empty()); actor.respond("p".into(), true).await.unwrap(); }
+                let asks = !yes || (smart && warned);
+                if asks { assert!(answers.lock().unwrap().is_empty()); assert_eq!(actor.state().pending, ["p"]); actor.respond("p".into(), true).await.unwrap(); }
                 let resolved = wait_event(&mut rx, |event| matches!(event, Event::PermissionResolved { .. })).await;
-                assert!(matches!(resolved, Event::PermissionResolved { allow, blocked_by_guard, .. } if allow == expected && blocked_by_guard == (yes && warned)));
+                assert!(matches!(resolved, Event::PermissionResolved { allow, blocked_by_guard, .. } if allow == expected && blocked_by_guard == (yes && !smart && warned)));
                 let recorded = answers.lock().unwrap().clone();
                 assert_eq!(recorded[0].0, expected);
                 if !expected { assert!(recorded[0].1.as_deref().unwrap().contains("blocked by agentsflow guard (rm-recursive)")); }
