@@ -33,6 +33,18 @@ pub(super) fn status_label(status: &TaskStatus) -> &'static str {
         TaskStatus::Archived => "Архив",
     }
 }
+pub(super) fn work_state_label(state: agentsflow_events::WorkState) -> &'static str {
+    use agentsflow_events::WorkState;
+    match state {
+        WorkState::Queued => "в очереди",
+        WorkState::Waiting => "ждёт вашего ответа",
+        WorkState::Running => "работает",
+        WorkState::Stuck => "застряла",
+        WorkState::Review => "ждёт приёмки",
+        WorkState::Done => "готово",
+        WorkState::Cancelled => "закрыта",
+    }
+}
 fn short_label(status: &TaskStatus) -> &'static str {
     match status {
         TaskStatus::Review => "Проверка",
@@ -311,7 +323,79 @@ impl Bridge {
         ]);
         self.show(chat, existing, text, rows).await;
     }
+    /// Card of a department task (`serve --home`): the run manager owns the
+    /// status, the owner accepts, requeues, stops or cancels.
+    fn work_card(
+        &self,
+        task: &TaskSnapshot,
+        work: &agentsflow_events::WorkInfo,
+        flash: &str,
+    ) -> (String, Vec<Vec<Value>>) {
+        use agentsflow_events::{Risk, WorkState};
+        let mut text = String::new();
+        if !flash.is_empty() {
+            text.push_str(&format!("{}\n\n", self.safe(flash, 200)));
+        }
+        text.push_str(&format!(
+            "{} <b>{}</b>\nОтдел: {} · {} · {}\nПотрачено: ${:.2}",
+            status_icon(&task.status),
+            self.safe(&task.title, 200),
+            self.safe(&work.department, 40),
+            work_state_label(work.state),
+            if work.risk == Risk::External {
+                "наружу, принимаете вы"
+            } else {
+                "внутреннее"
+            },
+            work.cost_usd
+        ));
+        if let Some(reason) = &work.stuck_reason {
+            text.push_str(&format!("\nПричина: {}", self.safe(reason, 300)));
+        }
+        if !task.description.is_empty() {
+            text.push_str(&format!("\n\n{}", self.safe(&task.description, 500)));
+        }
+        if !work.result_summary.is_empty() {
+            text.push_str(&format!(
+                "\n\n<b>Итог</b>\n{}",
+                self.safe(&work.result_summary, 900)
+            ));
+        }
+        if let Some(path) = &work.result_path {
+            text.push_str(&format!("\nФайл: <code>{}</code>", self.safe(path, 200)));
+        }
+        text.push_str(&format!(
+            "\nОбновлено {}",
+            format_time(task.updated_ms, now_ms())
+        ));
+        let id = &task.id;
+        let mut rows = Vec::new();
+        match work.state {
+            WorkState::Running => rows.push(vec![button("⏹ Стоп", format!("s:ta:{id}:stop"))]),
+            WorkState::Review => rows.push(vec![
+                button("✅ Принять", format!("s:ta:{id}:acc")),
+                button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
+            ]),
+            WorkState::Stuck => rows.push(vec![
+                button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
+                button("✅ Принять как есть", format!("s:ta:{id}:acc")),
+            ]),
+            WorkState::Done | WorkState::Cancelled => {
+                rows.push(vec![button("🔁 Запустить снова", format!("s:ta:{id}:rq"))])
+            }
+            WorkState::Queued | WorkState::Waiting => {}
+        }
+        if work.state != WorkState::Running && work.state != WorkState::Cancelled {
+            rows.push(vec![button("🗄 Закрыть", format!("s:ta:{id}:ar"))]);
+        }
+        let column = STATUSES.iter().position(|s| *s == task.status).unwrap_or(9);
+        rows.push(vec![button("← К доске", format!("s:b:{column}:0"))]);
+        (text, rows)
+    }
     fn task_card(&self, task: &TaskSnapshot, flash: &str) -> (String, Vec<Vec<Value>>) {
+        if let Some(work) = &task.work {
+            return self.work_card(task, work, flash);
+        }
         let mut text = String::new();
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 200)));
@@ -400,6 +484,22 @@ impl Bridge {
             ..TaskPatch::default()
         };
         let result = match action {
+            "stop" => {
+                let stopped = self
+                    .control
+                    .as_ref()
+                    .and_then(|control| control.runs.as_ref())
+                    .is_some_and(|runs| runs.stop(id));
+                Ok(if stopped {
+                    "Останавливаю"
+                } else {
+                    "Задача уже не выполняется"
+                })
+            }
+            "rq" => self
+                .hub
+                .update_task(AgentId::orchestrator(), id, patch(TaskStatus::Todo))
+                .map(|_| "Поставлено в очередь"),
             "run" => self.hub.dispatch_task(id).map(|_| "Запущено"),
             "accy" => self
                 .hub

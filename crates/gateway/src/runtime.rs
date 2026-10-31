@@ -83,9 +83,80 @@ fn effective_access(
     EffectiveAccess { mode, sandbox }
 }
 
+/// Where and how one agent process runs.
+pub struct SpawnEnv {
+    pub cwd: PathBuf,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub codex_bin: Option<PathBuf>,
+    pub mail: Option<agentsflow_adapters::MailConfig>,
+}
+
+/// Starts one member as an actor; `member.mode` and `member.sandbox` must
+/// already be the effective values.
+pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHandle<()>) {
+    let SpawnEnv {
+        cwd,
+        model,
+        effort,
+        codex_bin,
+        mail,
+    } = env;
+    let yes = member.mode != Some(AccessMode::Ask);
+    let bypass = member.mode == Some(AccessMode::Bypass);
+    let smart = member.mode == Some(AccessMode::Smart);
+    match member.kind {
+        AgentKind::Claude => crate::hub::spawn_guarded(
+            hub.clone(),
+            member.id.clone(),
+            yes,
+            cwd.clone(),
+            member.guard && !bypass,
+            smart,
+            move || {
+                ClaudeSession::start(ClaudeOptions {
+                    cwd: Some(cwd.clone()),
+                    model: model.clone(),
+                    mail: mail.clone(),
+                    effort: effort.clone(),
+                    bypass,
+                })
+            },
+        ),
+        AgentKind::Codex => {
+            let sandbox = member.sandbox.map(|sandbox| match sandbox {
+                MemberSandbox::ReadOnly => SandboxMode::Read_only,
+                MemberSandbox::WorkspaceWrite => SandboxMode::Workspace_write,
+            });
+            crate::hub::spawn_guarded(
+                hub.clone(),
+                member.id.clone(),
+                yes,
+                cwd.clone(),
+                member.guard && !bypass,
+                smart,
+                move || {
+                    CodexSession::start(CodexOptions {
+                        cwd: Some(cwd.clone()),
+                        model: model.clone(),
+                        sandbox: sandbox.clone(),
+                        bin: codex_bin.clone(),
+                        mail: mail.clone(),
+                        effort: effort.clone(),
+                        bypass,
+                    })
+                },
+            )
+        }
+    }
+}
+
 impl Runtime {
     pub fn new(options: RuntimeOptions) -> Result<Self> {
-        options.team.validate()?;
+        // `serve --home` has no standing team: its agents live one run each.
+        if !options.team.members.is_empty() {
+            options.team.validate()?;
+        }
         options.team.check_bypass(options.allow_bypass)?;
         let mut team = options.team.clone();
         for member in &mut team.members {
@@ -129,54 +200,17 @@ impl Runtime {
                     .collect();
                 config
             });
-            let yes = member.mode != Some(AccessMode::Ask);
-            let bypass = member.mode == Some(AccessMode::Bypass);
-            let smart = member.mode == Some(AccessMode::Smart);
-            let (actor, task) = match member.kind {
-                AgentKind::Claude => crate::hub::spawn_guarded(
-                    hub.clone(),
-                    member.id.clone(),
-                    yes,
-                    cwd.clone(),
-                    member.guard && !bypass,
-                    smart,
-                    move || {
-                        ClaudeSession::start(ClaudeOptions {
-                            cwd: Some(cwd.clone()),
-                            model: model.clone(),
-                            mail: mail_config.clone(),
-                            effort: effort.clone(),
-                            bypass,
-                        })
-                    },
-                ),
-                AgentKind::Codex => {
-                    let sandbox = member.sandbox.map(|sandbox| match sandbox {
-                        MemberSandbox::ReadOnly => SandboxMode::Read_only,
-                        MemberSandbox::WorkspaceWrite => SandboxMode::Workspace_write,
-                    });
-                    let bin = options.codex_bin.clone();
-                    crate::hub::spawn_guarded(
-                        hub.clone(),
-                        member.id.clone(),
-                        yes,
-                        cwd.clone(),
-                        member.guard && !bypass,
-                        smart,
-                        move || {
-                            CodexSession::start(CodexOptions {
-                                cwd: Some(cwd.clone()),
-                                model: model.clone(),
-                                sandbox: sandbox.clone(),
-                                bin: bin.clone(),
-                                mail: mail_config.clone(),
-                                effort: effort.clone(),
-                                bypass,
-                            })
-                        },
-                    )
-                }
-            };
+            let (actor, task) = spawn_member(
+                &hub,
+                member,
+                SpawnEnv {
+                    cwd,
+                    model,
+                    effort,
+                    codex_bin: options.codex_bin.clone(),
+                    mail: mail_config,
+                },
+            );
             tasks.push(task);
             agents.insert(member.id.clone(), actor);
         }

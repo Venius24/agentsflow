@@ -1,3 +1,5 @@
+mod work;
+
 use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Duration};
 
 use crate::hub::{Actor, Hub, HubError, NewTask, TaskError, TaskPatch};
@@ -46,6 +48,8 @@ pub struct ServeOptions {
     log: Option<PathBuf>,
     no_log: bool,
     mail_thread_limit: usize,
+    /// `--home DIR`: departments instead of a standing team.
+    home: Option<PathBuf>,
 }
 impl ServeOptions {
     #[cfg(test)]
@@ -56,10 +60,29 @@ impl ServeOptions {
         if args.iter().any(|arg| arg == "--team") && args.iter().any(|arg| arg == "--agents") {
             anyhow::bail!("--team and --agents cannot be used together");
         }
+        if args.iter().any(|arg| arg == "--home")
+            && args
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "--team" | "--agents" | "--projects" | "--cwd"))
+        {
+            anyhow::bail!("--home cannot be combined with --team, --agents, --projects or --cwd");
+        }
         let Some(mut options) = Self::parse_basic(args) else {
             return Ok(None);
         };
-        if let Some(index) = args.iter().position(|arg| arg == "--team") {
+        if let Some(home) = &options.home {
+            // Fail at start, not at the first task, when the home is broken.
+            let loaded = crate::home::Home::load(home)?;
+            for dept in loaded.departments.values() {
+                dept.team
+                    .check_bypass(options.allow_bypass)
+                    .map_err(|error| anyhow::anyhow!("department {}: {error}", dept.id))?;
+            }
+            options.cwd = loaded.root.clone();
+            options.team = Team {
+                members: Vec::new(),
+            };
+        } else if let Some(index) = args.iter().position(|arg| arg == "--team") {
             options.team = Team::load(&args[index + 1])?;
         } else {
             options.team = Team::filtered_pair(options.claude, options.codex)?;
@@ -90,6 +113,7 @@ impl ServeOptions {
             log: None,
             no_log: false,
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
+            home: None,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
@@ -116,6 +140,7 @@ impl ServeOptions {
             match arg.as_str() {
                 "--projects" => options.projects.push(value.into()),
                 "--log" => options.log = Some(value.into()),
+                "--home" => options.home = Some(value.into()),
                 "--workflow" => options.workflows.push(value.into()),
                 "--port" => options.port = value.parse().ok()?,
                 "--mail-thread-limit" => {
@@ -197,6 +222,8 @@ struct AppState {
     shutdown: watch::Receiver<bool>,
     workflows: Vec<Spec>,
     manager: Manager,
+    /// Department runs of `serve --home`.
+    runs: Option<crate::runs::Runs>,
 }
 impl AppState {
     fn actor(&self, agent: &str) -> Option<&Actor> {
@@ -573,7 +600,7 @@ async fn get_state(State(state): State<AppState>) -> Json<Value> {
         .map(|(id, actor)| (id.to_string(), actor.state()))
         .collect();
     Json(
-        json!({"version": env!("CARGO_PKG_VERSION"), "cwd": state.cwd, "projects_enabled": state.projects.as_ref().is_some_and(|p| p.enabled()), "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
+        json!({"version": env!("CARGO_PKG_VERSION"), "cwd": state.cwd, "projects_enabled": state.projects.as_ref().is_some_and(|p| p.enabled()), "agents": agents, "team": state.team.members, "workflow": state.manager.state(), "home": state.runs.as_ref().map(|runs| runs.home().root.to_string_lossy().into_owned())}),
     )
 }
 async fn get_projects(State(state): State<AppState>) -> Response {
@@ -882,6 +909,14 @@ fn app(state: AppState) -> Router {
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflow/run", post(run_workflow))
         .route("/api/workflow/stop", post(stop_workflow))
+        .route("/api/departments", get(work::departments))
+        .route("/api/work", post(work::create_work))
+        .route("/api/tasks/{id}/stop", post(work::stop_task))
+        .route("/api/tasks/{id}/retry", post(work::retry_task))
+        .route("/api/tasks/{id}/result", get(work::task_result))
+        .route("/api/runs", get(work::list_runs))
+        .route("/api/home/reload", post(work::reload_home))
+        .route("/api/spend", get(work::spend))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -986,6 +1021,36 @@ async fn run_session(
     });
     runtime_options.mail_agent_tokens = mail_agent_tokens.clone();
     let runtime = Runtime::new(runtime_options)?;
+    let runs = match &options.home {
+        Some(home) => {
+            let home = crate::home::Home::load(home)?;
+            let state_dir = home.state_dir();
+            std::fs::create_dir_all(&state_dir)?;
+            runtime.hub.set_board_file(&state_dir.join("board.json"))?;
+            let ledger = crate::ledger::Ledger::open(&state_dir.join("ledger.jsonl"));
+            crate::diag::diag(
+                "INFO",
+                &format!(
+                    "отделы: {}",
+                    home.departments
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+            Some(crate::runs::Runs::start(
+                runtime.hub.clone(),
+                home,
+                ledger,
+                crate::runs::RunEnv {
+                    codex_bin: options.codex_bin.clone(),
+                    ..Default::default()
+                },
+            ))
+        }
+        None => None,
+    };
     let manager = Manager::new(
         runtime.hub.clone(),
         runtime.agents.clone(),
@@ -1015,6 +1080,7 @@ async fn run_session(
         shutdown: shutdown_rx,
         workflows: specs.to_vec(),
         manager: manager.clone(),
+        runs: runs.clone(),
     };
     if first {
         println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
@@ -1032,6 +1098,7 @@ async fn run_session(
                 manager: manager.clone(),
                 projects: Some(projects),
                 announce,
+                runs: runs.clone(),
             }),
             telegram_stop,
         ))
@@ -1050,6 +1117,9 @@ async fn run_session(
     manager.stop();
     while manager.state().running {
         tokio::task::yield_now().await;
+    }
+    if let Some(runs) = &runs {
+        runs.shutdown().await;
     }
     runtime.shutdown().await;
     crate::diag::close();
@@ -1204,6 +1274,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 let stats = serde_json::to_value(get_stats(State(state.clone())).await.0).unwrap();
                 assert!(stats["agents"]["claude"].is_object());
@@ -1484,6 +1555,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 let request = |agent: &str| {
                     Json(Interrupt {
@@ -1542,6 +1614,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 let request = |name: &str| Json(Interrupt { agent: name.into() });
                 assert_eq!(
@@ -1611,6 +1684,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 assert_eq!(
                     switch_project(
@@ -1676,6 +1750,7 @@ mod tests {
                     shutdown,
                     workflows: Vec::new(),
                     manager,
+                    runs: None,
                 };
                 let make = |from: &str, to: &str| SendMail {
                     from: from.into(),
@@ -1817,6 +1892,7 @@ mod tests {
                     shutdown,
                     workflows: vec![spec, role_spec],
                     manager: manager.clone(),
+                    runs: None,
                 };
                 let response = run_workflow(
                     State(state.clone()),
@@ -1895,6 +1971,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 let body = get_state(State(state.clone())).await.0;
                 assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
@@ -2039,6 +2116,7 @@ mod tests {
                     shutdown,
                     workflows: vec![],
                     manager,
+                    runs: None,
                 };
                 let team = get_team(State(state)).await.0;
                 assert_eq!(team[0]["mode"], "auto");

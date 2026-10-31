@@ -12,7 +12,9 @@ use std::{
 };
 
 use agentsflow_adapters::{Agent, Interrupter};
-use agentsflow_events::{AgentId, Envelope, Event, Role, TaskSnapshot, TaskStatus, WorkflowStatus};
+use agentsflow_events::{
+    AgentId, Envelope, Event, Role, TaskSnapshot, TaskStatus, WorkInfo, WorkState, WorkflowStatus,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -42,6 +44,8 @@ struct Data {
     tasks: Vec<TaskSnapshot>,
     stats: Statistics,
     resolution_origins: HashMap<u64, ResolutionOrigin>,
+    /// Board file of `serve --home`: the board outlives the bounded event history.
+    board: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -244,6 +248,37 @@ fn validate_task(task: &TaskSnapshot) -> std::result::Result<(), TaskError> {
         return Err(TaskError::Invalid("invalid labels"));
     }
     Ok(())
+}
+/// What the owner may do with a department task from the board: accept a
+/// result, cancel, or put it back in the queue ("ещё круг").
+fn owner_transition(
+    state: WorkState,
+    status: &TaskStatus,
+) -> std::result::Result<WorkState, TaskError> {
+    use WorkState::*;
+    match (state, status) {
+        (Running, _) => Err(TaskError::Invalid("task is running: stop it first")),
+        (Review | Stuck, TaskStatus::Done) => Ok(Done),
+        (Stuck | Review | Done | Cancelled, TaskStatus::Todo) => Ok(Queued),
+        (_, TaskStatus::Archived) => Ok(Cancelled),
+        (state, status) if &state.status() == status => Ok(state),
+        _ => Err(TaskError::Invalid(
+            "department tasks can only be accepted, requeued or cancelled",
+        )),
+    }
+}
+fn save_board(data: &Data) {
+    let Some(path) = &data.board else {
+        return;
+    };
+    let tmp = path.with_extension("json.tmp");
+    let result = serde_json::to_vec_pretty(&data.tasks)
+        .map_err(std::io::Error::other)
+        .and_then(|bytes| std::fs::write(&tmp, bytes))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(error) = result {
+        crate::server_diag!("board save failed: {error}");
+    }
 }
 fn store_task(tasks: &mut Vec<TaskSnapshot>, task: &TaskSnapshot) {
     if let Some(existing) = tasks.iter_mut().find(|item| item.id == task.id) {
@@ -464,6 +499,7 @@ impl Hub {
                     tasks: Vec::new(),
                     stats: Statistics::default(),
                     resolution_origins: HashMap::new(),
+                    board: None,
                 }),
                 tx,
                 log: None,
@@ -542,6 +578,7 @@ impl Hub {
                     tasks,
                     stats,
                     resolution_origins: HashMap::new(),
+                    board: None,
                 }),
                 tx,
                 log: Some(LogWriter::start(path)),
@@ -594,6 +631,7 @@ impl Hub {
         data.stats.record(&envelope);
         if let Event::Task { task } = &envelope.event {
             store_task(&mut data.tasks, task);
+            save_board(&*data);
         }
         if data.history.len() == HISTORY_LIMIT {
             if let Some(old) = data.history.pop_front() {
@@ -720,6 +758,104 @@ impl Hub {
         self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
         Ok(task)
     }
+    /// Creates a department task (`serve --home`).
+    pub fn create_work(
+        &self,
+        by: AgentId,
+        title: &str,
+        description: String,
+        work: WorkInfo,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        let mut data = self.inner.data.lock().unwrap();
+        if data
+            .tasks
+            .iter()
+            .filter(|t| t.status != TaskStatus::Archived)
+            .count()
+            >= 500
+        {
+            return Err(TaskError::Limit);
+        }
+        let id = loop {
+            let id = Uuid::new_v4().simple().to_string()[..8].to_owned();
+            if !data.tasks.iter().any(|t| t.id == id) {
+                break id;
+            }
+        };
+        let now = now_ms();
+        let task = TaskSnapshot {
+            id,
+            title: title.trim().into(),
+            description,
+            status: work.state.status(),
+            assignee: None,
+            progress: 0,
+            labels: vec![],
+            note: String::new(),
+            thread: None,
+            created_ms: now,
+            updated_ms: now,
+            work: Some(work),
+        };
+        validate_task(&task)?;
+        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        Ok(task)
+    }
+    /// Changes a department task in place; the board status follows its state.
+    pub fn update_work(
+        &self,
+        by: AgentId,
+        id: &str,
+        change: impl FnOnce(&mut TaskSnapshot, &mut WorkInfo) -> std::result::Result<(), TaskError>,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        let mut data = self.inner.data.lock().unwrap();
+        let mut task = data
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .cloned()
+            .ok_or(TaskError::NotFound)?;
+        let mut work = task
+            .work
+            .take()
+            .ok_or(TaskError::Invalid("not a department task"))?;
+        change(&mut task, &mut work)?;
+        task.status = work.state.status();
+        if task.status == TaskStatus::Done {
+            task.progress = 100;
+        }
+        task.work = Some(work);
+        task.updated_ms = now_ms();
+        validate_task(&task)?;
+        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        Ok(task)
+    }
+    /// Keeps the board in `path` as well as in the event history. Cards saved
+    /// there win over older snapshots replayed from the journal.
+    pub fn set_board_file(&self, path: &Path) -> Result<()> {
+        let mut data = self.inner.data.lock().unwrap();
+        match std::fs::read_to_string(path) {
+            Ok(text) => {
+                let saved: Vec<TaskSnapshot> = serde_json::from_str(&text)
+                    .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+                for task in saved {
+                    let newer = data
+                        .tasks
+                        .iter()
+                        .find(|t| t.id == task.id)
+                        .is_some_and(|t| t.updated_ms > task.updated_ms);
+                    if !newer {
+                        store_task(&mut data.tasks, &task);
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        data.board = Some(path.to_path_buf());
+        save_board(&data);
+        Ok(())
+    }
     pub fn update_task(
         &self,
         by: AgentId,
@@ -764,7 +900,17 @@ impl Hub {
             task.assignee = assignee;
         }
         if let Some(status) = patch.status {
-            task.status = status;
+            if let Some(work) = &mut task.work {
+                // Department tasks: the owner may accept, cancel or requeue;
+                // everything else is the run manager's business.
+                work.state = owner_transition(work.state, &status)?;
+                if work.state == WorkState::Queued {
+                    work.stuck_reason = None;
+                }
+                task.status = work.state.status();
+            } else {
+                task.status = status;
+            }
         }
         if let Some(progress) = patch.progress {
             if progress > 100 {

@@ -100,3 +100,65 @@ impl Agent for Silent {
         Ok(())
     }
 }
+
+/// Answers each prompt with the next scripted reply (the last one repeats),
+/// reporting `cost` dollars per turn; a reply starting with `write:` also
+/// writes the rest of it to `result.md` in `dir`.
+pub struct Scripted {
+    replies: std::collections::VecDeque<String>,
+    last: String,
+    pending: Option<String>,
+    cost: Option<f64>,
+    dir: std::path::PathBuf,
+}
+
+impl Scripted {
+    pub fn new(replies: &[&str], cost: Option<f64>, dir: &std::path::Path) -> Self {
+        Self {
+            replies: replies.iter().map(|reply| reply.to_string()).collect(),
+            last: replies.last().copied().unwrap_or("ok").to_owned(),
+            pending: None,
+            cost,
+            dir: dir.to_path_buf(),
+        }
+    }
+}
+
+impl Agent for Scripted {
+    async fn send(&mut self, _: &str) -> Result<()> {
+        self.pending = Some(
+            self.replies
+                .pop_front()
+                .unwrap_or_else(|| self.last.clone()),
+        );
+        Ok(())
+    }
+    async fn next_events(&mut self) -> Result<Vec<Event>> {
+        let mut text = self.pending.take().unwrap_or_default();
+        if let Some(result) = text.strip_prefix("write:") {
+            std::fs::write(self.dir.join("result.md"), result)?;
+            text = "записал result.md".into();
+        }
+        Ok(vec![
+            Event::Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cost_usd: self.cost,
+            },
+            Event::Message {
+                role: Role::Assistant,
+                text,
+                delta: false,
+            },
+            Event::Done {
+                reason: "ok".into(),
+            },
+        ])
+    }
+    async fn respond(&mut self, _: &str, _: bool) -> Result<()> {
+        Ok(())
+    }
+    async fn shutdown(self) -> Result<()> {
+        Ok(())
+    }
+}

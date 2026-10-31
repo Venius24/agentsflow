@@ -350,6 +350,7 @@ async fn workflow_screens_without_running_anything() {
                 manager,
                 projects: None,
                 announce: None,
+                runs: None,
             });
             bridge.update(&msg("/run")).await;
             let text = last_text(&calls);
@@ -444,6 +445,7 @@ async fn project_screens_validate_selection_and_busy() {
                 manager,
                 projects: Some(projects.clone()),
                 announce: None,
+                runs: None,
             });
             bridge.update(&msg("/more")).await;
             assert!(last_data(&calls).contains(&"s:proj".into()));

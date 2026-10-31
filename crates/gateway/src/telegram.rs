@@ -21,6 +21,8 @@ pub struct Control {
     pub manager: crate::workflow::Manager,
     pub projects: Option<crate::projects::Control>,
     pub announce: Option<String>,
+    /// Department runs of `serve --home`.
+    pub runs: Option<crate::runs::Runs>,
 }
 
 #[derive(Clone)]
@@ -528,6 +530,47 @@ impl Bridge {
                     json!({"inline_keyboard":[[{"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}]]}),
                 );
             }
+            Event::Task { task } if task.work.is_some() => {
+                let previous = self.task_seen.insert(task.id.clone(), task.status.clone());
+                let work = task.work.as_ref().expect("guarded");
+                if previous.as_ref() != Some(&task.status) {
+                    let title = message_text(&task.title, &self.config.token, 200);
+                    let dept = message_text(&work.department, &self.config.token, 40);
+                    let summary = message_text(&work.result_summary, &self.config.token, 700);
+                    let id = &task.id;
+                    let open = json!({"text":"Открыть","callback_data":format!("s:t:{id}")});
+                    let again =
+                        json!({"text":"🔁 Ещё круг","callback_data":format!("s:ta:{id}:rq")});
+                    match work.state {
+                        agentsflow_events::WorkState::Review => {
+                            let who = if work.risk == agentsflow_events::Risk::External {
+                                "уйдёт наружу, нужна ваша приёмка"
+                            } else {
+                                "на приёмке"
+                            };
+                            self.broadcast_buttons(
+                                &format!(
+                                    "👀 <b>{dept}</b>: «{title}» готово, {who} · ${:.2}\n\n{summary}",
+                                    work.cost_usd
+                                ),
+                                json!({"inline_keyboard":[[{"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")},again],[open]]}),
+                            );
+                        }
+                        agentsflow_events::WorkState::Stuck => {
+                            let reason = message_text(
+                                work.stuck_reason.as_deref().unwrap_or("без причины"),
+                                &self.config.token,
+                                300,
+                            );
+                            self.broadcast_buttons(
+                                &format!("🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}"),
+                                json!({"inline_keyboard":[[again,{"text":"🗄 Закрыть","callback_data":format!("s:ta:{id}:ar")}],[open]]}),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Event::Task { task } => {
                 let previous = self.task_seen.insert(task.id.clone(), task.status.clone());
                 if previous.as_ref() != Some(&task.status) {
@@ -591,7 +634,10 @@ impl Bridge {
                     }
                 }
                 let elapsed = self.started.remove(&agent).map(|t| t.elapsed().as_secs());
-                if matches!(reason.as_str(), "error" | "interrupted") {
+                // Department agents ("отдел:агент:задача") report through their
+                // task card, not turn by turn.
+                if agent.as_str().contains(':') {
+                } else if matches!(reason.as_str(), "error" | "interrupted") {
                     let agent = message_text(agent.as_str(), &self.config.token, 100);
                     self.broadcast_html(&format!("❌ <b>{agent}</b>: ход завершился ошибкой"));
                 } else if let Some(secs) = elapsed.filter(|secs| *secs >= 60) {
