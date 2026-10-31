@@ -281,6 +281,7 @@
       <div class="export"><span>Экспорт:</span><button type="button" id="export-md">Markdown</button><button type="button" id="export-jsonl">JSONL</button><span class="export-error" id="export-error" role="alert"></span></div>
       <span class="team-meta" id="team-summary"></span>
       <span class="meta" id="cwd"></span>
+      <div id="project-controls" hidden><select id="project-select" aria-label="Проект"></select><button type="button" id="project-switch">Сменить</button><div id="project-status" aria-live="polite"></div></div>
       <span class="meta" id="app-version"></span>
     </div>
   </aside>
@@ -336,6 +337,38 @@ async function post(path, body) {
   if (!r.ok) throw new Error((data && data.error) || ("HTTP " + r.status));
   return data;
 }
+let projectsLoaded = false;
+async function loadProjects() {
+  const response = await fetch(api("/api/projects"));
+  if (!response.ok) throw new Error("Не удалось загрузить проекты");
+  const data = await response.json();
+  const select = $("#project-select");
+  select.replaceChildren(...data.projects.map(project => { const option = el("option", "", project.name); option.value = project.path; option.selected = project.current; return option; }));
+  projectsLoaded = true;
+}
+$("#project-switch").onclick = async () => {
+  const button = $("#project-switch"), select = $("#project-select"), status = $("#project-status");
+  const path = select.value, name = select.selectedOptions[0] && select.selectedOptions[0].textContent;
+  if (!path) return;
+  button.disabled = select.disabled = true;
+  try {
+    const result = await post("/api/project/switch", {path});
+    if (result.unchanged) { status.textContent = "Проект уже выбран"; return; }
+    status.textContent = "Перезапуск в проекте " + name + "…";
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      try {
+        const response = await fetch(api("/api/state"), {signal: controller.signal, cache: "no-store"});
+        if (response.ok && (await response.json()).cwd === path) { location.reload(); return; }
+      } catch (_) {} finally { clearTimeout(timer); }
+    }
+    status.textContent = "Не удалось дождаться перезапуска";
+  } catch (error) { status.textContent = error.message; }
+  finally { button.disabled = select.disabled = false; }
+};
 
 function preview(input, max = 90) {
   let s;
@@ -1032,6 +1065,9 @@ async function loadState() {
     $("#team-summary").textContent = "Команда: " + team.map(a => a.id + (a.lead ? " (лидер)" : "")).join(" · ");
     $("#cwd").textContent = s.cwd || "";
     $("#cwd").title = s.cwd || "";
+    $("#cwd").hidden = !!s.projects_enabled;
+    $("#project-controls").hidden = !s.projects_enabled;
+    if (s.projects_enabled && !projectsLoaded) try { await loadProjects(); } catch (_) {}
     if (typeof s.version === "string" && s.version) $("#app-version").textContent = "v" + s.version;
     for (const a of team) {
       const pane = panes[a.id] || (buildPane(a), panes[a.id]);

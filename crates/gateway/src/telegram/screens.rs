@@ -1340,6 +1340,44 @@ impl Bridge {
         let number = |i: usize| arg(i).parse::<usize>().ok();
         let mut flash = String::new();
         match arg(1) {
+            "proj" => {
+                let control = self.control.as_ref().and_then(|c| c.projects.clone());
+                if let Some(control) = control.filter(|c| c.enabled()) {
+                    match control.list() {
+                        Ok(list) => {
+                            if let Some(index) = number(2) {
+                                let old = self.project_lists.get(&chat).and_then(|paths| paths.get(index));
+                                if let Some(project) = list.get(index).filter(|p| Some(&p.path) == old) {
+                                    let text = format!("Перезапустить команду в проекте {}? Незавершённая работа должна быть остановлена.", self.safe(&project.name, 200));
+                                    self.show(chat, message, text, vec![vec![button("Да, сменить", format!("s:projgo:{index}")), button("Отмена", "s:proj")]]).await;
+                                } else { flash = "Список изменился, откройте его заново".into(); }
+                            } else {
+                                self.project_lists.insert(chat, list.iter().map(|p| p.path.clone()).collect());
+                                let mut rows: Vec<_> = list.iter().enumerate().map(|(i, p)| vec![button(&format!("{}{}", if p.current { "● " } else { "" }, p.name), format!("s:proj:{i}"))]).collect();
+                                rows.push(vec![button("← Назад", "s:more")]);
+                                self.show(chat, message, "<b>📁 Проекты</b>".into(), rows).await;
+                            }
+                        }
+                        Err(_) => flash = "Не удалось прочитать проекты".into(),
+                    }
+                }
+            }
+            "projgo" => {
+                if let Some(control) = self.control.as_ref().and_then(|c| c.projects.clone()) {
+                    let index = number(2).unwrap_or(usize::MAX);
+                    let list = control.list().unwrap_or_default();
+                    let old = self.project_lists.get(&chat).and_then(|paths| paths.get(index));
+                    if let Some(project) = list.get(index).filter(|p| Some(&p.path) == old) {
+                        flash = match control.prepare(&project.path) {
+                            Ok(Some(ticket)) => { self.pending_switch = Some(ticket); "Команда перезапускается".into() },
+                            Ok(None) => "Проект уже выбран".into(),
+                            Err(crate::projects::SwitchError::Busy) => "Сначала остановите работу агентов".into(),
+                            Err(crate::projects::SwitchError::Unknown) => "Список изменился, откройте его заново".into(),
+                            Err(crate::projects::SwitchError::Unavailable) => "Не удалось сменить проект".into(),
+                        };
+                    } else { flash = "Список изменился, откройте его заново".into(); }
+                }
+            }
             "more" => self.open_more(chat, message).await,
             "team" => self.open_team(chat, None, message).await,
             "help" => self.queue(chat, &help_text(), None),

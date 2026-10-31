@@ -348,6 +348,8 @@ async fn workflow_screens_without_running_anything() {
             bridge.control = Some(Control {
                 specs: vec![ok, bad],
                 manager,
+                projects: None,
+                announce: None,
             });
             bridge.update(&msg("/run")).await;
             let text = last_text(&calls);
@@ -399,6 +401,86 @@ async fn workflow_screens_without_running_anything() {
             );
             server.abort();
             runtime.shutdown().await;
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn project_screens_validate_selection_and_busy() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let root = std::env::temp_dir().join(format!(
+                "agentsflow-telegram-projects-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let a = root.join("a");
+            let b = root.join("b");
+            for path in [&a, &b] {
+                std::fs::create_dir_all(path.join(".git")).unwrap();
+            }
+            let hub = Hub::new();
+            let (actor, task) =
+                crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
+                    Ok(crate::testing::Silent::new(1, false))
+                });
+            let agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
+            let manager = crate::workflow::Manager::new(
+                hub.clone(),
+                agents.clone(),
+                Team::preset("pair").unwrap(),
+            );
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let projects = crate::projects::Control {
+                roots: vec![root.clone()],
+                current: a.clone(),
+                hub: hub.clone(),
+                agents,
+                manager: manager.clone(),
+                tx,
+            };
+            let (mut bridge, calls, server) = fake(hub).await;
+            bridge.control = Some(Control {
+                specs: vec![],
+                manager,
+                projects: Some(projects.clone()),
+                announce: None,
+            });
+            bridge.update(&msg("/more")).await;
+            assert!(last_data(&calls).contains(&"s:proj".into()));
+            bridge.update(&cb("s:proj")).await;
+            assert!(last_text(&calls).contains("Проекты"));
+            let index = projects
+                .list()
+                .unwrap()
+                .iter()
+                .position(|p| p.path == crate::projects::canonical(&b).unwrap())
+                .unwrap();
+            bridge.update(&cb(&format!("s:proj:{index}"))).await;
+            assert!(last_text(&calls).contains("Перезапустить команду"));
+            actor.prompt("work".into()).await.unwrap();
+            bridge.update(&cb(&format!("s:projgo:{index}"))).await;
+            assert!(
+                calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(method, body)| method == "answerCallbackQuery"
+                        && String::from_utf8_lossy(body).contains("Сначала остановите"))
+            );
+            assert!(rx.try_recv().is_err());
+            actor.interrupt().await.unwrap();
+            while actor.state().busy {
+                tokio::task::yield_now().await;
+            }
+            bridge.update(&cb(&format!("s:projgo:{index}"))).await;
+            assert_eq!(
+                rx.recv().await.unwrap(),
+                crate::projects::canonical(&b).unwrap()
+            );
+            actor.shutdown().await;
+            task.await.unwrap();
+            server.abort();
+            std::fs::remove_dir_all(root).unwrap();
         })
         .await;
 }

@@ -26,7 +26,9 @@ use serde_json::{Value, json};
 use tokio::{net::TcpListener, sync::watch, task::LocalSet};
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct ServeOptions {
+    projects: Vec<PathBuf>,
     port: u16,
     cwd: PathBuf,
     claude: bool,
@@ -70,6 +72,7 @@ impl ServeOptions {
     }
     fn parse_basic(args: &[String]) -> Option<Self> {
         let mut options = Self {
+            projects: Vec::new(),
             port: 7878,
             cwd: std::env::current_dir().ok()?,
             claude: true,
@@ -111,6 +114,7 @@ impl ServeOptions {
                 return None;
             }
             match arg.as_str() {
+                "--projects" => options.projects.push(value.into()),
                 "--log" => options.log = Some(value.into()),
                 "--workflow" => options.workflows.push(value.into()),
                 "--port" => options.port = value.parse().ok()?,
@@ -182,6 +186,7 @@ impl ServeOptions {
 
 #[derive(Clone)]
 struct AppState {
+    projects: Option<crate::projects::Control>,
     hub: Hub,
     token: String,
     mail_agent_tokens: MailAgentTokens,
@@ -568,8 +573,59 @@ async fn get_state(State(state): State<AppState>) -> Json<Value> {
         .map(|(id, actor)| (id.to_string(), actor.state()))
         .collect();
     Json(
-        json!({"version": env!("CARGO_PKG_VERSION"), "cwd": state.cwd, "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
+        json!({"version": env!("CARGO_PKG_VERSION"), "cwd": state.cwd, "projects_enabled": state.projects.as_ref().is_some_and(|p| p.enabled()), "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
     )
+}
+async fn get_projects(State(state): State<AppState>) -> Response {
+    let Some(control) = &state.projects else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    match control.list() {
+        Ok(projects) => {
+            let current = projects
+                .iter()
+                .find(|p| p.current)
+                .map(|p| json!({"name":p.name,"path":p.path}));
+            Json(json!({"enabled":control.enabled(),"current":current,"projects":projects}))
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"Не удалось прочитать проекты"})),
+        )
+            .into_response(),
+    }
+}
+#[derive(Deserialize)]
+struct SwitchProject {
+    path: PathBuf,
+}
+async fn switch_project(
+    State(state): State<AppState>,
+    Json(input): Json<SwitchProject>,
+) -> Response {
+    let Some(control) = &state.projects else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match control.switch(&input.path) {
+        Ok(false) => Json(json!({"ok":true,"unchanged":true})).into_response(),
+        Ok(true) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
+        Err(crate::projects::SwitchError::Unknown) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"unknown project"})),
+        )
+            .into_response(),
+        Err(crate::projects::SwitchError::Busy) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"Сначала остановите работу агентов"})),
+        )
+            .into_response(),
+        Err(crate::projects::SwitchError::Unavailable) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"Не удалось сменить проект"})),
+        )
+            .into_response(),
+    }
 }
 async fn get_team(State(state): State<AppState>) -> Json<Value> {
     Json(json!(state.team.members))
@@ -819,6 +875,8 @@ fn app(state: AppState) -> Router {
         .route("/api/tasks/{id}/dispatch", post(dispatch_task))
         .route("/api/tasks/{id}/update", post(update_my_task))
         .route("/api/state", get(get_state))
+        .route("/api/projects", get(get_projects))
+        .route("/api/project/switch", post(switch_project))
         .route("/api/stats", get(get_stats))
         .route("/api/team", get(get_team))
         .route("/api/workflows", get(list_workflows))
@@ -832,11 +890,75 @@ fn app(state: AppState) -> Router {
 pub async fn serve(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     LocalSet::new().run_until(serve_local(options, specs)).await
 }
-async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
+async fn serve_local(mut options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, options.port)).await?;
     let port = listener.local_addr()?.port();
     let token = Uuid::new_v4().simple().to_string();
+    let listener = listener.into_std()?;
+    options.cwd = crate::projects::canonical(&options.cwd)?;
+    let mut previous = None;
+    let mut announce = None;
+    let mut first = true;
+    loop {
+        let socket = TcpListener::from_std(listener.try_clone()?)?;
+        match run_session(
+            &options,
+            &specs,
+            socket,
+            port,
+            &token,
+            first,
+            announce.take(),
+        )
+        .await
+        {
+            Ok(Some(path)) => {
+                previous = Some(options.cwd.clone());
+                options.cwd = path;
+                announce = Some(
+                    options
+                        .cwd
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                first = false;
+            }
+            Ok(None) => return Ok(()),
+            Err(error) => {
+                if let Some(old) = previous.take() {
+                    crate::server_diag!("project startup failed: {error:#}");
+                    options.cwd = old;
+                    announce = None;
+                    first = false;
+                } else {
+                    return Err(error);
+                }
+            }
+        }
+    }
+}
+
+async fn run_session(
+    options: &ServeOptions,
+    specs: &[Spec],
+    listener: TcpListener,
+    port: u16,
+    token: &str,
+    first: bool,
+    announce: Option<String>,
+) -> Result<Option<PathBuf>> {
+    let actual = crate::projects::canonical(&options.cwd)?;
+    if actual != options.cwd || !actual.is_dir() {
+        anyhow::bail!("project directory changed or is not a directory");
+    }
     let mut runtime_options = options.runtime_options();
+    if let Some(log) = &mut runtime_options.log {
+        if log.is_relative() {
+            *log = options.cwd.join(&*log);
+        }
+    }
     if runtime_options.log.is_none() && !options.no_log {
         // The journal is on by default so a restart keeps history and the board.
         let dir = options.cwd.join(".agentsflow");
@@ -849,7 +971,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         .map(|id| (id.clone(), Uuid::new_v4().simple().to_string()))
         .collect();
     let mut secrets: Vec<String> = mail_agent_tokens.values().cloned().collect();
-    secrets.push(token.clone());
+    secrets.push(token.to_owned());
     if let Some(config) = &options.telegram {
         secrets.push(config.token().to_owned());
     }
@@ -869,24 +991,37 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         runtime.agents.clone(),
         runtime.team.clone(),
     );
+    let (switch_tx, mut switch_rx) = tokio::sync::mpsc::unbounded_channel();
+    let projects = crate::projects::Control {
+        roots: options.projects.clone(),
+        current: options.cwd.clone(),
+        hub: runtime.hub.clone(),
+        agents: runtime.agents.clone(),
+        manager: manager.clone(),
+        tx: switch_tx,
+    };
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let telegram_stop = shutdown_rx.clone();
-    let specs_for_telegram = specs.clone();
+    let specs_for_telegram = specs.to_vec();
     let state = AppState {
+        projects: Some(projects.clone()),
         hub: runtime.hub.clone(),
-        token: token.clone(),
+        token: token.to_owned(),
         mail_agent_tokens,
         port,
         cwd: runtime.cwd.to_string_lossy().into_owned(),
         agents: runtime.agents.clone(),
         team: runtime.team.clone(),
         shutdown: shutdown_rx,
-        workflows: specs,
+        workflows: specs.to_vec(),
         manager: manager.clone(),
     };
-    println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
+    if first {
+        println!("agentsflow: http://127.0.0.1:{port}/?token={token}");
+    }
+    crate::diag::diag("INFO", &format!("проект: {}", options.cwd.display()));
     crate::diag::diag("INFO", &crate::team::format_compact(&runtime.team));
-    let telegram_task = options.telegram.map(|config| {
+    let telegram_task = options.telegram.clone().map(|config| {
         tokio::task::spawn_local(crate::telegram::run(
             config,
             runtime.hub.clone(),
@@ -895,16 +1030,18 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
             Some(crate::telegram::Control {
                 specs: specs_for_telegram,
                 manager: manager.clone(),
+                projects: Some(projects),
+                announce,
             }),
             telegram_stop,
         ))
     });
+    let (end_tx, end_rx) = tokio::sync::oneshot::channel();
     let result = axum::serve(listener, app(state))
         .with_graceful_shutdown(async move {
-            if let Err(error) = tokio::signal::ctrl_c().await {
-                crate::server_diag!("signal: {error}");
-            }
+            let switch_to = tokio::select! { result = tokio::signal::ctrl_c() => { if let Err(error) = result { crate::server_diag!("signal: {error}"); } None }, path = switch_rx.recv() => path };
             let _ = shutdown_tx.send(true);
+            let _ = end_tx.send(switch_to);
         })
         .await;
     if let Some(task) = telegram_task {
@@ -915,13 +1052,134 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
         tokio::task::yield_now().await;
     }
     runtime.shutdown().await;
+    crate::diag::close();
     result?;
-    Ok(())
+    Ok(end_rx.await.unwrap_or(None))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn project_request(
+        port: u16,
+        token: &str,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> (u16, Value) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nx-agentsflow-token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let (headers, body) = text.split_once("\r\n\r\n").unwrap();
+        let status = headers
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        (status, serde_json::from_str(body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn project_switch_preserves_port_token_and_separates_history() {
+        LocalSet::new()
+            .run_until(async {
+                let root =
+                    std::env::temp_dir().join(format!("agentsflow-switch-{}", Uuid::new_v4()));
+                let a = root.join("a");
+                let b = root.join("b");
+                let outside = root.join("outside");
+                for path in [&a, &b, &outside] {
+                    std::fs::create_dir_all(path).unwrap();
+                }
+                std::fs::create_dir(a.join(".git")).unwrap();
+                std::fs::create_dir(b.join(".git")).unwrap();
+                let mut options = ServeOptions::parse(&[]).unwrap();
+                options.cwd = crate::projects::canonical(&a).unwrap();
+                options.projects = vec![root.clone()];
+                let b = crate::projects::canonical(&b).unwrap();
+                let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let listener = listener.into_std().unwrap();
+                let token = "test-token";
+                let one_options = options.clone();
+                let socket = TcpListener::from_std(listener.try_clone().unwrap()).unwrap();
+                let first = tokio::task::spawn_local(async move {
+                    run_session(&one_options, &[], socket, port, token, false, None).await
+                });
+                let (_, list) = project_request(port, token, "GET", "/api/projects", "").await;
+                assert_eq!(list["projects"].as_array().unwrap().len(), 2);
+                let body = json!({"path":outside}).to_string();
+                assert_eq!(
+                    project_request(port, token, "POST", "/api/project/switch", &body)
+                        .await
+                        .0,
+                    404
+                );
+                let body = json!({"path":a}).to_string();
+                let (status, same) =
+                    project_request(port, token, "POST", "/api/project/switch", &body).await;
+                assert_eq!(status, 200);
+                assert_eq!(same["unchanged"], true);
+                assert_eq!(
+                    project_request(
+                        port,
+                        token,
+                        "POST",
+                        "/api/tasks",
+                        r#"{"title":"first project"}"#
+                    )
+                    .await
+                    .0,
+                    201
+                );
+                let body = json!({"path":b}).to_string();
+                assert_eq!(
+                    project_request(port, token, "POST", "/api/project/switch", &body)
+                        .await
+                        .0,
+                    202
+                );
+                assert_eq!(first.await.unwrap().unwrap(), Some(b.clone()));
+                options.cwd = b.clone();
+                let socket = TcpListener::from_std(listener.try_clone().unwrap()).unwrap();
+                let second = tokio::task::spawn_local(async move {
+                    run_session(&options, &[], socket, port, token, false, None).await
+                });
+                let (status, state) = project_request(port, token, "GET", "/api/state", "").await;
+                assert_eq!(status, 200);
+                assert_eq!(state["cwd"], b.to_string_lossy().as_ref());
+                let (_, tasks) = project_request(port, token, "GET", "/api/tasks", "").await;
+                assert!(tasks["tasks"].as_array().unwrap().is_empty());
+                assert!(b.join(".agentsflow/events.jsonl").exists());
+                let body = json!({"path":a}).to_string();
+                assert_eq!(
+                    project_request(port, token, "POST", "/api/project/switch", &body)
+                        .await
+                        .0,
+                    202
+                );
+                second.await.unwrap().unwrap();
+                drop(listener);
+                std::fs::remove_dir_all(root).unwrap();
+            })
+            .await;
+    }
 
     #[tokio::test]
     async fn task_routes_and_agent_permissions() {
@@ -935,6 +1193,7 @@ mod tests {
                 );
                 let (_tx, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub: runtime.hub.clone(),
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::new(),
@@ -1141,6 +1400,8 @@ mod tests {
                 (axum::http::Method::GET, "/api/state"),
                 (axum::http::Method::GET, "/api/stats"),
                 (axum::http::Method::GET, "/api/health"),
+                (axum::http::Method::GET, "/api/projects"),
+                (axum::http::Method::POST, "/api/project/switch"),
                 (axum::http::Method::POST, "/api/agent/restart"),
                 (axum::http::Method::GET, "/api/export"),
                 (axum::http::Method::POST, "/api/permission"),
@@ -1156,6 +1417,8 @@ mod tests {
             (axum::http::Method::GET, "/api/state"),
             (axum::http::Method::GET, "/api/stats"),
             (axum::http::Method::GET, "/api/health"),
+            (axum::http::Method::GET, "/api/projects"),
+            (axum::http::Method::POST, "/api/project/switch"),
             (axum::http::Method::POST, "/api/agent/restart"),
             (axum::http::Method::GET, "/api/export"),
             (axum::http::Method::POST, "/api/permission"),
@@ -1210,6 +1473,7 @@ mod tests {
                 let manager = Manager::new(hub.clone(), agents.clone(), team.clone());
                 let (_shutdown, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub,
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::default(),
@@ -1267,6 +1531,7 @@ mod tests {
                 let manager = Manager::new(hub.clone(), agents.clone(), team.clone());
                 let (_tx, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub,
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::default(),
@@ -1306,6 +1571,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_switch_http_rejects_disabled_and_busy() {
+        LocalSet::new()
+            .run_until(async {
+                let root = std::env::temp_dir()
+                    .join(format!("agentsflow-project-http-{}", Uuid::new_v4()));
+                let a = root.join("a");
+                let b = root.join("b");
+                for path in [&a, &b] {
+                    std::fs::create_dir_all(path.join(".git")).unwrap();
+                }
+                let hub = Hub::new();
+                let (actor, task) =
+                    crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
+                        Ok(NoAgent)
+                    });
+                let agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
+                let team = Team::preset("pair").unwrap();
+                let manager = Manager::new(hub.clone(), agents.clone(), team.clone());
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+                let control = crate::projects::Control {
+                    roots: vec![],
+                    current: a,
+                    hub: hub.clone(),
+                    agents: agents.clone(),
+                    manager: manager.clone(),
+                    tx,
+                };
+                let (_shutdown, shutdown) = watch::channel(false);
+                let mut state = AppState {
+                    projects: Some(control),
+                    hub,
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::new(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents,
+                    team,
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                assert_eq!(
+                    switch_project(
+                        State(state.clone()),
+                        Json(SwitchProject { path: b.clone() })
+                    )
+                    .await
+                    .status(),
+                    StatusCode::NOT_FOUND
+                );
+                state.projects.as_mut().unwrap().roots.push(root.clone());
+                actor.prompt("work".into()).await.unwrap();
+                let response = switch_project(State(state), Json(SwitchProject { path: b })).await;
+                assert_eq!(response.status(), StatusCode::CONFLICT);
+                let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()["error"],
+                    "Сначала остановите работу агентов"
+                );
+                actor.shutdown().await;
+                task.await.unwrap();
+                std::fs::remove_dir_all(root).unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn personal_mail_identity() {
         LocalSet::new()
             .run_until(async {
@@ -1328,6 +1662,7 @@ mod tests {
                 );
                 let (_shutdown, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub,
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::default(),
@@ -1471,6 +1806,7 @@ mod tests {
                     Spec::parse("name='role'\n[[step]]\nid='s'\nagent='@missing'\nprompt='x'")
                         .unwrap();
                 let state = AppState {
+                    projects: None,
                     hub: runtime.hub.clone(),
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::new(),
@@ -1548,6 +1884,7 @@ mod tests {
                 );
                 let (_stop, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub: runtime.hub.clone(),
                     token: "main".into(),
                     mail_agent_tokens: tokens.clone(),
@@ -1691,6 +2028,7 @@ mod tests {
                 );
                 let (_tx, shutdown) = watch::channel(false);
                 let state = AppState {
+                    projects: None,
                     hub: runtime.hub.clone(),
                     token: "main".into(),
                     mail_agent_tokens: MailAgentTokens::new(),
@@ -1820,6 +2158,17 @@ mod tests {
         assert!(ServeOptions::parse(&args(&["--no-log"])).unwrap().no_log);
         assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
         assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
+    }
+
+    #[test]
+    fn parses_multiple_project_roots() {
+        let args = ["--projects", "one", "--projects", "two"].map(str::to_owned);
+        let options = ServeOptions::parse(&args).unwrap();
+        assert_eq!(
+            options.projects,
+            vec![PathBuf::from("one"), PathBuf::from("two")]
+        );
+        assert!(ServeOptions::parse(&["--projects".into()]).is_none());
     }
     #[test]
     fn parse_mail_thread_limit() {
