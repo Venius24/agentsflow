@@ -1,8 +1,10 @@
 mod cli;
+mod department;
 mod diag;
 mod doctor;
 mod export;
 mod guard;
+mod home;
 mod hub;
 mod mail;
 mod mail_mcp;
@@ -37,6 +39,15 @@ async fn main() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "team") {
         return match team::run_cli(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                ExitCode::from(2)
+            }
+        };
+    }
+    if args.first().is_some_and(|arg| arg == "home") {
+        return match home::run_cli(&args[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("[error] {error:#}");

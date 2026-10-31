@@ -367,6 +367,7 @@ mod tests {
             thread: None,
             created_ms: 1,
             updated_ms: 1,
+            work: None,
         };
         let mut updated = task.clone();
         updated.status = TaskStatus::Review;
@@ -399,6 +400,7 @@ mod tests {
                 thread: None,
                 created_ms: 1,
                 updated_ms: 1,
+                work: None,
             }],
         );
         assert!(out.contains("Outside history"));

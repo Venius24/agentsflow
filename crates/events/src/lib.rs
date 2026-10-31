@@ -81,6 +81,106 @@ pub struct TaskSnapshot {
     pub thread: Option<String>,
     pub created_ms: u64,
     pub updated_ms: u64,
+    /// Present on department tasks (`serve --home`); old cards have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<WorkInfo>,
+}
+
+/// Where a department task is in its life. The board status is derived from
+/// it (`WorkState::status`), so the two never disagree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkState {
+    #[default]
+    Queued,
+    /// Waits for the owner: answers to questions or a decision.
+    Waiting,
+    Running,
+    /// Stopped by loops, time, budget, a failure or the owner; see `stuck_reason`.
+    Stuck,
+    /// Finished by the department, waits for acceptance.
+    Review,
+    Done,
+    Cancelled,
+}
+
+impl WorkState {
+    pub fn status(self) -> TaskStatus {
+        match self {
+            Self::Queued => TaskStatus::Todo,
+            Self::Waiting | Self::Stuck => TaskStatus::Blocked,
+            Self::Running => TaskStatus::InProgress,
+            Self::Review => TaskStatus::Review,
+            Self::Done => TaskStatus::Done,
+            Self::Cancelled => TaskStatus::Archived,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Risk {
+    Internal,
+    /// Leaves the machine (post, letter, change in someone else's system):
+    /// only the owner accepts it.
+    #[default]
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunRef {
+    pub id: String,
+    pub started_ms: u64,
+    #[serde(default)]
+    pub finished_ms: Option<u64>,
+    /// `finished`, `stuck`, `interrupted`; empty while running.
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Question {
+    pub text: String,
+    #[serde(default)]
+    pub answer: Option<String>,
+    /// Who asked: `orchestrator` or a department agent.
+    #[serde(default)]
+    pub from: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkInfo {
+    pub department: String,
+    #[serde(default)]
+    pub state: WorkState,
+    #[serde(default)]
+    pub risk: Risk,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub runs: Vec<RunRef>,
+    #[serde(default)]
+    pub questions: Vec<Question>,
+    #[serde(default)]
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
+    #[serde(default)]
+    pub result_summary: String,
+    #[serde(default)]
+    pub result_path: Option<String>,
+    #[serde(default)]
+    pub stuck_reason: Option<String>,
+    /// How many times the result was sent back to the department.
+    #[serde(default)]
+    pub returns: u8,
+    /// `owner`, `orchestrator`, `schedule` or the requesting department.
+    #[serde(default)]
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -219,6 +319,7 @@ mod tests {
                     thread: None,
                     created_ms: 1,
                     updated_ms: 2,
+                    work: None,
                 },
             },
             Event::Message {

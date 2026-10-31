@@ -137,6 +137,10 @@ fn roster(team: &crate::team::Team) -> String {
         .join("\n")
 }
 impl Spec {
+    /// Value for a `{key}` placeholder, such as the department brief.
+    pub fn bind(&mut self, key: &str, value: String) {
+        self.bindings.insert(key.to_owned(), value);
+    }
     pub fn resolve_team(&self, team: &crate::team::Team) -> Result<Self> {
         let mut resolved = self.clone();
         resolved.bindings.insert("team".into(), roster(team));
@@ -246,6 +250,7 @@ impl Spec {
             }
             for key in placeholders(&step.prompt)? {
                 if key != "task"
+                    && key != "brief"
                     && key != "team"
                     && key != "prev.output"
                     && !key
@@ -338,6 +343,9 @@ fn render(
             text.push_str(task);
         } else if let Some(value) = bindings.get(key) {
             text.push_str(value);
+        } else if key == "brief" {
+            // Outside departments there is no brief: the task is all there is.
+            text.push_str(task);
         } else {
             let id = key.strip_suffix(".output").context("invalid placeholder")?;
             let (output, agent) = if id == "prev" {
@@ -488,6 +496,14 @@ struct RunContext<'a> {
 struct StepOutcome {
     output: String,
     agent: AgentId,
+}
+
+/// One executed step, kept so a stopped run can say what it did.
+#[derive(Clone, Debug)]
+pub struct StepRecord {
+    pub step: String,
+    pub agent: AgentId,
+    pub output: String,
 }
 
 enum Next {
@@ -726,7 +742,11 @@ async fn run_step(
     Ok(StepOutcome { output, agent })
 }
 
-async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool>) -> Result<()> {
+async fn execute_steps(
+    context: &RunContext<'_>,
+    stop: &mut watch::Receiver<bool>,
+    history: &mut Vec<StepRecord>,
+) -> Result<()> {
     if context
         .spec
         .step
@@ -753,6 +773,11 @@ async fn execute_steps(context: &RunContext<'_>, stop: &mut watch::Receiver<bool
         let outcome = run_step(context, step, &outputs, previous.as_ref(), stop).await?;
         let detail = outcome.output.chars().take(200).collect::<String>();
         previous = Some((outcome.output.clone(), outcome.agent.clone()));
+        history.push(StepRecord {
+            step: step.id.clone(),
+            agent: outcome.agent.clone(),
+            output: outcome.output.clone(),
+        });
         outputs.insert(step.id.clone(), (outcome.output.clone(), outcome.agent));
         publish(
             context.hub,
@@ -789,8 +814,24 @@ pub async fn execute(
     spec: &Spec,
     task: &str,
     id: &str,
-    mut stop: watch::Receiver<bool>,
+    stop: watch::Receiver<bool>,
 ) -> bool {
+    execute_traced(hub, agents, spec, task, id, stop)
+        .await
+        .0
+        .is_ok()
+}
+
+/// Runs the workflow and returns the failure reason, if any, together with
+/// every step that ran.
+pub async fn execute_traced(
+    hub: &Hub,
+    agents: &crate::runtime::Agents,
+    spec: &Spec,
+    task: &str,
+    id: &str,
+    mut stop: watch::Receiver<bool>,
+) -> (std::result::Result<(), String>, Vec<StepRecord>) {
     publish(hub, id, spec, None, WorkflowStatus::Started, "");
     let context = RunContext {
         hub,
@@ -799,23 +840,19 @@ pub async fn execute(
         task,
         id,
     };
-    match execute_steps(&context, &mut stop).await {
+    let mut history = Vec::new();
+    let result = match execute_steps(&context, &mut stop, &mut history).await {
         Ok(()) => {
             publish(hub, id, spec, None, WorkflowStatus::Finished, "");
-            true
+            Ok(())
         }
         Err(error) => {
-            publish(
-                hub,
-                id,
-                spec,
-                None,
-                WorkflowStatus::Failed,
-                format!("{error:#}"),
-            );
-            false
+            let reason = format!("{error:#}");
+            publish(hub, id, spec, None, WorkflowStatus::Failed, reason.clone());
+            Err(reason)
         }
-    }
+    };
+    (result, history)
 }
 
 pub fn builtins() -> Result<Vec<Spec>> {

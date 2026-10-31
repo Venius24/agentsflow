@@ -710,6 +710,7 @@ impl Hub {
             thread: None,
             created_ms: now,
             updated_ms: now,
+            work: None,
         };
         let mut task = task;
         if task.status == TaskStatus::Done {
