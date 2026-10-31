@@ -537,7 +537,7 @@ async fn get_state(State(state): State<AppState>) -> Json<Value> {
         .map(|(id, actor)| (id.to_string(), actor.state()))
         .collect();
     Json(
-        json!({"cwd": state.cwd, "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
+        json!({"version": env!("CARGO_PKG_VERSION"), "cwd": state.cwd, "agents": agents, "team": state.team.members, "workflow": state.manager.state()}),
     )
 }
 async fn get_team(State(state): State<AppState>) -> Json<Value> {
@@ -1421,6 +1421,12 @@ mod tests {
             .await;
     }
     #[tokio::test]
+    async fn index_page_shows_version_from_state() {
+        let page = index().await.0;
+        assert!(page.contains(r#"<span class="meta" id="app-version"></span>"#));
+        assert!(page.contains(r##"$("#app-version").textContent = "v" + s.version"##));
+    }
+    #[tokio::test]
     async fn trio_state_and_personal_mail_access() {
         LocalSet::new()
             .run_until(async {
@@ -1453,6 +1459,7 @@ mod tests {
                     manager,
                 };
                 let body = get_state(State(state.clone())).await.0;
+                assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
                 assert_eq!(
                     body["team"]
                         .as_array()
