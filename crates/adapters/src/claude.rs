@@ -84,6 +84,15 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
                     .unwrap_or_else(|| reason.clone());
                 events.push(Event::Error { message });
             }
+            if let Some(usage) = &result.usage {
+                events.push(Event::Usage {
+                    input_tokens: u64::from(usage.input_tokens)
+                        + u64::from(usage.cache_creation_input_tokens)
+                        + u64::from(usage.cache_read_input_tokens),
+                    output_tokens: u64::from(usage.output_tokens),
+                    cost_usd: Some(result.total_cost_usd),
+                });
+            }
             events.push(Event::Done { reason });
             events
         }
@@ -519,9 +528,16 @@ mod tests {
     fn result_success_and_error() {
         assert_eq!(
             map(result("success", false)),
-            vec![Event::Done {
-                reason: "success".into()
-            }]
+            vec![
+                Event::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cost_usd: Some(0.0)
+                },
+                Event::Done {
+                    reason: "success".into()
+                }
+            ]
         );
         assert_eq!(
             map(result("error_during_execution", true)),
@@ -529,10 +545,43 @@ mod tests {
                 Event::Error {
                     message: "details".into()
                 },
+                Event::Usage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    cost_usd: Some(0.0)
+                },
                 Event::Done {
                     reason: "error_during_execution".into()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn result_usage_includes_cache_and_precedes_done() {
+        let mut value = result("success", false);
+        value["total_cost_usd"] = json!(0.125);
+        value["usage"] = json!({"input_tokens": 10, "output_tokens": 4, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 30});
+        assert_eq!(
+            map(value),
+            vec![
+                Event::Usage {
+                    input_tokens: 60,
+                    output_tokens: 4,
+                    cost_usd: Some(0.125)
+                },
+                Event::Done {
+                    reason: "success".into()
+                }
+            ]
+        );
+        let mut value = result("success", false);
+        value["usage"] = Value::Null;
+        assert_eq!(
+            map(value),
+            vec![Event::Done {
+                reason: "success".into()
+            }]
         );
     }
 

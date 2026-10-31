@@ -1,4 +1,5 @@
 mod cli;
+mod doctor;
 mod export;
 mod guard;
 mod hub;
@@ -20,6 +21,17 @@ async fn main() -> ExitCode {
     if args == ["--version"] {
         println!("agentsflow {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
+    }
+    if args.first().is_some_and(|arg| arg == "doctor") {
+        let Some(options) = doctor::Options::parse(&args[1..]) else {
+            eprintln!("Usage: agentsflow doctor [--live] [--codex-bin PATH]");
+            return ExitCode::from(2);
+        };
+        return if doctor::run(options).await {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     if args.first().is_some_and(|arg| arg == "team") {
         return match team::run_cli(&args[1..]) {

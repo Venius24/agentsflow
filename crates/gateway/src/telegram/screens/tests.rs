@@ -406,6 +406,15 @@ async fn workflow_screens_without_running_anything() {
 #[tokio::test]
 async fn stats_log_export_more_and_help() {
     let hub = Hub::new();
+    hub.publish(
+        AgentId::from("lead"),
+        "s",
+        Event::Usage {
+            input_tokens: 123,
+            output_tokens: 45,
+            cost_usd: Some(0.12),
+        },
+    );
     add_task(&hub, "Одна", TaskStatus::Done, Some("lead"));
     for n in 0..14 {
         hub.publish(
@@ -433,6 +442,12 @@ async fn stats_log_export_more_and_help() {
         "{text}"
     );
     assert!(text.contains("ходов 1"));
+    assert!(
+        text.contains("токенов 123/45")
+            && text.contains("$0.12")
+            && text.contains("Всего токенов: 123/45"),
+        "{text}"
+    );
     bridge.update(&msg("/log lead 5")).await;
     let text = last_text(&calls);
     assert_eq!(text.matches("вопрос").count(), 4, "{text}");

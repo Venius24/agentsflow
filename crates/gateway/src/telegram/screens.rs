@@ -984,9 +984,21 @@ impl Bridge {
             number("/totals/workflows_stopped"),
             number("/totals/mails_total"),
         );
+        let mut total_input = 0u64;
+        let mut total_output = 0u64;
+        let mut total_cost = 0.0;
         let now = now_ms();
         for member in &self.team.members {
             let base = format!("/agents/{}", member.id);
+            let input = number(&format!("{base}/input_tokens"));
+            let output = number(&format!("{base}/output_tokens"));
+            let cost = stats
+                .pointer(&format!("{base}/cost_usd"))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            total_input = total_input.saturating_add(input);
+            total_output = total_output.saturating_add(output);
+            total_cost += cost;
             let last = number(&format!("{base}/last_activity_ms"));
             let activity = if last == 0 {
                 "нет".to_owned()
@@ -1008,6 +1020,14 @@ impl Bridge {
                 number(&format!("{base}/guard_denied")),
                 number(&format!("{base}/busy_ms")) / 60_000,
             ));
+            text.push_str(&format!(" · токенов {input}/{output}"));
+            if cost > 0.0 {
+                text.push_str(&format!(" · ${cost:.2}"));
+            }
+        }
+        text.push_str(&format!("\nВсего токенов: {total_input}/{total_output}"));
+        if total_cost > 0.0 {
+            text.push_str(&format!(" · ${total_cost:.2}"));
         }
         self.show(
             chat,
