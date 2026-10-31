@@ -8,6 +8,7 @@ use std::{collections::HashSet, path::Path};
 pub enum AccessMode {
     Ask,
     Auto,
+    Smart,
     Bypass,
 }
 
@@ -279,19 +280,22 @@ kind = "claude"
 title = "ревью и ядро"
 roles = ["lead", "reviewer"]
 lead = true
+mode = "smart"
 
 [[agent]]
 id = "codex"
 kind = "codex"
 title = "инженер"
 roles = ["engineer"]
+mode = "smart"
 "#;
 
 pub const TEMPLATE: &str = r#"# У каждого участника отдельный процесс и почтовый ящик.
 # guard по умолчанию включён; установите false, чтобы отключить проверку команд.
 # guard = false
-# mode: ask (спрашивать), auto (разрешать), bypass (обход разрешений).
-# По умолчанию mode наследует --yes: auto при --yes, иначе ask.
+# mode: ask (спрашивать всё), auto (разрешать всё, опасное отклоняет guard),
+# smart (безобидное разрешает сам, опасное по проверке guard спрашивает вас), bypass (обход разрешений).
+# Без поля mode наследует --yes: auto при --yes, иначе ask. В шаблоне задан smart.
 # bypass снимает разрешения и песочницу; для запуска нужен --allow-bypass.
 # mode = "bypass"
 # sandbox только для codex: read-only или workspace-write; без поля наследует --sandbox.
@@ -307,6 +311,7 @@ effort = "high"
 title = "лидер, ревью, ядро"
 roles = ["lead", "reviewer", "core"] # теги для адресации в workflow
 lead = true # ровно один лидер в команде
+mode = "smart"
 
 [[agent]]
 id = "main"
@@ -316,6 +321,7 @@ effort = "medium"
 sandbox = "workspace-write"
 title = "главный инженер"
 roles = ["engineer"]
+mode = "smart"
 
 [[agent]]
 id = "junior"
@@ -325,6 +331,7 @@ effort = "low"
 sandbox = "workspace-write"
 title = "младший инженер"
 roles = ["junior", "engineer"]
+mode = "smart"
 
 # Чтобы добавить участника, добавьте ещё блок [[agent]] с уникальным id.
 # В workflow используйте теги ролей для адресации участников.
