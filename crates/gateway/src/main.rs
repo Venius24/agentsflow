@@ -6,6 +6,7 @@ mod guard;
 mod hub;
 mod mail;
 mod mail_mcp;
+mod projects;
 mod runtime;
 mod server;
 mod team;

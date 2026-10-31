@@ -20,11 +20,18 @@ fn log() -> &'static Mutex<Log> {
 }
 
 pub fn init(cwd: &Path, secrets: Vec<String>) -> std::io::Result<()> {
-    let file = open_log(cwd)?;
     let mut log = log().lock().unwrap();
-    log.file = Some(file);
-    log.secrets = secrets.into_iter().filter(|s| !s.is_empty()).collect();
+    log.file = None;
+    for secret in secrets.into_iter().filter(|s| !s.is_empty()) {
+        if !log.secrets.contains(&secret) {
+            log.secrets.push(secret);
+        }
+    }
+    log.file = Some(open_log(cwd)?);
     Ok(())
+}
+pub fn close() {
+    log().lock().unwrap().file = None;
 }
 fn open_log(cwd: &Path) -> std::io::Result<File> {
     let dir = cwd.join(".agentsflow");

@@ -19,6 +19,8 @@ mod screens;
 pub struct Control {
     pub specs: Vec<crate::workflow::Spec>,
     pub manager: crate::workflow::Manager,
+    pub projects: Option<crate::projects::Control>,
+    pub announce: Option<String>,
 }
 
 #[derive(Clone)]
@@ -241,6 +243,8 @@ struct Draft {
     message: Option<i64>,
 }
 struct Bridge {
+    pending_switch: Option<crate::projects::SwitchTicket>,
+    project_lists: HashMap<i64, Vec<std::path::PathBuf>>,
     hub: Hub,
     config: Config,
     bot: Bot,
@@ -283,6 +287,8 @@ impl Bridge {
             .map(|task| (task.id, task.status))
             .collect();
         Self {
+            pending_switch: None,
+            project_lists: HashMap::new(),
             hub,
             bot: config.bot(),
             config,
@@ -899,7 +905,7 @@ impl Bridge {
         } else {
             "🔕 Тишина"
         };
-        let rows = vec![
+        let mut rows = vec![
             vec![
                 json!({"text":"📊 Статистика","callback_data":"s:st"}),
                 json!({"text":"⚙ Запуск workflow","callback_data":"s:w"}),
@@ -914,6 +920,23 @@ impl Bridge {
             ],
             vec![json!({"text":"← Назад","callback_data":format!("ui:team:{key}")})],
         ];
+        if let Some(projects) = self
+            .control
+            .as_ref()
+            .and_then(|control| control.projects.as_ref())
+            .filter(|projects| projects.enabled())
+        {
+            let name = projects
+                .list()
+                .ok()
+                .and_then(|list| list.into_iter().find(|project| project.current))
+                .map(|project| project.name)
+                .unwrap_or_default();
+            rows.insert(
+                0,
+                vec![json!({"text":format!("📁 Проект: {name}"),"callback_data":"s:proj"})],
+            );
+        }
         let message = self.show(chat, existing, text.into(), rows).await;
         if let Some(message) = message {
             self.screens.insert(
@@ -1212,6 +1235,9 @@ impl Bridge {
                 self.screens.remove(&chat);
                 let flash = self.route(chat, message, data).await;
                 self.answer(id, &flash).await;
+                if let Some(ticket) = self.pending_switch.take() {
+                    let _ = ticket.commit();
+                }
                 return;
             }
             if data.starts_with("ui:") {
@@ -1771,6 +1797,13 @@ pub async fn run(
     let (history, mut events) = hub.subscribe();
     let mut bridge = Bridge::with_hub(config.clone(), agents, team, hub.clone());
     bridge.control = control;
+    if let Some(name) = bridge
+        .control
+        .as_ref()
+        .and_then(|control| control.announce.clone())
+    {
+        bridge.broadcast(&format!("📁 Проект: {name}. Команда перезапущена."), None);
+    }
     for event in history {
         if matches!(
             event.event,

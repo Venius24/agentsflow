@@ -26,6 +26,7 @@ pub struct Hub {
     inner: Arc<Inner>,
 }
 struct Inner {
+    admission: Arc<Mutex<bool>>,
     started: std::time::Instant,
     seq: AtomicU64,
     data: Mutex<Data>,
@@ -451,6 +452,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(1024);
         Self {
             inner: Arc::new(Inner {
+                admission: Arc::new(Mutex::new(false)),
                 started: std::time::Instant::now(),
                 seq: AtomicU64::new(0),
                 data: Mutex::new(Data {
@@ -528,6 +530,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(1024);
         let hub = Self {
             inner: Arc::new(Inner {
+                admission: Arc::new(Mutex::new(false)),
                 started: std::time::Instant::now(),
                 seq: AtomicU64::new(seq),
                 data: Mutex::new(Data {
@@ -555,6 +558,9 @@ impl Hub {
     }
     pub fn uptime_s(&self) -> u64 {
         self.inner.started.elapsed().as_secs()
+    }
+    pub(crate) fn admission(&self) -> Arc<Mutex<bool>> {
+        self.inner.admission.clone()
     }
     fn publish_resolution(
         &self,
@@ -1001,6 +1007,7 @@ pub struct AgentState {
 }
 #[derive(Clone)]
 pub struct Actor {
+    admission: Arc<Mutex<bool>>,
     tx: mpsc::UnboundedSender<Command>,
     stop: Arc<watch::Sender<bool>>,
     state: Arc<Mutex<AgentState>>,
@@ -1021,6 +1028,10 @@ impl Actor {
     pub async fn prompt(&self, prompt: String) -> std::result::Result<(), HubError> {
         let (tx, rx) = oneshot::channel();
         {
+            let admission = self.admission.lock().unwrap();
+            if *admission {
+                return Err(HubError::Busy);
+            }
             let mut state = self.state.lock().unwrap();
             if state.busy {
                 return Err(HubError::Busy);
@@ -1186,6 +1197,7 @@ where
         ..Default::default()
     }));
     let actor = Actor {
+        admission: hub.admission(),
         tx,
         stop: Arc::new(stop_tx),
         state: state.clone(),

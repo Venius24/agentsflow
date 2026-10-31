@@ -363,6 +363,7 @@ pub struct WorkflowState {
 }
 #[derive(Clone)]
 pub struct Manager {
+    admission: Arc<Mutex<bool>>,
     shared: Arc<Mutex<Shared>>,
     tx: mpsc::UnboundedSender<Job>,
     team: crate::team::Team,
@@ -386,6 +387,7 @@ pub enum StartError {
 
 impl Manager {
     pub fn new(hub: Hub, agents: crate::runtime::Agents, team: crate::team::Team) -> Self {
+        let admission = hub.admission();
         let (tx, mut rx) = mpsc::unbounded_channel::<Job>();
         let shared = Arc::new(Mutex::new(Shared {
             state: WorkflowState::default(),
@@ -400,12 +402,21 @@ impl Manager {
                 lock.stop = None;
             }
         });
-        Self { shared, tx, team }
+        Self {
+            shared,
+            tx,
+            team,
+            admission,
+        }
     }
     pub fn state(&self) -> WorkflowState {
         self.shared.lock().unwrap().state.clone()
     }
     pub fn start(&self, spec: Spec, task: String) -> std::result::Result<String, StartError> {
+        let admission = self.admission.lock().unwrap();
+        if *admission {
+            return Err(StartError::Busy);
+        }
         let spec = spec
             .resolve_team(&self.team)
             .map_err(|error| StartError::InvalidTeam(error.to_string()))?;
