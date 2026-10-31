@@ -157,6 +157,18 @@ pub struct CodexOptions {
     pub bin: Option<PathBuf>,
     pub mail: Option<crate::MailConfig>,
     pub effort: Option<String>,
+    pub bypass: bool,
+}
+
+fn access_settings(bypass: bool, sandbox: Option<SandboxMode>) -> (AskForApproval, SandboxMode) {
+    if bypass {
+        (AskForApproval::Never, SandboxMode::Danger_full_access)
+    } else {
+        (
+            AskForApproval::OnRequest,
+            sandbox.unwrap_or(SandboxMode::Read_only),
+        )
+    }
 }
 
 fn choose_binary(
@@ -259,13 +271,14 @@ impl CodexSession {
                 builder = builder.config_override(key, value);
             }
         }
+        let (approval_policy, sandbox) = access_settings(opts.bypass, opts.sandbox);
         let mut client = AsyncClient::start_with(builder).await?;
         let thread = client
             .thread_start(&ThreadStartParams {
                 cwd: Some(cwd_string),
                 model: opts.model,
-                approval_policy: Some(AskForApproval::OnRequest),
-                sandbox: Some(opts.sandbox.unwrap_or(SandboxMode::Read_only)),
+                approval_policy: Some(approval_policy),
+                sandbox: Some(sandbox),
                 ..Default::default()
             })
             .await;
@@ -407,6 +420,16 @@ impl crate::Agent for CodexSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bypass_changes_approval_and_sandbox() {
+        let (approval, sandbox) = access_settings(true, Some(SandboxMode::Read_only));
+        assert!(matches!(approval, AskForApproval::Never));
+        assert!(matches!(sandbox, SandboxMode::Danger_full_access));
+        let (approval, sandbox) = access_settings(false, Some(SandboxMode::Workspace_write));
+        assert!(matches!(approval, AskForApproval::OnRequest));
+        assert!(matches!(sandbox, SandboxMode::Workspace_write));
+    }
     use serde_json::Value;
 
     fn map(frame: Value) -> Vec<Event> {

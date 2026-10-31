@@ -37,11 +37,13 @@ pub struct ServeOptions {
     sandbox: Option<SandboxMode>,
     codex_bin: Option<PathBuf>,
     yes: bool,
+    allow_bypass: bool,
     workflows: Vec<PathBuf>,
     log: Option<PathBuf>,
     mail_thread_limit: usize,
 }
 impl ServeOptions {
+    #[cfg(test)]
     pub fn parse(args: &[String]) -> Option<Self> {
         Self::parse_checked(args).ok().flatten()
     }
@@ -57,6 +59,7 @@ impl ServeOptions {
         } else {
             options.team = Team::filtered_pair(options.claude, options.codex)?;
         }
+        options.team.check_bypass(options.allow_bypass)?;
         Ok(Some(options))
     }
     fn parse_basic(args: &[String]) -> Option<Self> {
@@ -71,6 +74,7 @@ impl ServeOptions {
             sandbox: None,
             codex_bin: None,
             yes: false,
+            allow_bypass: false,
             workflows: Vec::new(),
             log: None,
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
@@ -79,6 +83,10 @@ impl ServeOptions {
         while let Some(arg) = args.next() {
             if arg == "--yes" {
                 options.yes = true;
+                continue;
+            }
+            if arg == "--allow-bypass" {
+                options.allow_bypass = true;
                 continue;
             }
             let value = args.next()?;
@@ -146,6 +154,7 @@ impl ServeOptions {
             sandbox: self.sandbox.clone(),
             codex_bin: self.codex_bin.clone(),
             yes: self.yes,
+            allow_bypass: self.allow_bypass,
             log: self.log.clone(),
             mail: None,
             mail_agent_tokens: MailAgentTokens::default(),
@@ -1049,6 +1058,10 @@ mod tests {
                     );
                 }
                 assert_eq!(get_team(State(state.clone())).await.0, body["team"]);
+                assert_eq!(body["team"][0]["mode"], "ask");
+                assert!(body["team"][0]["sandbox"].is_null());
+                assert_eq!(body["team"][1]["sandbox"], "workspace-write");
+                assert_eq!(body["team"][2]["sandbox"], "workspace-write");
                 assert_eq!(
                     authorize_request(
                         "token-lead",
@@ -1136,6 +1149,45 @@ mod tests {
             })
             .await;
     }
+    #[tokio::test]
+    async fn team_api_exposes_effective_bypass() {
+        LocalSet::new()
+            .run_until(async {
+                let mut team = Team::preset("pair").unwrap();
+                team.members[1].mode = Some(crate::team::AccessMode::Bypass);
+                let runtime = Runtime::new(RuntimeOptions {
+                    team,
+                    allow_bypass: true,
+                    yes: true,
+                    ..Default::default()
+                })
+                .unwrap();
+                let manager = Manager::new(
+                    runtime.hub.clone(),
+                    runtime.agents.clone(),
+                    runtime.team.clone(),
+                );
+                let (_tx, shutdown) = watch::channel(false);
+                let state = AppState {
+                    hub: runtime.hub.clone(),
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::new(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents: runtime.agents.clone(),
+                    team: runtime.team.clone(),
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                };
+                let team = get_team(State(state)).await.0;
+                assert_eq!(team[0]["mode"], "auto");
+                assert_eq!(team[1]["mode"], "bypass");
+                assert!(team[1]["sandbox"].is_null());
+                runtime.shutdown().await;
+            })
+            .await;
+    }
     #[test]
     fn security_checks() {
         assert!(verify_token("012345", "012345"));
@@ -1201,6 +1253,25 @@ mod tests {
                     .contains("cannot be used together")
             );
         }
+    }
+    #[test]
+    fn bypass_requires_explicit_flag() {
+        let path = std::env::temp_dir().join(format!("agentsflow-bypass-{}.toml", Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            "[[agent]]\nid='lead'\nkind='claude'\nlead=true\nmode='bypass'\n",
+        )
+        .unwrap();
+        let mut args = vec!["--team".to_owned(), path.to_string_lossy().into_owned()];
+        let error = ServeOptions::parse_checked(&args)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("lead") && error.contains("--allow-bypass"));
+        args.push("--allow-bypass".into());
+        args.push("--allow-bypass".to_owned());
+        assert!(ServeOptions::parse_checked(&args).unwrap().is_some());
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn parse_serve_options() {

@@ -9,7 +9,7 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes]\n       agentsflow flow FILE --task <text> --yes [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
+pub const USAGE: &str = "Usage: agentsflow serve [--port N] [--cwd DIR] [--agents claude,codex | --team pair|trio|FILE] [--claude-model M] [--codex-model M] [--sandbox read-only|workspace-write] [--codex-bin PATH] [--workflow FILE] [--log FILE] [--mail-thread-limit N] [--yes] [--allow-bypass]\n       agentsflow flow FILE --task <text> --yes [--team pair|trio|FILE] [--allow-bypass] [options]\n       agentsflow <claude|codex> \"<prompt>\" [--model <m>] [--cwd <dir>] [--yes] [--sandbox <read-only|workspace-write>] [--codex-bin <path>]\n       agentsflow team init [FILE] | team check <pair|trio|FILE> | team show\n       agentsflow --version";
 
 fn truncate(text: &str) -> String {
     let mut chars = text.chars();
@@ -158,6 +158,7 @@ pub async fn run(command: Command) -> Result<()> {
             cwd: command.cwd,
             mail: None,
             effort: None,
+            bypass: false,
         })
         .await?;
         run_turn(session, "claude", &command.prompt, command.yes).await
@@ -169,6 +170,7 @@ pub async fn run(command: Command) -> Result<()> {
             bin: command.bin,
             mail: None,
             effort: None,
+            bypass: false,
         })
         .await?;
         run_turn(session, "codex", &command.prompt, command.yes).await
@@ -235,6 +237,7 @@ impl FlowCommand {
                     yes = true;
                     serve_args.push(arg.clone());
                 }
+                "--allow-bypass" => serve_args.push(arg.clone()),
                 "--task" => {
                     task = Some(
                         rest.next()
@@ -242,8 +245,8 @@ impl FlowCommand {
                             .clone(),
                     );
                 }
-                "--cwd" | "--agents" | "--claude-model" | "--codex-model" | "--sandbox"
-                | "--codex-bin" => {
+                "--cwd" | "--agents" | "--team" | "--claude-model" | "--codex-model"
+                | "--sandbox" | "--codex-bin" => {
                     serve_args.push(arg.clone());
                     serve_args.push(
                         rest.next()
@@ -260,7 +263,7 @@ impl FlowCommand {
         let task = task
             .filter(|t| !t.trim().is_empty() && !t.starts_with("--"))
             .ok_or_else(|| anyhow::anyhow!("--task requires nonempty text"))?;
-        let options = crate::server::ServeOptions::parse(&serve_args)
+        let options = crate::server::ServeOptions::parse_checked(&serve_args)?
             .ok_or_else(|| anyhow::anyhow!("invalid flow options"))?
             .runtime_options();
         let spec =
@@ -321,6 +324,33 @@ impl FlowCommand {
 mod tests {
     use super::*;
     use agentsflow_events::Role;
+
+    #[test]
+    fn flow_requires_bypass_acknowledgement() {
+        let path =
+            std::env::temp_dir().join(format!("agentsflow-bypass-{}.toml", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "[[agent]]\nid='lead'\nkind='claude'\nlead=true\nmode='bypass'\nroles=['reviewer','engineer']\n").unwrap();
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../workflows/implement-and-review.toml");
+        let mut args = vec![
+            file.to_string_lossy().into_owned(),
+            "--task".into(),
+            "x".into(),
+            "--yes".into(),
+            "--team".into(),
+            path.to_string_lossy().into_owned(),
+        ];
+        assert!(
+            FlowCommand::parse(&args)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("--allow-bypass")
+        );
+        args.push("--allow-bypass".into());
+        assert!(FlowCommand::parse(&args).is_ok());
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn formats_events() {

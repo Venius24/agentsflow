@@ -59,6 +59,7 @@
   .chip.working { color: var(--accent); border-color: var(--accent); }
   .chip.waiting { color: var(--warn); border-color: var(--warn); }
   .chip.off { opacity: .6; }
+  .chip.bypass { color: var(--err); border-color: var(--err); font-weight: 700; }
   .log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .empty { color: var(--muted); margin: auto; text-align: center; }
   .msg { max-width: 92%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -249,7 +250,10 @@ function updatePaneInfo(p, member) {
   p.col.style.setProperty("--accent", accentFor(member));
   p.name.textContent = member.id;
   p.lead.hidden = !member.lead;
-  p.subtitle.textContent = [member.kind || "тип неизвестен", member.model || "по умолчанию", member.effort || "по умолчанию"].join(" · ") + (member.title ? " · " + member.title : "");
+  p.bypass.hidden = member.mode !== "bypass";
+  const mode = { ask: "спрашивает", auto: "авто", bypass: "BYPASS" }[member.mode];
+  const sandbox = member.kind === "codex" ? (member.mode === "bypass" ? "без песочницы" : member.sandbox) : null;
+  p.subtitle.textContent = [member.kind || "тип неизвестен", member.model || "по умолчанию", member.effort || "по умолчанию", mode, sandbox, member.title].filter(Boolean).join(" · ");
   p.input.placeholder = "Промпт для " + member.id + " (Enter — отправить, Shift+Enter — перенос)";
 }
 function ensurePane(id) {
@@ -263,8 +267,9 @@ function buildPane(a, enabled = true) {
   const title = el("div", "col-title");
   const name = el("h2");
   const lead = el("span", "chip", "лидер");
+  const bypass = el("span", "chip bypass", "bypass");
   const subtitle = el("div", "col-subtitle");
-  title.append(name, lead);
+  title.append(name, lead, bypass);
   heading.append(title, subtitle);
   head.append(heading);
   const chip = el("span", "chip", "idle");
@@ -284,7 +289,7 @@ function buildPane(a, enabled = true) {
   col.append(head, stopError, log, form);
   $("#panes").insertBefore(col, orch.col || null);
 
-  const p = { a, col, name, lead, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
+  const p = { a, col, name, lead, bypass, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
               tools: new Map(), perms: new Map() };
   panes[a.id] = p;
   updatePaneInfo(p, a);
