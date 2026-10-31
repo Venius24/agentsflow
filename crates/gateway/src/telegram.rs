@@ -1,5 +1,5 @@
 use crate::{
-    hub::{Hub, HubError},
+    hub::{Hub, HubError, NewTask},
     runtime::Agents,
     team::Team,
 };
@@ -114,6 +114,7 @@ struct Pending {
     messages: HashMap<i64, i64>,
 }
 struct Bridge {
+    hub: Hub,
     config: Config,
     bot: Bot,
     agents: Agents,
@@ -131,8 +132,14 @@ struct Bridge {
 }
 
 impl Bridge {
+    #[cfg(test)]
     fn new(config: Config, agents: Agents, team: Team) -> Self {
+        Self::with_hub(config, agents, team, Hub::new())
+    }
+
+    fn with_hub(config: Config, agents: Agents, team: Team, hub: Hub) -> Self {
         Self {
+            hub,
             bot: config.bot(),
             config,
             agents,
@@ -472,8 +479,33 @@ impl Bridge {
             let command = words.next().unwrap_or("").split('@').next().unwrap_or("");
             let answer = match command {
                 "/start" | "/help" => {
-                    "/status - состояние команды\n/stop <agent> - остановить ход\n/help - помощь"
+                    "/status - состояние команды\n/board - доска задач\n/task <title> - создать задачу\n/stop <agent> - остановить ход\n/help - помощь"
                         .to_owned()
+                }
+                "/board" => {
+                    let tasks = self.hub.tasks(true);
+                    let mut counts = std::collections::BTreeMap::from([
+                        ("backlog".to_owned(), 0usize), ("todo".to_owned(), 0),
+                        ("in_progress".to_owned(), 0), ("review".to_owned(), 0),
+                        ("done".to_owned(), 0), ("blocked".to_owned(), 0),
+                        ("archived".to_owned(), 0),
+                    ]);
+                    for task in &tasks {
+                        let status = serde_json::to_value(&task.status).unwrap_or_default();
+                        *counts.entry(status.as_str().unwrap_or("unknown").to_owned()).or_insert(0usize) += 1;
+                    }
+                    let mut text = counts.iter().map(|(s, n)| format!("{s}: {n}")).collect::<Vec<_>>().join(", ");
+                    for task in tasks.iter().filter(|t| t.status == agentsflow_events::TaskStatus::InProgress).take(10) {
+                        text.push_str(&format!("\n{}: {} - {} ({}%)", task.id, task.title, task.assignee.as_ref().map_or("-", AgentId::as_str), task.progress));
+                    }
+                    text
+                }
+                "/task" => {
+                    let title = words.collect::<Vec<_>>().join(" ");
+                    match self.hub.create_task(AgentId::orchestrator(), NewTask { title, description: String::new(), assignee: None, status: None, labels: Vec::new() }) {
+                        Ok(task) => format!("Задача создана: {} - {}", task.id, task.title),
+                        Err(error) => format!("Не удалось создать задачу: {error}"),
+                    }
                 }
                 "/status" => self
                     .team
@@ -622,7 +654,7 @@ pub async fn run(
     mut stop: watch::Receiver<bool>,
 ) {
     let (history, mut events) = hub.subscribe();
-    let mut bridge = Bridge::new(config.clone(), agents, team);
+    let mut bridge = Bridge::with_hub(config.clone(), agents, team, hub.clone());
     for event in history {
         if matches!(event.event, Event::PermissionRequest { .. }) {
             bridge.handle_event(event);
@@ -750,6 +782,48 @@ mod tests {
         assert!(bridge.queues[&11].iter().any(|item| item.key == Some(1)));
         bridge.queue(99, "unauthorized", None);
         assert!(!bridge.queues.contains_key(&99));
+    }
+
+    #[tokio::test]
+    async fn board_and_task_commands_use_shared_hub() {
+        let hub = Hub::new();
+        let received = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let app = Router::new().route("/{path}/{method}", post(|Path((path, method)): Path<(String, String)>, State(received): State<RequestLog>, Json(body): Json<Value>| async move {
+            received.lock().unwrap().push((format!("{path}/{method}"), body));
+            Json(json!({"ok":true,"result":{"message_id":1,"date":1,"chat":{"id":11,"type":"private"}}}))
+        })).with_state(received.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = Config::parse("secret".into(), "11", format!("http://{address}")).unwrap();
+        let mut bridge = Bridge::with_hub(
+            config,
+            Agents::new(),
+            Team::preset("pair").unwrap(),
+            hub.clone(),
+        );
+        bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/task New task"}})).await;
+        assert_eq!(hub.tasks(false)[0].title, "New task");
+        bridge.flush().await;
+        bridge.last_sent.clear();
+        bridge.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/board"}})).await;
+        assert!(
+            bridge.queues[&11]
+                .iter()
+                .any(|item| item.text.contains("backlog: 1"))
+        );
+        bridge.flush().await;
+        assert!(
+            received
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(path, body)| path == "botsecret/sendMessage"
+                    && body["text"].as_str().unwrap().contains("backlog: 1"))
+        );
+        bridge.update(&json!({"message":{"from":{"id":99},"chat":{"id":99,"type":"private"},"text":"/task unwanted"}})).await;
+        assert_eq!(hub.tasks(false).len(), 1);
+        server.abort();
     }
 
     #[tokio::test]

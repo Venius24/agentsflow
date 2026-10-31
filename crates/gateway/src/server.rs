@@ -761,6 +761,15 @@ async fn update_my_task(
     }
 }
 
+async fn get_stats(State(state): State<AppState>) -> Json<crate::hub::StatsSnapshot> {
+    let mut stats = state.hub.stats();
+    for member in &state.team.members {
+        stats.agents.entry(member.id.clone()).or_default();
+    }
+    stats.agents.entry(AgentId::orchestrator()).or_default();
+    Json(stats)
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
@@ -777,6 +786,7 @@ fn app(state: AppState) -> Router {
         .route("/api/tasks/{id}/dispatch", post(dispatch_task))
         .route("/api/tasks/{id}/update", post(update_my_task))
         .route("/api/state", get(get_state))
+        .route("/api/stats", get(get_stats))
         .route("/api/team", get(get_team))
         .route("/api/workflows", get(list_workflows))
         .route("/api/workflow/run", post(run_workflow))
@@ -886,6 +896,9 @@ mod tests {
                     workflows: vec![],
                     manager,
                 };
+                let stats = serde_json::to_value(get_stats(State(state.clone())).await.0).unwrap();
+                assert!(stats["agents"]["claude"].is_object());
+                assert!(stats["agents"]["orchestrator"].is_object());
                 let make = |assignee: Option<&str>| NewTask {
                     title: "task".into(),
                     description: "work".into(),
@@ -1076,6 +1089,7 @@ mod tests {
             for (method, path) in [
                 (axum::http::Method::POST, "/api/prompt"),
                 (axum::http::Method::GET, "/api/state"),
+                (axum::http::Method::GET, "/api/stats"),
                 (axum::http::Method::GET, "/api/export"),
                 (axum::http::Method::POST, "/api/permission"),
                 (axum::http::Method::POST, "/api/workflow/run"),
@@ -1088,6 +1102,7 @@ mod tests {
             (axum::http::Method::POST, "/api/prompt"),
             (axum::http::Method::POST, "/api/agent/interrupt"),
             (axum::http::Method::GET, "/api/state"),
+            (axum::http::Method::GET, "/api/stats"),
             (axum::http::Method::GET, "/api/export"),
             (axum::http::Method::POST, "/api/permission"),
             (axum::http::Method::POST, "/api/workflow/run"),
