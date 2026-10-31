@@ -12,9 +12,9 @@ use std::{
 };
 
 use agentsflow_adapters::{Agent, Interrupter};
-use agentsflow_events::{AgentId, Envelope, Event, Role, WorkflowStatus};
+use agentsflow_events::{AgentId, Envelope, Event, Role, TaskSnapshot, TaskStatus, WorkflowStatus};
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     task::JoinHandle,
@@ -37,6 +37,108 @@ struct Data {
     read: HashSet<String>,
     mail_thread_limit: usize,
     mail_enabled: bool,
+    tasks: Vec<TaskSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewTask {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub assignee: Option<AgentId>,
+    #[serde(default)]
+    pub status: Option<TaskStatus>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+fn nullable_assignee<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Option<AgentId>>, D::Error> {
+    Option::<AgentId>::deserialize(d).map(Some)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPatch {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    #[serde(default, deserialize_with = "nullable_assignee")]
+    pub assignee: Option<Option<AgentId>>,
+    pub status: Option<TaskStatus>,
+    pub progress: Option<u8>,
+    pub labels: Option<Vec<String>>,
+    pub note: Option<String>,
+    #[serde(skip)]
+    pub thread: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskError {
+    NotFound,
+    Limit,
+    Forbidden,
+    MailDisabled,
+    NoAssignee,
+    Mail(MailError),
+    Invalid(&'static str),
+}
+impl std::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("task not found"),
+            Self::Limit => f.write_str("task limit exceeded"),
+            Self::Forbidden => f.write_str("task is assigned to another agent"),
+            Self::MailDisabled => f.write_str("mail is disabled"),
+            Self::NoAssignee => f.write_str("no assignee"),
+            Self::Mail(error) => error.fmt(f),
+            Self::Invalid(s) => f.write_str(s),
+        }
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+fn validate_task(task: &TaskSnapshot) -> std::result::Result<(), TaskError> {
+    if task.title.trim().is_empty() || task.title.trim().chars().count() > 200 {
+        return Err(TaskError::Invalid("title must contain 1 to 200 characters"));
+    }
+    if task.description.chars().count() > 8000 {
+        return Err(TaskError::Invalid("description exceeds 8000 characters"));
+    }
+    if task.note.chars().count() > 500 {
+        return Err(TaskError::Invalid("note exceeds 500 characters"));
+    }
+    if task.progress > 100 {
+        return Err(TaskError::Invalid("progress exceeds 100"));
+    }
+    if task.labels.len() > 8
+        || task.labels.iter().any(|label| {
+            label.is_empty()
+                || label.len() > 24
+                || !label
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+        })
+    {
+        return Err(TaskError::Invalid("invalid labels"));
+    }
+    Ok(())
+}
+fn store_task(tasks: &mut Vec<TaskSnapshot>, task: &TaskSnapshot) {
+    if let Some(existing) = tasks.iter_mut().find(|item| item.id == task.id) {
+        *existing = task.clone();
+    } else {
+        tasks.push(task.clone());
+    }
+    tasks.sort_by_key(|item| item.created_ms);
 }
 
 pub const MAX_THREAD_MAILS: usize = 12;
@@ -244,6 +346,7 @@ impl Hub {
                     read: HashSet::new(),
                     mail_thread_limit: MAX_THREAD_MAILS,
                     mail_enabled: false,
+                    tasks: Vec::new(),
                 }),
                 tx,
                 log: None,
@@ -297,6 +400,12 @@ impl Hub {
         }
         let closers = interrupted(&history);
         let (mail, read) = mail_state(&history);
+        let mut tasks = Vec::new();
+        for envelope in &history {
+            if let Event::Task { task } = &envelope.event {
+                store_task(&mut tasks, task);
+            }
+        }
         let (tx, _) = broadcast::channel(1024);
         let hub = Self {
             inner: Arc::new(Inner {
@@ -307,6 +416,7 @@ impl Hub {
                     read,
                     mail_thread_limit: MAX_THREAD_MAILS,
                     mail_enabled: false,
+                    tasks,
                 }),
                 tx,
                 log: Some(LogWriter::start(path)),
@@ -326,13 +436,12 @@ impl Hub {
             session: session.into(),
             agent,
             seq: self.inner.seq.fetch_add(1, Ordering::Relaxed) + 1,
-            ts_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .min(u64::MAX as u128) as u64,
+            ts_ms: now_ms(),
             event,
         };
+        if let Event::Task { task } = &envelope.event {
+            store_task(&mut data.tasks, task);
+        }
         if data.history.len() == HISTORY_LIMIT {
             data.history.pop_front();
         }
@@ -355,8 +464,171 @@ impl Hub {
     pub fn mail_enabled(&self) -> bool {
         self.inner.data.lock().unwrap().mail_enabled
     }
+    pub fn tasks(&self, include_archived: bool) -> Vec<TaskSnapshot> {
+        self.inner
+            .data
+            .lock()
+            .unwrap()
+            .tasks
+            .iter()
+            .filter(|t| include_archived || t.status != TaskStatus::Archived)
+            .cloned()
+            .collect()
+    }
+    #[allow(dead_code)]
+    pub fn task(&self, id: &str) -> Option<TaskSnapshot> {
+        self.inner
+            .data
+            .lock()
+            .unwrap()
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .cloned()
+    }
+    pub fn create_task(
+        &self,
+        by: AgentId,
+        new: NewTask,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        let mut data = self.inner.data.lock().unwrap();
+        let status = new.status.unwrap_or(if new.assignee.is_some() {
+            TaskStatus::Todo
+        } else {
+            TaskStatus::Backlog
+        });
+        if status != TaskStatus::Archived
+            && data
+                .tasks
+                .iter()
+                .filter(|t| t.status != TaskStatus::Archived)
+                .count()
+                >= 500
+        {
+            return Err(TaskError::Limit);
+        }
+        let id = loop {
+            let id = Uuid::new_v4().simple().to_string()[..8].to_owned();
+            if !data.tasks.iter().any(|t| t.id == id) {
+                break id;
+            }
+        };
+        let now = now_ms();
+        let task = TaskSnapshot {
+            id,
+            title: new.title.trim().into(),
+            description: new.description,
+            status,
+            assignee: new.assignee,
+            progress: 0,
+            labels: new.labels,
+            note: String::new(),
+            thread: None,
+            created_ms: now,
+            updated_ms: now,
+        };
+        let mut task = task;
+        if task.status == TaskStatus::Done {
+            task.progress = 100;
+        }
+        validate_task(&task)?;
+        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        Ok(task)
+    }
+    pub fn update_task(
+        &self,
+        by: AgentId,
+        id: &str,
+        patch: TaskPatch,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        self.update_task_inner(by, id, patch, false)
+    }
+    pub fn update_task_owned(
+        &self,
+        by: AgentId,
+        id: &str,
+        patch: TaskPatch,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        self.update_task_inner(by, id, patch, true)
+    }
+    fn update_task_inner(
+        &self,
+        by: AgentId,
+        id: &str,
+        patch: TaskPatch,
+        owned: bool,
+    ) -> std::result::Result<TaskSnapshot, TaskError> {
+        let mut data = self.inner.data.lock().unwrap();
+        let mut task = data
+            .tasks
+            .iter()
+            .find(|t| t.id == id)
+            .cloned()
+            .ok_or(TaskError::NotFound)?;
+        if owned && task.assignee.as_ref() != Some(&by) {
+            return Err(TaskError::Forbidden);
+        }
+        let was_archived = task.status == TaskStatus::Archived;
+        if let Some(title) = patch.title {
+            task.title = title.trim().into();
+        }
+        if let Some(description) = patch.description {
+            task.description = description;
+        }
+        if let Some(assignee) = patch.assignee {
+            task.assignee = assignee;
+        }
+        if let Some(status) = patch.status {
+            task.status = status;
+        }
+        if let Some(progress) = patch.progress {
+            if progress > 100 {
+                return Err(TaskError::Invalid("progress exceeds 100"));
+            }
+            task.progress = progress;
+        }
+        if let Some(labels) = patch.labels {
+            task.labels = labels;
+        }
+        if let Some(note) = patch.note {
+            task.note = note;
+        }
+        if let Some(thread) = patch.thread {
+            task.thread = thread;
+        }
+        if task.status == TaskStatus::Done {
+            task.progress = 100;
+        }
+        if was_archived
+            && task.status != TaskStatus::Archived
+            && data
+                .tasks
+                .iter()
+                .filter(|t| t.status != TaskStatus::Archived)
+                .count()
+                >= 500
+        {
+            return Err(TaskError::Limit);
+        }
+        task.updated_ms = now_ms();
+        validate_task(&task)?;
+        self.publish_locked(&mut data, by, "tasks", Event::Task { task: task.clone() });
+        Ok(task)
+    }
     pub fn send_mail(
         &self,
+        from: AgentId,
+        to: AgentId,
+        subject: String,
+        body: String,
+        thread: Option<String>,
+    ) -> std::result::Result<MailMsg, MailError> {
+        let mut data = self.inner.data.lock().unwrap();
+        self.send_mail_locked(&mut data, from, to, subject, body, thread)
+    }
+    fn send_mail_locked(
+        &self,
+        data: &mut Data,
         from: AgentId,
         to: AgentId,
         subject: String,
@@ -372,7 +644,6 @@ impl Hub {
         if body.is_empty() || body.len() > 65536 {
             return Err(MailError::Body);
         }
-        let mut data = self.inner.data.lock().unwrap();
         let short_id = || Uuid::new_v4().simple().to_string()[..8].to_owned();
         let thread = if let Some(thread) = thread {
             if !data.mail.iter().any(|mail| mail.thread == thread) {
@@ -395,7 +666,7 @@ impl Hub {
             >= data.mail_thread_limit
         {
             self.publish_locked(
-                &mut data,
+                data,
                 AgentId::orchestrator(),
                 "mail",
                 Event::Error {
@@ -418,7 +689,7 @@ impl Hub {
             subject: subject.clone(),
             body: body.clone(),
         };
-        let seq = self.publish_locked(&mut data, from.clone(), "mail", event);
+        let seq = self.publish_locked(data, from.clone(), "mail", event);
         let mail = MailMsg {
             id,
             thread,
@@ -430,6 +701,54 @@ impl Hub {
         };
         data.mail.push(mail.clone());
         Ok(mail)
+    }
+    pub fn dispatch_task(&self, id: &str) -> std::result::Result<TaskSnapshot, TaskError> {
+        let mut data = self.inner.data.lock().unwrap();
+        let mut task = data
+            .tasks
+            .iter()
+            .find(|task| task.id == id)
+            .cloned()
+            .ok_or(TaskError::NotFound)?;
+        let assignee = task.assignee.clone().ok_or(TaskError::NoAssignee)?;
+        if !data.mail_enabled {
+            return Err(TaskError::MailDisabled);
+        }
+        let prefix = format!("task {}: ", task.id);
+        let subject = format!(
+            "{}{}",
+            prefix,
+            task.title
+                .chars()
+                .take(200 - prefix.chars().count())
+                .collect::<String>()
+        );
+        let body = format!(
+            "{}\n\nUpdate your card with the update_task tool (id {}): status, progress 0-100 and a short note. When you finish set status to review.",
+            task.description, task.id
+        );
+        let mail = self
+            .send_mail_locked(
+                &mut data,
+                AgentId::orchestrator(),
+                assignee,
+                subject,
+                body,
+                None,
+            )
+            .map_err(TaskError::Mail)?;
+        task.thread = Some(mail.thread);
+        if matches!(task.status, TaskStatus::Backlog | TaskStatus::Todo) {
+            task.status = TaskStatus::InProgress;
+        }
+        task.updated_ms = now_ms();
+        self.publish_locked(
+            &mut data,
+            AgentId::orchestrator(),
+            "tasks",
+            Event::Task { task: task.clone() },
+        );
+        Ok(task)
     }
     pub fn unread(&self, agent: AgentId) -> Vec<MailMsg> {
         let data = self.inner.data.lock().unwrap();
@@ -942,6 +1261,134 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tasks_validate_limit_and_replay() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("agentsflow-tasks-{}.jsonl", Uuid::new_v4()));
+        let id;
+        {
+            let hub = Hub::with_log(&path);
+            let new = || NewTask {
+                title: " work ".into(),
+                description: String::new(),
+                assignee: Some(AgentId::from("claude")),
+                status: None,
+                labels: vec!["test".into()],
+            };
+            let task = hub.create_task(AgentId::orchestrator(), new()).unwrap();
+            id = task.id.clone();
+            assert_eq!(task.title, "work");
+            assert_eq!(task.status, TaskStatus::Todo);
+            for patch in [
+                TaskPatch {
+                    title: Some(" ".into()),
+                    ..Default::default()
+                },
+                TaskPatch {
+                    title: Some("x".repeat(201)),
+                    ..Default::default()
+                },
+                TaskPatch {
+                    description: Some("x".repeat(8001)),
+                    ..Default::default()
+                },
+                TaskPatch {
+                    note: Some("x".repeat(501)),
+                    ..Default::default()
+                },
+                TaskPatch {
+                    labels: Some(vec!["tag".into(); 9]),
+                    ..Default::default()
+                },
+                TaskPatch {
+                    labels: Some(vec!["x".repeat(25)]),
+                    ..Default::default()
+                },
+            ] {
+                assert!(
+                    hub.update_task(AgentId::orchestrator(), &id, patch)
+                        .is_err()
+                );
+            }
+            let progress = hub
+                .update_task(
+                    AgentId::orchestrator(),
+                    &id,
+                    TaskPatch {
+                        progress: Some(60),
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(progress.progress, 60);
+            assert!(
+                hub.update_task(
+                    AgentId::orchestrator(),
+                    &id,
+                    TaskPatch {
+                        progress: Some(101),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            assert!(
+                hub.update_task(
+                    AgentId::orchestrator(),
+                    &id,
+                    TaskPatch {
+                        labels: Some(vec!["BAD".into()]),
+                        ..Default::default()
+                    }
+                )
+                .is_err()
+            );
+            let done = hub
+                .update_task(
+                    AgentId::orchestrator(),
+                    &id,
+                    TaskPatch {
+                        status: Some(TaskStatus::Done),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            assert_eq!(done.progress, 100);
+            hub.update_task(
+                AgentId::orchestrator(),
+                &id,
+                TaskPatch {
+                    status: Some(TaskStatus::Archived),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(hub.tasks(false).is_empty());
+            assert_eq!(hub.tasks(true).len(), 1);
+            hub.update_task(
+                AgentId::orchestrator(),
+                &id,
+                TaskPatch {
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            for _ in 1..500 {
+                hub.create_task(AgentId::orchestrator(), new()).unwrap();
+            }
+            assert_eq!(
+                hub.create_task(AgentId::orchestrator(), new()),
+                Err(TaskError::Limit)
+            );
+        }
+        let hub = Hub::with_log(&path);
+        assert_eq!(hub.task(&id).unwrap().status, TaskStatus::Done);
+        assert_eq!(hub.tasks(false).len(), 500);
+        drop(hub);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn mailbox_limits_and_replay() {
         use super::*;

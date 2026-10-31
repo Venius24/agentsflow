@@ -23,6 +23,10 @@ fn truncate(text: &str) -> String {
 
 pub fn format_event(agent: &str, event: &Event) -> String {
     match event {
+        Event::Task { task } => format!(
+            "[task] {}: {} ({:?}, {}%)",
+            task.id, task.title, task.status, task.progress
+        ),
         Event::Message { text, .. } => format!("{agent}> {text}"),
         Event::ToolCall { name, input, .. } => {
             format!("[tool] {name} {}", truncate(&input.to_string()))

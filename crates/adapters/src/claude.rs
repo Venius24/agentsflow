@@ -190,9 +190,12 @@ impl ClaudeSession {
         let mut builder = ClaudeCliBuilder::new().permission_prompt_tool("stdio");
         if let Some(mail) = opts.mail {
             let config = serde_json::json!({"mcpServers":{"mail":{"command":mail.exe,"args":["mail-mcp","--as",mail.id],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token,"AGENTSFLOW_PEERS":mail.peers.join(",")}}}});
-            builder = builder
-                .mcp_config([config.to_string()])
-                .allowed_tools(["mcp__mail__send_mail", "mcp__mail__check_inbox"]);
+            builder = builder.mcp_config([config.to_string()]).allowed_tools([
+                "mcp__mail__send_mail",
+                "mcp__mail__check_inbox",
+                "mcp__mail__list_my_tasks",
+                "mcp__mail__update_task",
+            ]);
         }
         if let Some(model) = opts.model {
             builder = builder.model(model);

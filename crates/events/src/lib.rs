@@ -56,9 +56,39 @@ pub struct GuardNote {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Backlog,
+    Todo,
+    InProgress,
+    Review,
+    Done,
+    Blocked,
+    Archived,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskSnapshot {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: TaskStatus,
+    pub assignee: Option<AgentId>,
+    pub progress: u8,
+    pub labels: Vec<String>,
+    pub note: String,
+    pub thread: Option<String>,
+    pub created_ms: u64,
+    pub updated_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    Task {
+        task: TaskSnapshot,
+    },
     Message {
         role: Role,
         text: String,
@@ -161,6 +191,21 @@ mod tests {
     #[test]
     fn events_roundtrip_json() {
         let events = [
+            Event::Task {
+                task: TaskSnapshot {
+                    id: "12345678".into(),
+                    title: "task".into(),
+                    description: String::new(),
+                    status: TaskStatus::Todo,
+                    assignee: Some(AgentId::from("claude")),
+                    progress: 10,
+                    labels: vec!["test".into()],
+                    note: "note".into(),
+                    thread: None,
+                    created_ms: 1,
+                    updated_ms: 2,
+                },
+            },
             Event::Message {
                 role: Role::Assistant,
                 text: "hello".into(),
