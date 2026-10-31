@@ -68,6 +68,7 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
                 id: request.request_id.clone(),
                 tool: tool.tool_name.clone(),
                 input: tool.input.clone(),
+                guard: None,
             }],
             _ => vec![],
         },
@@ -300,6 +301,15 @@ impl ClaudeSession {
     }
 
     pub async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
+        self.respond_reason(request_id, allow, None).await
+    }
+
+    async fn respond_reason(
+        &mut self,
+        request_id: &str,
+        allow: bool,
+        reason: Option<&str>,
+    ) -> Result<()> {
         let input = self
             .pending
             .get(request_id)
@@ -307,7 +317,7 @@ impl ClaudeSession {
         let result = if allow {
             PermissionResult::allow(input.clone())
         } else {
-            PermissionResult::deny("denied by user")
+            PermissionResult::deny(reason.unwrap_or("denied by user"))
         };
         enqueue(
             &self.stdin,
@@ -344,6 +354,14 @@ impl crate::Agent for ClaudeSession {
     }
     async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()> {
         Self::respond(self, request_id, allow).await
+    }
+    async fn respond_with_reason(
+        &mut self,
+        request_id: &str,
+        allow: bool,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        self.respond_reason(request_id, allow, reason).await
     }
     fn interrupter(&self) -> crate::Interrupter {
         Self::interrupter(self)
@@ -484,7 +502,8 @@ mod tests {
             vec![Event::PermissionRequest {
                 id: "r1".into(),
                 tool: "Write".into(),
-                input: json!({"path":"a"})
+                input: json!({"path":"a"}),
+                guard: None,
             }]
         );
     }

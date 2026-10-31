@@ -1059,6 +1059,7 @@ mod tests {
                 }
                 assert_eq!(get_team(State(state.clone())).await.0, body["team"]);
                 assert_eq!(body["team"][0]["mode"], "ask");
+                assert_eq!(body["team"][0]["guard"], true);
                 assert!(body["team"][0]["sandbox"].is_null());
                 assert_eq!(body["team"][1]["sandbox"], "workspace-write");
                 assert_eq!(body["team"][2]["sandbox"], "workspace-write");

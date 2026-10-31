@@ -189,7 +189,11 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentId, String, Event)> {
     }
     let mut closers = Vec::new();
     for (agent, session, id) in permissions {
-        let event = Event::PermissionResolved { id, allow: false };
+        let event = Event::PermissionResolved {
+            id,
+            allow: false,
+            blocked_by_guard: false,
+        };
         closers.push((agent, session, event));
     }
     for (agent, session, done) in turns {
@@ -578,6 +582,7 @@ impl Actor {
 /// How long an interrupted turn may take to end before its session is dropped.
 const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
+#[cfg(test)]
 pub fn spawn<A, F, Fut>(hub: Hub, agent: AgentId, yes: bool, factory: F) -> (Actor, JoinHandle<()>)
 where
     A: Agent + 'static,
@@ -587,12 +592,52 @@ where
     spawn_with(hub, agent, yes, factory, INTERRUPT_GRACE)
 }
 
+pub fn spawn_guarded<A, F, Fut>(
+    hub: Hub,
+    agent: AgentId,
+    yes: bool,
+    cwd: std::path::PathBuf,
+    enabled: bool,
+    factory: F,
+) -> (Actor, JoinHandle<()>)
+where
+    A: Agent + 'static,
+    F: Fn() -> Fut + 'static,
+    Fut: Future<Output = Result<A>> + 'static,
+{
+    spawn_configured(
+        hub,
+        agent,
+        yes,
+        factory,
+        INTERRUPT_GRACE,
+        Some((cwd, enabled)),
+    )
+}
+
+#[cfg(test)]
 fn spawn_with<A, F, Fut>(
     hub: Hub,
     agent: AgentId,
     yes: bool,
     factory: F,
     grace: Duration,
+) -> (Actor, JoinHandle<()>)
+where
+    A: Agent + 'static,
+    F: Fn() -> Fut + 'static,
+    Fut: Future<Output = Result<A>> + 'static,
+{
+    spawn_configured(hub, agent, yes, factory, grace, None)
+}
+
+fn spawn_configured<A, F, Fut>(
+    hub: Hub,
+    agent: AgentId,
+    yes: bool,
+    factory: F,
+    grace: Duration,
+    guard: Option<(std::path::PathBuf, bool)>,
 ) -> (Actor, JoinHandle<()>)
 where
     A: Agent + 'static,
@@ -611,7 +656,7 @@ where
         state: state.clone(),
     };
     let task = tokio::task::spawn_local(run_actor(
-        hub, agent, yes, factory, grace, state, rx, stop_rx,
+        hub, agent, yes, factory, grace, state, rx, stop_rx, guard,
     ));
     (actor, task)
 }
@@ -668,6 +713,7 @@ async fn run_actor<A, F, Fut>(
     state: Arc<Mutex<AgentState>>,
     mut rx: mpsc::UnboundedReceiver<Command>,
     mut stop: watch::Receiver<bool>,
+    guard: Option<(std::path::PathBuf, bool)>,
 ) where
     A: Agent,
     F: Fn() -> Fut,
@@ -740,12 +786,23 @@ async fn run_actor<A, F, Fut>(
                             if interrupted.is_some() && matches!(event, Event::Error { .. }) {
                                 continue;
                             }
-                            let event = match event {
+                            let mut event = match event {
                                 Event::Done { .. } if interrupted.is_some() => Event::Done {
                                     reason: "interrupted".into(),
                                 },
                                 event => event,
                             };
+                            if let (Some((cwd, true)), Event::PermissionRequest { tool, input, guard: note, .. }) = (&guard, &mut event) {
+                                if matches!(tool.to_ascii_lowercase().as_str(), "bash" | "powershell" | "shell") {
+                                    if let Some(command) = input.get("command").and_then(serde_json::Value::as_str) {
+                                        *note = crate::guard::check(command, cwd).map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
+                                    }
+                                }
+                            }
+                            let blocked = yes && matches!(&event, Event::PermissionRequest { guard: Some(_), .. });
+                            let deny_reason = if blocked {
+                                if let Event::PermissionRequest { guard: Some(note), .. } = &event { Some(format!("blocked by agentsflow guard ({}): {}", note.rule, note.reason)) } else { None }
+                            } else { None };
                             let done = matches!(event, Event::Done { .. });
                             let permission = match &event {
                                 Event::PermissionRequest { id, .. } => Some(id.clone()),
@@ -759,7 +816,7 @@ async fn run_actor<A, F, Fut>(
                             hub.publish(agent.clone(), &session_id, event);
                             if let Some(id) = permission {
                                 let mut interrupt_reply = None;
-                                let (allow, response) = if interrupted.is_some() {
+                                let (allow, response) = if interrupted.is_some() || blocked {
                                     (false, None)
                                 } else if yes {
                                     (true, None)
@@ -791,13 +848,13 @@ async fn run_actor<A, F, Fut>(
                                         }
                                     }
                                 };
-                                match active.respond(&id, allow).await {
+                                match active.respond_with_reason(&id, allow, deny_reason.as_deref()).await {
                                     Ok(()) => {
                                         state.lock().unwrap().pending.retain(|open| open != &id);
                                         hub.publish(
                                             agent.clone(),
                                             &session_id,
-                                            Event::PermissionResolved { id, allow },
+                                            Event::PermissionResolved { id, allow, blocked_by_guard: blocked },
                                         );
                                         if let Some(reply) = response {
                                             let _ = reply.send(Ok(()));
@@ -1126,6 +1183,77 @@ mod tests {
         steps: VecDeque<anyhow::Result<Vec<Event>>>,
         answers: Arc<Mutex<Vec<bool>>>,
     }
+    type GuardAnswers = Arc<Mutex<Vec<(bool, Option<String>)>>>;
+    struct GuardFake {
+        event: Option<Event>,
+        answers: GuardAnswers,
+    }
+    impl Agent for GuardFake {
+        async fn send(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn next_events(&mut self) -> Result<Vec<Event>> {
+            Ok(vec![self.event.take().unwrap_or(Event::Done {
+                reason: "ok".into(),
+            })])
+        }
+        async fn respond(&mut self, _: &str, allow: bool) -> Result<()> {
+            self.answers.lock().unwrap().push((allow, None));
+            Ok(())
+        }
+        async fn respond_with_reason(
+            &mut self,
+            _: &str,
+            allow: bool,
+            reason: Option<&str>,
+        ) -> Result<()> {
+            self.answers
+                .lock()
+                .unwrap()
+                .push((allow, reason.map(str::to_owned)));
+            Ok(())
+        }
+        async fn shutdown(self) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn guard_checks_permissions_and_auto_denies() {
+        LocalSet::new().run_until(async {
+            for (yes, enabled, command, warned, expected) in [
+                (true, true, Some("rm -rf /"), true, false),
+                (true, true, Some("cargo build"), false, true),
+                (false, true, Some("rm -rf /"), true, true),
+                (true, false, Some("rm -rf /"), false, true),
+                (true, true, None, false, true),
+            ] {
+                let hub = Hub::new();
+                let (_, mut rx) = hub.subscribe();
+                let answers = Arc::new(Mutex::new(Vec::new()));
+                let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), yes, std::env::current_dir().unwrap(), enabled, {
+                    let answers = answers.clone();
+                    move || {
+                        let answers = answers.clone();
+                        async move { Ok(GuardFake { answers, event: Some(Event::PermissionRequest {
+                            id: "p".into(), tool: "Bash".into(),
+                            input: command.map_or_else(|| serde_json::json!({}), |c| serde_json::json!({"command":c})), guard: None,
+                        }) }) }
+                    }
+                });
+                actor.prompt("test".into()).await.unwrap();
+                let request = wait_event(&mut rx, |event| matches!(event, Event::PermissionRequest { .. })).await;
+                assert_eq!(matches!(request, Event::PermissionRequest { guard: Some(_), .. }), warned);
+                if !yes { assert!(answers.lock().unwrap().is_empty()); actor.respond("p".into(), true).await.unwrap(); }
+                let resolved = wait_event(&mut rx, |event| matches!(event, Event::PermissionResolved { .. })).await;
+                assert!(matches!(resolved, Event::PermissionResolved { allow, blocked_by_guard, .. } if allow == expected && blocked_by_guard == (yes && warned)));
+                let recorded = answers.lock().unwrap().clone();
+                assert_eq!(recorded[0].0, expected);
+                if !expected { assert!(recorded[0].1.as_deref().unwrap().contains("blocked by agentsflow guard (rm-recursive)")); }
+                actor.shutdown().await;
+                task.await.unwrap();
+            }
+        }).await;
+    }
     impl Agent for Fake {
         async fn send(&mut self, _: &str) -> Result<()> {
             Ok(())
@@ -1150,6 +1278,7 @@ mod tests {
             id: "p".into(),
             tool: "shell".into(),
             input: serde_json::json!({}),
+            guard: None,
         }
     }
     async fn wait_event(
@@ -1280,7 +1409,8 @@ mod tests {
                         .await,
                         Event::PermissionResolved {
                             id: "p".into(),
-                            allow
+                            allow,
+                            blocked_by_guard: false,
                         }
                     );
                     wait_event(&mut rx, |event| matches!(event, Event::Done { .. })).await;
@@ -1403,7 +1533,8 @@ mod tests {
                     wait_event(&mut rx, |e| matches!(e, Event::PermissionResolved { .. })).await,
                     Event::PermissionResolved {
                         id: "p".into(),
-                        allow: false
+                        allow: false,
+                        blocked_by_guard: false,
                     }
                 );
                 wait_event(&mut rx, is_done("interrupted")).await;

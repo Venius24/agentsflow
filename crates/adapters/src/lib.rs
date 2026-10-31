@@ -40,6 +40,14 @@ pub trait Agent {
     async fn send(&mut self, prompt: &str) -> Result<()>;
     async fn next_events(&mut self) -> Result<Vec<Event>>;
     async fn respond(&mut self, request_id: &str, allow: bool) -> Result<()>;
+    async fn respond_with_reason(
+        &mut self,
+        request_id: &str,
+        allow: bool,
+        _reason: Option<&str>,
+    ) -> Result<()> {
+        self.respond(request_id, allow).await
+    }
     /// Handle for interrupting the active turn while `next_events` is pending.
     fn interrupter(&self) -> Interrupter {
         Interrupter::unsupported()

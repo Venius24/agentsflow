@@ -83,14 +83,22 @@ fn render_event(envelope: &Envelope) -> Option<String> {
             out.push('\n');
             out.push_str(&fenced("diff", patch));
         }
-        Event::PermissionRequest { tool, .. } => {
+        Event::PermissionRequest { tool, guard, .. } => {
             let _ = writeln!(
                 out,
                 "**{agent}** asked permission for {}",
                 inline_code(tool)
             );
+            if let Some(note) = guard {
+                let _ = writeln!(
+                    out,
+                    "Guard: {} - {}",
+                    escape_inline(&note.rule),
+                    escape_inline(&note.reason)
+                );
+            }
         }
-        Event::PermissionResolved { id, allow } => {
+        Event::PermissionResolved { id, allow, .. } => {
             let verdict = if *allow { "allowed" } else { "denied" };
             let _ = writeln!(out, "**{agent}** permission {} {verdict}", inline_code(id));
         }
@@ -444,6 +452,10 @@ mod tests {
                     id: "p1".into(),
                     tool: "write".into(),
                     input: json!({}),
+                    guard: Some(agentsflow_events::GuardNote {
+                        rule: "rule".into(),
+                        reason: "reason".into(),
+                    }),
                 },
             ),
             env(
@@ -453,6 +465,7 @@ mod tests {
                 Event::PermissionResolved {
                     id: "p1".into(),
                     allow: true,
+                    blocked_by_guard: false,
                 },
             ),
             env(
@@ -462,10 +475,12 @@ mod tests {
                 Event::PermissionResolved {
                     id: "p2".into(),
                     allow: false,
+                    blocked_by_guard: false,
                 },
             ),
         ]);
         assert!(out.contains("**codex** asked permission for `write`\n"));
+        assert!(out.contains("Guard: rule - reason"));
         assert!(out.contains("**codex** permission `p1` allowed\n"));
         assert!(out.contains("**codex** permission `p2` denied\n"));
     }
