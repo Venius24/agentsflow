@@ -2,6 +2,7 @@ target/
 *.log
 *.jsonl
 *.jsonl.tmp
+.agentsflow/
 .env
 .DS_Store
 .idea/
