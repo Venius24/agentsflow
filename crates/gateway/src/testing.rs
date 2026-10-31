@@ -75,6 +75,7 @@ impl Agent for Silent {
                 id: "p".into(),
                 tool: "shell".into(),
                 input: serde_json::json!({}),
+                guard: None,
             }]);
         }
         self.interrupted.recv().await;

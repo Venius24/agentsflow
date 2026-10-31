@@ -132,8 +132,13 @@ impl Runtime {
             let yes = member.mode != Some(AccessMode::Ask);
             let bypass = member.mode == Some(AccessMode::Bypass);
             let (actor, task) = match member.kind {
-                AgentKind::Claude => {
-                    crate::hub::spawn(hub.clone(), member.id.clone(), yes, move || {
+                AgentKind::Claude => crate::hub::spawn_guarded(
+                    hub.clone(),
+                    member.id.clone(),
+                    yes,
+                    cwd.clone(),
+                    member.guard && !bypass,
+                    move || {
                         ClaudeSession::start(ClaudeOptions {
                             cwd: Some(cwd.clone()),
                             model: model.clone(),
@@ -141,25 +146,32 @@ impl Runtime {
                             effort: effort.clone(),
                             bypass,
                         })
-                    })
-                }
+                    },
+                ),
                 AgentKind::Codex => {
                     let sandbox = member.sandbox.map(|sandbox| match sandbox {
                         MemberSandbox::ReadOnly => SandboxMode::Read_only,
                         MemberSandbox::WorkspaceWrite => SandboxMode::Workspace_write,
                     });
                     let bin = options.codex_bin.clone();
-                    crate::hub::spawn(hub.clone(), member.id.clone(), yes, move || {
-                        CodexSession::start(CodexOptions {
-                            cwd: Some(cwd.clone()),
-                            model: model.clone(),
-                            sandbox: sandbox.clone(),
-                            bin: bin.clone(),
-                            mail: mail_config.clone(),
-                            effort: effort.clone(),
-                            bypass,
-                        })
-                    })
+                    crate::hub::spawn_guarded(
+                        hub.clone(),
+                        member.id.clone(),
+                        yes,
+                        cwd.clone(),
+                        member.guard && !bypass,
+                        move || {
+                            CodexSession::start(CodexOptions {
+                                cwd: Some(cwd.clone()),
+                                model: model.clone(),
+                                sandbox: sandbox.clone(),
+                                bin: bin.clone(),
+                                mail: mail_config.clone(),
+                                effort: effort.clone(),
+                                bypass,
+                            })
+                        },
+                    )
                 }
             };
             tasks.push(task);

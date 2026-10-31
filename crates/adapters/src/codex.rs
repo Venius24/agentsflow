@@ -111,6 +111,7 @@ pub fn map_message(message: &ServerMessage) -> Vec<Event> {
             id: id.to_string(),
             tool: "shell".into(),
             input: json!({"command": params.command, "cwd": params.cwd}),
+            guard: None,
         }],
         ServerMessage::Request {
             id,
@@ -119,6 +120,7 @@ pub fn map_message(message: &ServerMessage) -> Vec<Event> {
             id: id.to_string(),
             tool: "file_change".into(),
             input: json!({"reason": params.reason, "grantRoot": params.grant_root}),
+            guard: None,
         }],
         ServerMessage::Notification(Notification::TurnCompleted(notification)) => {
             let mut events = Vec::new();
@@ -492,7 +494,8 @@ mod tests {
             vec![Event::PermissionRequest {
                 id: "7".into(),
                 tool: "shell".into(),
-                input: json!({"command":"pwd","cwd":"/tmp"})
+                input: json!({"command":"pwd","cwd":"/tmp"}),
+                guard: None,
             }]
         );
         assert_eq!(
@@ -502,7 +505,8 @@ mod tests {
             vec![Event::PermissionRequest {
                 id: "f".into(),
                 tool: "file_change".into(),
-                input: json!({"reason":"edit","grantRoot":"/tmp"})
+                input: json!({"reason":"edit","grantRoot":"/tmp"}),
+                guard: None,
             }]
         );
     }

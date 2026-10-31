@@ -51,6 +51,12 @@ pub enum AgentKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GuardNote {
+    pub rule: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Message {
@@ -76,10 +82,14 @@ pub enum Event {
         id: String,
         tool: String,
         input: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        guard: Option<GuardNote>,
     },
     PermissionResolved {
         id: String,
         allow: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        blocked_by_guard: bool,
     },
     Mail {
         id: String,
@@ -137,6 +147,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn permission_without_guard_stays_compatible() {
+        let value =
+            json!({"type":"permission_request","id":"1","tool":"Bash","input":{"command":"pwd"}});
+        let event: Event = serde_json::from_value(value.clone()).unwrap();
+        assert!(matches!(
+            event,
+            Event::PermissionRequest { guard: None, .. }
+        ));
+        assert_eq!(serde_json::to_value(event).unwrap(), value);
+    }
+
+    #[test]
     fn events_roundtrip_json() {
         let events = [
             Event::Message {
@@ -162,10 +184,15 @@ mod tests {
                 id: "2".into(),
                 tool: "write".into(),
                 input: json!({"path": "a"}),
+                guard: Some(GuardNote {
+                    rule: "example".into(),
+                    reason: "reason".into(),
+                }),
             },
             Event::PermissionResolved {
                 id: "2".into(),
                 allow: true,
+                blocked_by_guard: false,
             },
             Event::Mail {
                 id: "1".into(),

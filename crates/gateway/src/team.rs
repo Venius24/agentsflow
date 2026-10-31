@@ -27,12 +27,18 @@ pub struct Member {
     pub effort: Option<String>,
     pub mode: Option<AccessMode>,
     pub sandbox: Option<MemberSandbox>,
+    #[serde(default = "guard_enabled")]
+    pub guard: bool,
     #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub roles: Vec<String>,
     #[serde(default)]
     pub lead: bool,
+}
+
+fn guard_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -218,6 +224,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
             print_team(&team);
             if let Some(warning) = bypass_warning(&team) {
                 println!("{warning}");
+                println!("guard inactive in bypass mode");
             }
             println!("OK");
         }
@@ -281,11 +288,15 @@ roles = ["engineer"]
 "#;
 
 pub const TEMPLATE: &str = r#"# У каждого участника отдельный процесс и почтовый ящик.
+# guard по умолчанию включён; установите false, чтобы отключить проверку команд.
+# guard = false
 # mode: ask (спрашивать), auto (разрешать), bypass (обход разрешений).
 # По умолчанию mode наследует --yes: auto при --yes, иначе ask.
 # bypass снимает разрешения и песочницу; для запуска нужен --allow-bypass.
 # mode = "bypass"
 # sandbox только для codex: read-only или workspace-write; без поля наследует --sandbox.
+# guard по умолчанию включён; чтобы отключить проверку команд участника:
+# guard = false
 # id: 1–24 символа из a-z, 0-9, _ и -, кроме user и orchestrator.
 [[agent]]
 id = "lead"
@@ -333,6 +344,10 @@ mod tests {
     }
     #[test]
     fn validates_access_settings() {
+        assert!(Team::preset("pair").unwrap().members[0].guard);
+        let unguarded =
+            Team::from_toml("[[agent]]\nid='a'\nkind='claude'\nlead=true\nguard=false\n").unwrap();
+        assert!(!unguarded.members[0].guard);
         for (text, error) in [
             (
                 "[[agent]]\nid='a'\nkind='claude'\nlead=true\nsandbox='read-only'",

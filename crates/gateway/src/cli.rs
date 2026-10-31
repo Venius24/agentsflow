@@ -37,7 +37,7 @@ pub fn format_event(agent: &str, event: &Event) -> String {
         Event::PermissionRequest { tool, input, .. } => {
             format!("[permission] {tool} {}", truncate(&input.to_string()))
         }
-        Event::PermissionResolved { id, allow } => format!(
+        Event::PermissionResolved { id, allow, .. } => format!(
             "[permission:{}] {id}",
             if *allow { "allowed" } else { "denied" }
         ),

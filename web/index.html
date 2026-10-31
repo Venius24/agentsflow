@@ -60,6 +60,7 @@
   .chip.waiting { color: var(--warn); border-color: var(--warn); }
   .chip.off { opacity: .6; }
   .chip.bypass { color: var(--err); border-color: var(--err); font-weight: 700; }
+  .guard-warning { color: var(--err); font-weight: 700; overflow-wrap: anywhere; }
   .log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
   .empty { color: var(--muted); margin: auto; text-align: center; }
   .msg { max-width: 92%; padding: 8px 11px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -251,6 +252,7 @@ function updatePaneInfo(p, member) {
   p.name.textContent = member.id;
   p.lead.hidden = !member.lead;
   p.bypass.hidden = member.mode !== "bypass";
+  p.guard.hidden = member.guard !== true || member.mode === "bypass";
   const mode = { ask: "спрашивает", auto: "авто", bypass: "BYPASS" }[member.mode];
   const sandbox = member.kind === "codex" ? (member.mode === "bypass" ? "без песочницы" : member.sandbox) : null;
   p.subtitle.textContent = [member.kind || "тип неизвестен", member.model || "по умолчанию", member.effort || "по умолчанию", mode, sandbox, member.title].filter(Boolean).join(" · ");
@@ -268,8 +270,9 @@ function buildPane(a, enabled = true) {
   const name = el("h2");
   const lead = el("span", "chip", "лидер");
   const bypass = el("span", "chip bypass", "bypass");
+  const guard = el("span", "chip", "guard");
   const subtitle = el("div", "col-subtitle");
-  title.append(name, lead, bypass);
+  title.append(name, lead, bypass, guard);
   heading.append(title, subtitle);
   head.append(heading);
   const chip = el("span", "chip", "idle");
@@ -289,7 +292,7 @@ function buildPane(a, enabled = true) {
   col.append(head, stopError, log, form);
   $("#panes").insertBefore(col, orch.col || null);
 
-  const p = { a, col, name, lead, bypass, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
+  const p = { a, col, name, lead, bypass, guard, subtitle, chip, stop, stopError, stopping: false, log, empty, input, btn, busy: false, enabled, pending: new Set(),
               tools: new Map(), perms: new Map() };
   panes[a.id] = p;
   updatePaneInfo(p, a);
@@ -424,6 +427,7 @@ function handle(env) {
       p.pending.add(ev.id);
       const card = el("div", "perm");
       card.append(el("div", "ph", "Нужно разрешение: " + ev.tool));
+      if (ev.guard) card.append(el("div", "guard-warning", "⚠ опасно (" + ev.guard.rule + "): " + ev.guard.reason));
       card.append(el("pre", "", fmtInput(ev.input)));
       const row = el("div", "btns");
       const allow = el("button", "allow", "Разрешить");
@@ -448,7 +452,7 @@ function handle(env) {
       if (r) {
         r.card.classList.add("done");
         r.row.querySelectorAll("button").forEach(b => b.remove());
-        r.verdict.textContent = ev.allow ? "✓ разрешено" : "✕ отклонено";
+        r.verdict.textContent = ev.blocked_by_guard ? "отклонено guard" : ev.allow ? "✓ разрешено" : "✕ отклонено";
         r.verdict.className = "verdict " + (ev.allow ? "allow" : "deny");
       }
       break;

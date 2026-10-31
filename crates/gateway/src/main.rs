@@ -1,5 +1,6 @@
 mod cli;
 mod export;
+mod guard;
 mod hub;
 mod mail;
 mod mail_mcp;
