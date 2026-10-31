@@ -588,6 +588,9 @@ impl Hub {
     pub fn set_mail_enabled(&self, enabled: bool) {
         self.inner.data.lock().unwrap().mail_enabled = enabled;
     }
+    pub fn mail_all(&self) -> Vec<MailMsg> {
+        self.inner.data.lock().unwrap().mail.clone()
+    }
     pub fn mail_enabled(&self) -> bool {
         self.inner.data.lock().unwrap().mail_enabled
     }

@@ -826,6 +826,7 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let telegram_stop = shutdown_rx.clone();
+    let specs_for_telegram = specs.clone();
     let state = AppState {
         hub: runtime.hub.clone(),
         token: token.clone(),
@@ -846,6 +847,10 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
             runtime.hub.clone(),
             runtime.agents.clone(),
             runtime.team.clone(),
+            Some(crate::telegram::Control {
+                specs: specs_for_telegram,
+                manager: manager.clone(),
+            }),
             telegram_stop,
         ))
     });
