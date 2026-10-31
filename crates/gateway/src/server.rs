@@ -42,6 +42,7 @@ pub struct ServeOptions {
     telegram: Option<crate::telegram::Config>,
     workflows: Vec<PathBuf>,
     log: Option<PathBuf>,
+    no_log: bool,
     mail_thread_limit: usize,
 }
 impl ServeOptions {
@@ -84,12 +85,17 @@ impl ServeOptions {
             telegram: None,
             workflows: Vec::new(),
             log: None,
+            no_log: false,
             mail_thread_limit: crate::hub::MAX_THREAD_MAILS,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             if arg == "--yes" {
                 options.yes = true;
+                continue;
+            }
+            if arg == "--no-log" {
+                options.no_log = true;
                 continue;
             }
             if arg == "--allow-bypass" {
@@ -804,6 +810,12 @@ async fn serve_local(options: ServeOptions, specs: Vec<Spec>) -> Result<()> {
     let port = listener.local_addr()?.port();
     let token = Uuid::new_v4().simple().to_string();
     let mut runtime_options = options.runtime_options();
+    if runtime_options.log.is_none() && !options.no_log {
+        // The journal is on by default so a restart keeps history and the board.
+        let dir = options.cwd.join(".agentsflow");
+        std::fs::create_dir_all(&dir)?;
+        runtime_options.log = Some(dir.join("events.jsonl"));
+    }
     let mail_agent_tokens: MailAgentTokens = runtime_options
         .team
         .ids()
@@ -1715,6 +1727,8 @@ mod tests {
         );
         assert!(ServeOptions::parse(&args(&["--log"])).is_none());
         assert!(!opts.claude && opts.codex);
+        assert!(!opts.no_log);
+        assert!(ServeOptions::parse(&args(&["--no-log"])).unwrap().no_log);
         assert!(ServeOptions::parse(&args(&["--agents", "claude,other"])).is_none());
         assert!(ServeOptions::parse(&args(&["--port", "99999"])).is_none());
     }
