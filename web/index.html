@@ -66,7 +66,7 @@
 
   .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
   main { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px 16px; overflow-x: auto; overflow-y: hidden; }
-  .overview, .dash-view, .board-view { flex: 1; min-height: 0; overflow: auto; padding: 18px 22px 28px; }
+  .overview, .dash-view, .board-view, .home-view { flex: 1; min-height: 0; overflow: auto; padding: 18px 22px 28px; }
 
   button { font: inherit; border-radius: 6px; border: 1px solid var(--rule); background: var(--raised); color: var(--ink); padding: 5px 13px; cursor: pointer; transition: border-color .15s, background-color .15s; }
   button:hover:not(:disabled) { border-color: var(--ink-3); }
@@ -232,6 +232,23 @@
   .dash-card h2, .board-column h2 { font-size: 14px; margin: 0 0 8px; }
   .dash-card dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; margin: 8px 0; }
   .dash-card dd { margin: 0; }
+  .home-compose { display: grid; gap: 6px; max-width: 900px; margin-bottom: 18px; }
+  .home-compose label { font-weight: 650; font-family: var(--display); }
+  .home-compose textarea { width: 100%; resize: vertical; min-height: 70px; }
+  .home-compose .btns { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .home-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 22px; align-items: start; }
+  .home-col, .home-section { display: grid; gap: 10px; align-content: start; }
+  .home-section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); margin: 6px 0 0; }
+  .home-questions { margin: 0 0 8px; padding-left: 18px; font-size: 13px; }
+  .home-reply { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+  .home-reply textarea { flex: 1; min-width: 0; resize: vertical; }
+  .home-result { max-height: 360px !important; }
+  .home-reason { color: var(--alert) !important; }
+  .home-line { display: flex; align-items: center; gap: 8px; }
+  .home-dept dl { grid-template-columns: auto 1fr; }
+  .home-dept dd { overflow-wrap: anywhere; }
+  .board-card .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  @media (max-width: 900px) { .home-grid { grid-template-columns: 1fr; } .home-reply { flex-direction: column; align-items: stretch; } }
   .board-columns { display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; }
   .board-column { flex: 1 1 0; min-width: 190px; background: var(--raised); }
   .board-column h2 { display: flex; align-items: center; gap: 6px; }
@@ -270,6 +287,7 @@
       <span>agentsflow</span>
     </div>
     <nav class="nav" aria-label="Разделы">
+      <button type="button" data-view-button="home" hidden></button>
       <button type="button" data-view-button="overview"></button>
       <button type="button" data-view-button="chat"></button>
       <button type="button" id="nav-mail"></button>
@@ -288,6 +306,7 @@
   <div class="stage">
     <section class="overview" data-view="overview" id="overview" hidden></section>
     <main id="panes" data-view="chat" hidden></main>
+    <section class="home-view" data-view="home" hidden></section>
     <section class="dash-view" data-view="dash" hidden></section>
     <section class="board-view" data-view="board" hidden></section>
   </div>
@@ -412,6 +431,7 @@ const ICONS = {
   board: ["M4 4h5v16H4z", "M10 4h5v10h-5z", "M16 4h4v13h-4z"],
   dash: ["M4 20V10", "M10 20V4", "M16 20v-7", "M2 20h20"],
   check: ["M5 12l5 5 9-10"],
+  home: ["M4 21V9l8-5 8 5v12", "M9 21v-6h6v6"],
 };
 function icon(name, size = 18) {
   const s = svg("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.75", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
@@ -596,6 +616,10 @@ function permButtons(agent, ev, fail) {
 function handle(env) {
   if (env.event.type === "usage") return;
   recordViewEvent(env);
+  // Department tasks and rule proposals live on the departments view, not in agent panes.
+  if (env.event.type === "task" || env.event.type === "rule") { if (env.event.type === "rule") refreshHome(); return; }
+  // Department runs ("dept:member:task") are fresh sessions; a pane per run would pile up forever.
+  if (homeMode && env.agent.includes(":")) return;
   if (env.event.type === "mail") { handleMail(env); return; }
   if (env.event.type === "mail_read") { handleMailRead(env.event); return; }
   if (env.agent === "orchestrator") { handleOrch(env.event); return; }
@@ -1069,6 +1093,11 @@ async function loadState() {
     $("#project-controls").hidden = !s.projects_enabled;
     if (s.projects_enabled && !projectsLoaded) try { await loadProjects(); } catch (_) {}
     if (typeof s.version === "string" && s.version) $("#app-version").textContent = "v" + s.version;
+    if (s.home && !homeMode) {
+      homeMode = true;
+      $('[data-view-button="home"]').hidden = false;
+      if (!viewSaved) setView("home"); else refreshHome();
+    }
     for (const a of team) {
       const pane = panes[a.id] || (buildPane(a), panes[a.id]);
       updatePaneInfo(pane, a);
@@ -1118,6 +1147,7 @@ function recordViewEvent(env) {
     if (activeView === "board") renderBoard();
     if (activeView === "dash") renderDash();
     scheduleOverview();
+    scheduleHome();
   }
   const phrase = eventPhrase(env.event);
   if (phrase) {
@@ -1146,8 +1176,9 @@ function setView(view) {
   if (view === "overview") { renderOverview(); refreshStats(); statsTimer = setInterval(refreshStats, 3000); }
   if (view === "dash") { renderDash(); refreshStats(); statsTimer = setInterval(refreshStats, 3000); }
   if (view === "board") renderBoard();
+  if (view === "home") { renderHome(); refreshHome(); }
 }
-const NAV = { overview: ["overview", "Обзор"], chat: ["chat", "Чаты"], board: ["board", "Доска"], dash: ["dash", "Статистика"] };
+const NAV = { home: ["home", "Отделы"], overview: ["overview", "Обзор"], chat: ["chat", "Чаты"], board: ["board", "Доска"], dash: ["dash", "Статистика"] };
 for (const button of document.querySelectorAll("[data-view-button]")) {
   const [ic, label] = NAV[button.dataset.viewButton];
   button.append(icon(ic), el("span", "", label));
@@ -1599,10 +1630,242 @@ function scheduleOverview() {
 }
 window.addEventListener("resize", scheduleOverview);
 
+// Departments view (serve --home): what waits for the owner, what runs, departments, schedules, rules.
+let homeMode = false, homeTimer = 0;
+const homeData = { departments: [], schedules: [], proposals: [], recent: [], spend: null, error: "" };
+const workStates = { queued: "в очереди", waiting: "ждёт вас", running: "в работе", stuck: "застряла", review: "на приёмке", done: "готово", cancelled: "отменена" };
+async function getJson(path) {
+  const response = await fetch(api(path));
+  let data = null;
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error((data && data.error) || "HTTP " + response.status);
+  return data;
+}
+async function refreshHome() {
+  if (!homeMode) return;
+  try {
+    const [d, s, r, sp] = await Promise.all([getJson("/api/departments"), getJson("/api/schedules"), getJson("/api/rules"), getJson("/api/spend")]);
+    homeData.departments = d.departments || [];
+    homeData.schedules = s.schedules || [];
+    homeData.proposals = r.proposals || [];
+    homeData.recent = r.recent || [];
+    homeData.spend = sp;
+    homeData.error = "";
+  } catch (err) { homeData.error = "Не удалось загрузить отделы: " + err.message; }
+  scheduleHome();
+}
+function scheduleHome() {
+  if (activeView !== "home" || homeTimer) return;
+  homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 150);
+}
+function money(usd) { return "$" + (usd || 0).toFixed(2); }
+function taskPath(task, tail) { return "/api/tasks/" + encodeURIComponent(task.id) + tail; }
+function showError(card, err) { const node = card.querySelector(".board-error"); if (node) node.textContent = err.message; }
+// A button that disables itself while its request runs and reports a failure in its card.
+function act(label, cls, run, card) {
+  const button = el("button", cls, label); button.type = "button";
+  button.onclick = async () => {
+    button.disabled = true;
+    showError(card, { message: "" });
+    try { await run(); await refreshHome(); } catch (err) { showError(card, err); } finally { button.disabled = false; }
+  };
+  return button;
+}
+// A text field with a send button: answers to questions, return notes.
+function replyForm(placeholder, label, send, card) {
+  const form = el("form", "home-reply");
+  const text = el("textarea"); text.rows = 2; text.placeholder = placeholder; text.setAttribute("aria-label", placeholder);
+  const submit = el("button", "", label); submit.type = "submit";
+  form.onsubmit = async e => {
+    e.preventDefault();
+    if (!text.value.trim()) return;
+    submit.disabled = true;
+    try { await send(text.value); text.value = ""; await refreshHome(); } catch (err) { showError(card, err); } finally { submit.disabled = false; }
+  };
+  form.append(text, submit);
+  return form;
+}
+function ownerWaits(work) {
+  if (work.state === "waiting") return !!work.proposal || (work.questions || []).some(q => q.answer == null);
+  if (work.state === "review") return work.risk === "external" || !!work.owner_review;
+  return work.state === "stuck";
+}
+function waitCard(task) {
+  const work = task.work;
+  const card = el("article", "wait-card");
+  const head = el("h3", "", task.title);
+  head.prepend(el("span", "chip", work.department));
+  card.append(head, el("p", "", [workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", money(work.cost_usd)].join(" · ")));
+  const btns = el("div", "btns");
+  if (work.state === "waiting" && work.proposal) {
+    const p = work.proposal;
+    card.append(el("p", "", "Оркестратор предлагает новый отдел «" + p.title + "» (" + p.id + "): " + p.description));
+    btns.append(
+      act("Создать отдел", "primary", () => post(taskPath(task, "/proposal"), { create: true }), card),
+      act("В общий отдел", "", () => post(taskPath(task, "/proposal"), { create: false }), card));
+    card.append(btns);
+  } else if (work.state === "waiting") {
+    const list = el("ul", "home-questions");
+    for (const q of work.questions || []) if (q.answer == null) list.append(el("li", "", q.text));
+    card.append(list, replyForm("Ответ на все вопросы одним сообщением", "Ответить", text => post(taskPath(task, "/answer"), { text }), card));
+  } else if (work.state === "review") {
+    if (work.result_summary) card.append(el("pre", "", work.result_summary));
+    const full = el("pre", "home-result"); full.hidden = true;
+    const show = el("button", "", "Весь результат"); show.type = "button";
+    show.onclick = async () => {
+      if (!full.hidden) { full.hidden = true; return; }
+      try { full.textContent = (await getJson(taskPath(task, "/result"))).text; full.hidden = false; } catch (err) { showError(card, err); }
+    };
+    btns.append(
+      act("Принять", "primary", () => patchTask(task.id, { status: "done" }), card),
+      act("Ещё круг", "", () => post(taskPath(task, "/retry"), {}), card),
+      show);
+    card.append(btns, full, replyForm("Что исправить", "Вернуть с замечанием", text => post(taskPath(task, "/return"), { text }), card));
+  } else {
+    card.append(el("p", "home-reason", "Причина: " + (work.stuck_reason || "не указана")));
+    if (work.result_summary) card.append(el("pre", "", work.result_summary));
+    btns.append(
+      act("Ещё круг", "primary", () => post(taskPath(task, "/retry"), {}), card),
+      act("Принять как есть", "", () => patchTask(task.id, { status: "done" }), card),
+      act("Закрыть", "deny", () => patchTask(task.id, { status: "archived" }), card));
+    card.append(btns, replyForm("Что поменять в новом круге", "Ещё круг с замечанием", text => post(taskPath(task, "/return"), { text }), card));
+  }
+  card.append(el("div", "board-error"));
+  return card;
+}
+function ruleCard(proposal) {
+  const card = el("article", "wait-card");
+  card.append(el("h3", "", "Правило для «" + proposal.target + "»"), el("pre", "", proposal.text));
+  const path = "/api/rules/" + encodeURIComponent(proposal.target) + "/" + encodeURIComponent(proposal.id);
+  const btns = el("div", "btns");
+  btns.append(act("Добавить", "primary", () => post(path + "/approve", {}), card), act("Отклонить", "deny", () => post(path + "/reject", {}), card));
+  card.append(btns, el("div", "board-error"));
+  return card;
+}
+let homeCompose = null;
+function buildHomeCompose() {
+  const form = el("form", "home-compose");
+  const text = el("textarea"); text.rows = 3; text.id = "home-message";
+  text.placeholder = "Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…";
+  const label = el("label", "", "Сообщение оркестратору"); label.htmlFor = text.id;
+  const send = el("button", "primary", "Отправить"); send.type = "submit";
+  const status = el("span", "board-meta"); status.setAttribute("aria-live", "polite");
+  const row = el("div", "btns"); row.append(send, status);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    if (!text.value.trim()) return;
+    send.disabled = true; status.textContent = "";
+    try { await post("/api/orchestrator", { text: text.value }); text.value = ""; status.textContent = "Принято. Задачи появятся ниже, ответ придёт в почту и Telegram."; }
+    catch (err) { status.textContent = "Ошибка: " + err.message; }
+    finally { send.disabled = false; }
+  };
+  form.append(label, text, row);
+  return form;
+}
+function homeSection(title) { const section = el("section", "home-section"); section.append(el("h2", "", title)); return section; }
+function renderHome() {
+  const root = $('[data-view="home"]');
+  if (!homeCompose) homeCompose = buildHomeCompose();
+  // Don't wipe a half-typed answer or note under the owner's cursor.
+  const typing = document.activeElement && root.contains(document.activeElement) && !homeCompose.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA";
+  if (typing) { setTimeout(scheduleHome, 2000); return; }
+  root.replaceChildren(homeCompose);
+  if (homeData.error) root.append(el("div", "err", homeData.error));
+  const grid = el("div", "home-grid");
+  const left = el("div", "home-col"), right = el("div", "home-col");
+  grid.append(left, right);
+  root.append(grid);
+
+  const tasks = [...taskCards.values()].filter(t => t.work && t.status !== "archived").sort((a, b) => b.updated_ms - a.updated_ms);
+  const waits = homeSection("Ждёт вас");
+  const mine = tasks.filter(t => ownerWaits(t.work));
+  if (!mine.length && !homeData.proposals.length) {
+    const empty = el("div", "wait-empty"); empty.append(icon("check"), el("span", "", "Ничего не ждёт вашего решения."));
+    waits.append(empty);
+  }
+  for (const task of mine) waits.append(waitCard(task));
+  for (const proposal of homeData.proposals) waits.append(ruleCard(proposal));
+  left.append(waits);
+
+  const work = homeSection("В работе");
+  const active = tasks.filter(t => !mine.includes(t) && !["done", "cancelled"].includes(t.work.state));
+  if (!active.length) work.append(el("div", "board-meta", "Сейчас ничего не идёт."));
+  for (const task of active) {
+    const card = el("article", "board-card");
+    const head = el("div", "home-line");
+    head.append(el("span", "chip", task.work.department), el("strong", "", task.title));
+    const meta = [workStates[task.work.state] || task.work.state, money(task.work.cost_usd)];
+    if (task.work.parent) meta.push("заказ для " + task.work.parent);
+    if (task.work.state === "review") meta.push("проверяет оркестратор");
+    card.append(head, el("div", "board-meta", meta.join(" · ")));
+    if (task.work.state === "running") card.append(act("Стоп", "deny", () => post(taskPath(task, "/stop"), {}), card));
+    card.append(el("div", "board-error"));
+    work.append(card);
+  }
+  const done = tasks.filter(t => t.work.state === "done").slice(0, 10);
+  if (done.length) {
+    const more = el("details", "dash-more");
+    more.append(el("summary", "", "Готово недавно: " + done.length));
+    for (const task of done) more.append(el("div", "board-meta", task.work.department + " · " + task.title + " · " + money(task.work.cost_usd)));
+    work.append(more);
+  }
+  left.append(work);
+
+  const depts = homeSection("Отделы");
+  if (homeData.spend) depts.append(el("div", "board-meta", "Расход за месяц: " + money(homeData.spend.total_usd)
+    + (homeData.spend.month && homeData.spend.month.orchestrator ? ", из них оркестратор " + money(homeData.spend.month.orchestrator) : "")));
+  for (const dept of homeData.departments) {
+    const card = el("article", "dash-card home-dept");
+    card.append(el("h2", "", dept.title + " · " + dept.id), el("div", "board-meta", dept.description));
+    const dl = el("dl");
+    const row = (k, v) => dl.append(el("dt", "", k), el("dd", "", v));
+    row("Состав", dept.agents.map(a => a.id + " (" + a.kind + (a.roles.length ? ", " + a.roles.join(", ") : "") + ")").join(" · "));
+    row("Идёт", dept.running + " из " + dept.max_parallel);
+    row("За месяц", money(dept.month_spent_usd) + (dept.limits.month_usd ? " из " + money(dept.limits.month_usd) : ""));
+    row("Задача", "до " + money(dept.limits.task_usd) + ", " + dept.limits.timeout_mins + " мин, кругов " + dept.limits.max_loops);
+    card.append(dl);
+    if (dept.limits.month_usd) {
+      const bar = el("progress"); bar.max = dept.limits.month_usd; bar.value = Math.min(dept.month_spent_usd, dept.limits.month_usd);
+      bar.setAttribute("aria-label", "Месячный лимит"); card.append(bar);
+    }
+    depts.append(card);
+  }
+  right.append(depts);
+
+  if (homeData.schedules.length) {
+    const sched = homeSection("Расписания");
+    for (const item of homeData.schedules) {
+      const card = el("article", "board-card");
+      const next = item.paused ? "на паузе" : item.next_ms ? "следующий запуск " + new Date(item.next_ms).toLocaleString() : "не запланировано";
+      card.append(el("strong", "", item.title), el("div", "board-meta", item.department + " · " + item.cron + " · " + next));
+      const path = "/api/schedules/" + encodeURIComponent(item.key);
+      const btns = el("div", "btns");
+      btns.append(
+        act(item.paused ? "Возобновить" : "Пауза", "", () => post(path + (item.paused ? "/resume" : "/pause"), {}), card),
+        act("Запустить сейчас", "", () => post(path + "/run", {}), card));
+      card.append(btns, el("div", "board-error"));
+      sched.append(card);
+    }
+    right.append(sched);
+  }
+  if (homeData.recent.length) {
+    const rules = homeSection("Последние правила");
+    for (const rule of homeData.recent) {
+      const card = el("article", "board-card");
+      card.append(el("div", "", rule.subject), el("div", "board-meta", rule.date + " · " + rule.commit.slice(0, 7)),
+        act("Отменить", "", () => post("/api/rules/revert/" + encodeURIComponent(rule.commit), {}), card), el("div", "board-error"));
+      rules.append(card);
+    }
+    right.append(rules);
+  }
+}
+
 buildOrch();
-let savedView = "overview";
-try { if (["overview", "chat", "dash", "board"].includes(localStorage.getItem("agentsflow.view"))) savedView = localStorage.getItem("agentsflow.view"); } catch (_) {}
-setView(savedView);
+let savedView = "overview", viewSaved = false;
+try { if (["home", "overview", "chat", "dash", "board"].includes(localStorage.getItem("agentsflow.view"))) { savedView = localStorage.getItem("agentsflow.view"); viewSaved = true; } } catch (_) {}
+// The departments view exists only in --home mode; until the state says so, start on the overview.
+setView(savedView === "home" ? "overview" : savedView);
+if (savedView === "home") viewSaved = false;
 loadWorkflows();
 async function refreshState() {
   const ready = await loadState();
