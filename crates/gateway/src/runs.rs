@@ -342,8 +342,21 @@ impl Runs {
         };
         let task = self
             .hub
-            .create_work(by, &new.title, new.text, work)
+            .create_work(by.clone(), &new.title, new.text, work)
             .map_err(|error| error.to_string())?;
+        if let Some(work) = &task.work {
+            crate::diag::diag(
+                "INFO",
+                &format!(
+                    "задача {} [{}] создана ({}), {} «{}»",
+                    task.id,
+                    work.department,
+                    by.as_str(),
+                    format!("{:?}", work.state).to_lowercase(),
+                    task.title
+                ),
+            );
+        }
         self.kick();
         Ok(task)
     }
@@ -1173,6 +1186,10 @@ impl Engine {
         let run_dir = dept.run_dir(&task.id);
         std::fs::create_dir_all(run_dir.join("artifacts"))?;
         let inputs = copy_inputs(inputs, &run_dir)?;
+        crate::diag::diag(
+            "INFO",
+            &format!("запуск {run_id}: задача {} [{}]", task.id, dept.id),
+        );
         let requests = request_catalog(home, &self.hub, task);
         let text = brief::build(
             dept,

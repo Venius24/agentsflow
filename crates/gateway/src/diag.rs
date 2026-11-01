@@ -28,6 +28,17 @@ pub fn init(cwd: &Path, secrets: Vec<String>) -> std::io::Result<()> {
         }
     }
     log.file = Some(open_log(cwd)?);
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            // try_lock: the panic may come from inside diag itself.
+            if let Ok(mut log) = crate::diag::log().try_lock() {
+                write(&mut log, "ERROR", &format!("panic: {info}"));
+            }
+            default(info);
+        }));
+    });
     Ok(())
 }
 pub fn close() {
@@ -68,7 +79,9 @@ pub fn redact(text: &str) -> String {
     redact_with(text, &log().lock().unwrap().secrets)
 }
 pub fn diag(level: &str, message: &str) {
-    let mut log = log().lock().unwrap();
+    write(&mut log().lock().unwrap(), level, message);
+}
+fn write(log: &mut Log, level: &str, message: &str) {
     let message = redact_with(message, &log.secrets).replace(['\r', '\n'], " ");
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)

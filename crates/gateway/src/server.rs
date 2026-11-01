@@ -1112,7 +1112,7 @@ async fn run_session(
     let (end_tx, end_rx) = tokio::sync::oneshot::channel();
     let result = axum::serve(listener, app(state))
         .with_graceful_shutdown(async move {
-            let switch_to = tokio::select! { result = tokio::signal::ctrl_c() => { if let Err(error) = result { crate::server_diag!("signal: {error}"); } None }, path = switch_rx.recv() => path };
+            let switch_to = tokio::select! { result = tokio::signal::ctrl_c() => { match result { Ok(()) => crate::diag::diag("INFO", "остановка по сигналу"), Err(error) => crate::server_diag!("signal: {error}") } None }, path = switch_rx.recv() => path };
             let _ = shutdown_tx.send(true);
             let _ = end_tx.send(switch_to);
         })
@@ -1128,6 +1128,7 @@ async fn run_session(
         runs.shutdown().await;
     }
     runtime.shutdown().await;
+    crate::diag::diag("INFO", "сервер остановлен");
     crate::diag::close();
     result?;
     Ok(end_rx.await.unwrap_or(None))

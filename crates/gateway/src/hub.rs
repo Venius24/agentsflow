@@ -223,6 +223,29 @@ fn now_ms() -> u64 {
         .as_millis()
         .min(u64::MAX as u128) as u64
 }
+/// One log line per state change of a department task, for journalctl.
+fn log_transition(task: &TaskSnapshot, work: &WorkInfo, was: WorkState) {
+    let state = |s: WorkState| format!("{s:?}").to_lowercase();
+    let mut line = format!(
+        "задача {} [{}] {} → {} «{}»",
+        task.id,
+        work.department,
+        state(was),
+        state(work.state),
+        task.title
+    );
+    if matches!(work.state, WorkState::Review | WorkState::Done | WorkState::Stuck) {
+        let spent = crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens);
+        line.push_str(&format!(", {spent}"));
+    }
+    match (&work.stuck_reason, work.state) {
+        (Some(reason), WorkState::Stuck) => {
+            line.push_str(&format!(": {reason}"));
+            crate::diag::diag("WARN", &line);
+        }
+        _ => crate::diag::diag("INFO", &line),
+    }
+}
 fn validate_task(task: &TaskSnapshot) -> std::result::Result<(), TaskError> {
     if task.title.trim().is_empty() || task.title.trim().chars().count() > 200 {
         return Err(TaskError::Invalid("title must contain 1 to 200 characters"));
@@ -833,7 +856,11 @@ impl Hub {
             .work
             .take()
             .ok_or(TaskError::Invalid("not a department task"))?;
+        let was = work.state;
         change(&mut task, &mut work)?;
+        if work.state != was {
+            log_transition(&task, &work, was);
+        }
         task.status = work.state.status();
         if task.status == TaskStatus::Done {
             task.progress = 100;

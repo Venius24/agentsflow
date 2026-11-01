@@ -230,9 +230,21 @@ impl Engine {
             self.on_event(envelope.agent, envelope.event);
         }
         let outcome = reply.and_then(|text| parse_plan(&text));
+        let kind = match &trigger {
+            Trigger::Owner(_) => "сообщение".to_owned(),
+            Trigger::Review(id) => format!("приёмка {id}"),
+            Trigger::Request { parent, .. } => format!("заказ от {parent}"),
+        };
+        if let Err(error) = &outcome {
+            crate::diag::diag("WARN", &format!("оркестратор {}, {kind}: {error}", self.session));
+        }
         match (outcome, &trigger) {
             (Ok(plan), _) => {
                 let report = apply(&self.runs, &trigger, plan.actions);
+                crate::diag::diag(
+                    "INFO",
+                    &format!("оркестратор {}, {kind}: {}", self.session, report.join("; ")),
+                );
                 let mut body = plan.message.trim().to_owned();
                 if !report.is_empty() {
                     if !body.is_empty() {
