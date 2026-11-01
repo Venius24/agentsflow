@@ -577,6 +577,8 @@ impl Bridge {
                     let again =
                         json!({"text":"🔁 Ещё круг","callback_data":format!("s:ta:{id}:rq")});
                     let close = json!({"text":"🗄 Закрыть","callback_data":format!("s:ta:{id}:ar")});
+                    let note =
+                        json!({"text":"✍ С замечанием","callback_data":format!("s:ta:{id}:rn")});
                     match work.state {
                         agentsflow_events::WorkState::Waiting => {
                             if let Some(proposal) = &work.proposal {
@@ -623,7 +625,7 @@ impl Bridge {
                                     "👀 <b>{dept}</b>: «{title}» готово, {who} · ${:.2}\n\n{summary}",
                                     work.cost_usd
                                 ),
-                                json!({"inline_keyboard":[[{"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")},again],[open]]}),
+                                json!({"inline_keyboard":[[{"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")},again],[note,open]]}),
                             );
                         }
                         agentsflow_events::WorkState::Stuck => {
@@ -633,8 +635,10 @@ impl Bridge {
                                 300,
                             );
                             self.broadcast_buttons(
-                                &format!("🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}"),
-                                json!({"inline_keyboard":[[again,{"text":"🗄 Закрыть","callback_data":format!("s:ta:{id}:ar")}],[open]]}),
+                                &format!(
+                                    "🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}"
+                                ),
+                                json!({"inline_keyboard":[[again,close],[note,open]]}),
                             );
                         }
                         _ => {}

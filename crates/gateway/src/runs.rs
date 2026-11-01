@@ -463,6 +463,32 @@ impl Runs {
             .map_err(|error| error.to_string())
     }
 
+    /// The owner sends a result or a stuck task back with a note for the
+    /// next run. The owner is not limited in returns.
+    pub fn owner_return(&self, task: &str, note: &str) -> Result<TaskSnapshot, String> {
+        let note = note.trim();
+        if note.is_empty() {
+            return Err("пустое замечание".into());
+        }
+        let updated = self
+            .hub
+            .update_work(AgentId::orchestrator(), task, |_, work| {
+                if !matches!(
+                    work.state,
+                    WorkState::Review | WorkState::Stuck | WorkState::Done
+                ) {
+                    return Err(TaskError::Invalid("task has no result to return"));
+                }
+                work.review_notes.push(format!("хозяин: {note}"));
+                work.state = WorkState::Queued;
+                work.stuck_reason = None;
+                Ok(())
+            })
+            .map_err(|error| error.to_string())?;
+        self.kick();
+        Ok(updated)
+    }
+
     /// Questions from the orchestrator about an existing task.
     pub fn ask(
         &self,
@@ -1524,6 +1550,25 @@ mod tests {
             runs.approve_rule("pr", &task.id).unwrap();
             let rules = std::fs::read_to_string(dir.join("departments/pr/AGENTS.md")).unwrap();
             assert!(rules.contains("Посты до 600 знаков"));
+        });
+    }
+
+    #[test]
+    fn owner_returns_with_a_note() {
+        offline(async |runs, hub, _| {
+            let task = runs.create(AgentId::from("owner"), waiting("pr")).unwrap();
+            assert!(runs.owner_return(&task.id, "короче").is_err());
+            to_review(&hub, &task.id, Risk::External);
+            assert!(runs.owner_return(&task.id, "  ").is_err());
+            hub.update_work(AgentId::orchestrator(), &task.id, |_, work| {
+                work.depends_on = vec!["missing".into()];
+                Ok(())
+            })
+            .unwrap();
+            let back = runs.owner_return(&task.id, "короче").unwrap().work.unwrap();
+            assert_eq!(back.review_notes, vec!["хозяин: короче".to_owned()]);
+            assert_eq!(back.returns, 0);
+            assert!(matches!(back.state, WorkState::Queued | WorkState::Stuck));
         });
     }
 }

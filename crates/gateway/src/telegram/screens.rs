@@ -144,6 +144,7 @@ pub(super) enum InputKind {
     WorkflowTask(usize),
     WorkflowConfirm(usize, String),
     Answer(String),
+    ReturnNote(String),
 }
 pub(super) struct Input {
     pub kind: InputKind,
@@ -373,14 +374,26 @@ impl Bridge {
         let mut rows = Vec::new();
         match work.state {
             WorkState::Running => rows.push(vec![button("⏹ Стоп", format!("s:ta:{id}:stop"))]),
-            WorkState::Review => rows.push(vec![
-                button("✅ Принять", format!("s:ta:{id}:acc")),
-                button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
-            ]),
-            WorkState::Stuck => rows.push(vec![
-                button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
-                button("✅ Принять как есть", format!("s:ta:{id}:acc")),
-            ]),
+            WorkState::Review => {
+                rows.push(vec![
+                    button("✅ Принять", format!("s:ta:{id}:acc")),
+                    button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
+                ]);
+                rows.push(vec![button(
+                    "✍ Вернуть с замечанием",
+                    format!("s:ta:{id}:rn"),
+                )]);
+            }
+            WorkState::Stuck => {
+                rows.push(vec![
+                    button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
+                    button("✅ Принять как есть", format!("s:ta:{id}:acc")),
+                ]);
+                rows.push(vec![button(
+                    "✍ Ещё круг с замечанием",
+                    format!("s:ta:{id}:rn"),
+                )]);
+            }
             WorkState::Done | WorkState::Cancelled => {
                 rows.push(vec![button("🔁 Запустить снова", format!("s:ta:{id}:rq"))])
             }
@@ -519,6 +532,17 @@ impl Bridge {
                 };
                 self.open_task(chat, message, id, &flash).await;
                 return flash;
+            }
+            "rn" => {
+                self.prompt_input(
+                    chat,
+                    message,
+                    InputKind::ReturnNote(id.into()),
+                    "Что исправить? Следующее сообщение уйдёт отделу замечанием, задача пойдёт на новый круг.",
+                    &format!("s:t:{id}"),
+                )
+                .await;
+                return String::new();
             }
             "ans" => {
                 let questions = self
@@ -1454,6 +1478,19 @@ impl Bridge {
         let message = input.message;
         match input.kind {
             InputKind::NewTask => self.create_task_from(chat, None, text).await,
+            InputKind::ReturnNote(id) => {
+                let returned = self
+                    .control
+                    .as_ref()
+                    .and_then(|c| c.runs.clone())
+                    .map(|runs| runs.owner_return(&id, text));
+                let flash = match returned {
+                    Some(Ok(_)) => "✔ Вернул с замечанием, задача в очереди".to_owned(),
+                    Some(Err(error)) => error,
+                    None => "Доступно только в режиме serve --home".to_owned(),
+                };
+                self.open_task(chat, None, &id, &flash).await;
+            }
             InputKind::Answer(id) => {
                 let answered = self
                     .control

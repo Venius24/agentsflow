@@ -923,6 +923,7 @@ fn app(state: AppState) -> Router {
         .route("/api/rules/{target}/{id}/reject", post(work::reject_rule))
         .route("/api/rules/revert/{commit}", post(work::revert_rule))
         .route("/api/tasks/{id}/answer", post(work::answer))
+        .route("/api/tasks/{id}/return", post(work::owner_return))
         .route("/api/tasks/{id}/proposal", post(work::proposal))
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))

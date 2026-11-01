@@ -286,6 +286,25 @@ pub(super) async fn answer(
     }
 }
 
+/// The owner sends a result back with a note for the next run.
+pub(super) async fn owner_return(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    input: Result<Json<Text>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid note".into());
+    };
+    match runs.owner_return(&id, &input.text) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Decision {
