@@ -380,7 +380,7 @@ const FORMAT: &str = r#"# Как ответить
   key — метка для depends_on внутри этого ответа; questions — только если без ответа будет угадывание (задача подождёт ответа); risk, depends_on, questions, budget_usd необязательны.
 - {"type":"propose_department","id":"латиница-через-дефис","title":"...","description":"за что отвечает","rules":"правила отдела в markdown","default_risk":"internal|external","tasks":[ ...create_task без department... ]}
   Новый отдел создаётся только после «да» хозяина; его задачи подождут.
-- {"type":"ask_owner","task":"id","questions":["..."]} — вопросы по уже существующей задаче.
+- {"type":"ask_owner","task":"id","questions":["..."]} — вопросы по уже существующей задаче. Не повторяй вопросы, на которые хозяин уже ответил, даже другими словами. Ответ «на свой вкус» значит, что решает отдел: верни ему задачу (return_task) с указанием выбрать самому, а не спрашивай снова.
 - {"type":"accept","task":"id","note":"..."} — принять internal-результат.
 - {"type":"return_task","task":"id","reason":"что конкретно исправить"} — вернуть отделу (один раз).
 - {"type":"send_to_owner","task":"id","summary":"..."} — отдать результат хозяину на приёмку.
@@ -446,6 +446,17 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                     risk_name(work.risk),
                     task.description.trim()
                 ));
+                let answered: Vec<_> = work
+                    .questions
+                    .iter()
+                    .filter_map(|q| q.answer.as_ref().map(|answer| (&q.text, answer)))
+                    .collect();
+                if !answered.is_empty() {
+                    out.push_str("\n## Ответы хозяина\n\n");
+                    for (question, answer) in answered {
+                        out.push_str(&format!("- {question}\n  Ответ: {}\n", answer.trim()));
+                    }
+                }
                 if !work.review_notes.is_empty() {
                     out.push_str("\n## Прошлые замечания\n\n");
                     for note in &work.review_notes {
@@ -969,6 +980,28 @@ mod tests {
                 assert_eq!(work.state, WorkState::Review);
             },
         );
+    }
+
+    #[test]
+    fn review_prompt_carries_the_owner_answers() {
+        with_orchestrator("{}", async |_, runs, hub, dir| {
+            let mut new = NewWork {
+                title: "Цены".into(),
+                text: "сравнить".into(),
+                department: "pr".into(),
+                ..Default::default()
+            };
+            new.questions = vec![Question {
+                text: "Какие услуги?".into(),
+                answer: Some("На свой вкус".into()),
+                from: FROM.into(),
+            }];
+            let task = runs.create(AgentId::from("owner"), new).unwrap();
+            let home = Home::load(&dir).unwrap();
+            let text = prompt(&home, &hub.tasks(false), &Trigger::Review(task.id));
+            assert!(text.contains("## Ответы хозяина\n\n- Какие услуги?\n  Ответ: На свой вкус"));
+            assert!(text.contains("Не повторяй вопросы"));
+        });
     }
 
     #[test]
