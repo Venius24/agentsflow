@@ -170,7 +170,16 @@ impl Department {
                 && member.sandbox.is_none()
                 && member.mode != Some(AccessMode::Bypass)
             {
-                member.sandbox = Some(MemberSandbox::WorkspaceWrite);
+                // A pure reviewer only reads: given write access it follows the
+                // department rule "put the result into result.md" and overwrites
+                // the doer's result with its review.
+                let reviewer_only = member.roles.iter().any(|r| r == "reviewer")
+                    && !member.roles.iter().any(|r| r == "doer");
+                member.sandbox = Some(if reviewer_only {
+                    MemberSandbox::ReadOnly
+                } else {
+                    MemberSandbox::WorkspaceWrite
+                });
             }
         }
         if !members.iter().any(|m| m.roles.iter().any(|r| r == "doer")) {
@@ -371,8 +380,11 @@ next = "review"
         let writer = &dept.team.members[0];
         assert!(writer.lead);
         assert_eq!(writer.mode, Some(AccessMode::Smart));
+        assert_eq!(dept.team.members[1].sandbox, Some(MemberSandbox::ReadOnly));
+        let doer = SAMPLE.replace("roles = [\"reviewer\"]", "roles = [\"doer\"]");
+        let doer = Department::parse(&doer, Path::new("pr")).unwrap();
         assert_eq!(
-            dept.team.members[1].sandbox,
+            doer.team.members[1].sandbox,
             Some(MemberSandbox::WorkspaceWrite)
         );
         assert!(dept.workflow.step.iter().all(|step| step.max_loops == 1));

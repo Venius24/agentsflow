@@ -76,7 +76,7 @@ prompt = "{brief}"
 [[step]]
 id = "review"
 agent = "@reviewer"
-prompt = "{brief}\n\nРезультат:\n{prev.output}\n\nЕсли всё верно, последней строкой напиши VERDICT: APPROVED."
+prompt = "{brief}\n\nРезультат:\n{prev.output}\n\nТы только проверяешь, файлы не меняй. Если всё верно, последней строкой напиши VERDICT: APPROVED."
 until = "VERDICT: APPROVED"
 otherwise = "fix"
 next = "end"
@@ -92,6 +92,8 @@ cron = "0 9 * * mon-fri"        # минута час день месяц ден
 task = "Сводка продаж Байтака за вчера"
 title = "Утренняя сводка"
 ```
+
+Агент Codex, у которого роль только `reviewer`, по умолчанию работает с `sandbox = "read-only"`: с правом записи он кладёт свою рецензию в `result.md` поверх результата исполнителя. Нужна запись — укажите `sandbox = "workspace-write"` явно.
 
 `home check` показывает ошибки всех отделов сразу и предупреждения: нет ревьюера, ревьюер той же модели, что исполнитель, режим bypass.
 
