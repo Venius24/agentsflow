@@ -1,4 +1,5 @@
 mod work;
+pub(crate) use work::title_from;
 
 use std::{collections::HashMap, convert::Infallible, path::PathBuf, time::Duration};
 
@@ -919,6 +920,8 @@ fn app(state: AppState) -> Router {
         .route("/api/spend", get(work::spend))
         .route("/api/orchestrator", post(work::orchestrator))
         .route("/api/rules", get(work::rules))
+        .route("/api/schedules", get(work::schedules))
+        .route("/api/schedules/{key}/{action}", post(work::schedule_action))
         .route("/api/rules/{target}/{id}/approve", post(work::approve_rule))
         .route("/api/rules/{target}/{id}/reject", post(work::reject_rule))
         .route("/api/rules/revert/{commit}", post(work::revert_rule))

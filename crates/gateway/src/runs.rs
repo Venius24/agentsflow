@@ -122,6 +122,7 @@ struct Shared {
     home: Arc<Home>,
     running: BTreeMap<String, RunInfo>,
     orchestrator: Option<crate::orchestrator::Orchestrator>,
+    schedules: crate::schedule::State,
 }
 
 enum Cmd {
@@ -174,6 +175,8 @@ impl Runs {
                 });
             }
         }
+        let _ = std::fs::create_dir_all(home.state_dir());
+        let schedules = crate::schedule::State::open(home.state_dir().join("schedules.json"));
         let (tx, rx) = mpsc::unbounded_channel();
         let runs = Self {
             hub: hub.clone(),
@@ -182,6 +185,7 @@ impl Runs {
                 home: Arc::new(home),
                 running: BTreeMap::new(),
                 orchestrator: None,
+                schedules,
             })),
             tx: tx.clone(),
         };
@@ -195,6 +199,14 @@ impl Runs {
             active: HashMap::new(),
         };
         tokio::task::spawn_local(engine.run(rx));
+        let ticker = runs.clone();
+        tokio::task::spawn_local(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                tick.tick().await;
+                ticker.fire_schedules(now_ms());
+            }
+        });
         runs
     }
 
@@ -599,6 +611,144 @@ impl Runs {
         );
         Ok(rule)
     }
+}
+
+impl Runs {
+    fn find_schedule(&self, key: &str) -> Option<(String, crate::department::Schedule)> {
+        let home = self.home();
+        home.departments.values().find_map(|dept| {
+            dept.schedules
+                .iter()
+                .find(|s| crate::schedule::key(&dept.id, &s.cron, &s.task) == key)
+                .map(|s| (dept.id.clone(), s.clone()))
+        })
+    }
+
+    pub fn schedules(&self) -> Vec<crate::schedule::Info> {
+        let home = self.home();
+        let offset = home.config.offset_minutes();
+        let shared = self.shared.lock().unwrap();
+        let now = now_ms();
+        let mut out = Vec::new();
+        for dept in home.departments.values() {
+            for schedule in &dept.schedules {
+                let key = crate::schedule::key(&dept.id, &schedule.cron, &schedule.task);
+                let entry = shared
+                    .schedules
+                    .entries
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default();
+                let next_ms = crate::schedule::Cron::parse(&schedule.cron)
+                    .ok()
+                    .and_then(|cron| {
+                        cron.next_after(entry.last_ms.unwrap_or(now).max(now), offset)
+                    });
+                out.push(crate::schedule::Info {
+                    key,
+                    department: dept.id.clone(),
+                    title: schedule_title(schedule),
+                    cron: schedule.cron.clone(),
+                    paused: entry.paused,
+                    last_ms: entry.last_ms,
+                    next_ms: if entry.paused { None } else { next_ms },
+                });
+            }
+        }
+        out
+    }
+
+    pub fn pause_schedule(&self, key: &str, paused: bool) -> Result<(), String> {
+        if self.find_schedule(key).is_none() {
+            return Err("нет такого расписания".into());
+        }
+        let mut shared = self.shared.lock().unwrap();
+        let entry = shared.schedules.entries.entry(key.to_owned()).or_default();
+        entry.paused = paused;
+        if !paused {
+            // Resuming does not catch up on what was skipped.
+            entry.last_ms = Some(now_ms());
+        }
+        shared.schedules.save();
+        Ok(())
+    }
+
+    /// Puts the scheduled task into the queue now, outside its schedule.
+    pub fn run_schedule(&self, key: &str) -> Result<TaskSnapshot, String> {
+        let (department, schedule) = self.find_schedule(key).ok_or("нет такого расписания")?;
+        self.create_scheduled(&department, &schedule)
+    }
+
+    fn create_scheduled(
+        &self,
+        department: &str,
+        schedule: &crate::department::Schedule,
+    ) -> Result<TaskSnapshot, String> {
+        self.create(
+            AgentId::from(NOTICE_FROM),
+            NewWork {
+                title: schedule_title(schedule),
+                text: schedule.task.clone(),
+                department: department.to_owned(),
+                source: "schedule".into(),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Creates the tasks whose time has come. A schedule seen for the first
+    /// time starts counting from now; one missed while the server was down
+    /// fires once.
+    pub(crate) fn fire_schedules(&self, now: u64) -> Vec<String> {
+        let home = self.home();
+        let offset = home.config.offset_minutes();
+        let mut due = Vec::new();
+        {
+            let mut shared = self.shared.lock().unwrap();
+            let mut changed = false;
+            for dept in home.departments.values() {
+                for schedule in &dept.schedules {
+                    let key = crate::schedule::key(&dept.id, &schedule.cron, &schedule.task);
+                    let entry = shared.schedules.entries.entry(key.clone()).or_default();
+                    let Some(last) = entry.last_ms else {
+                        entry.last_ms = Some(now);
+                        changed = true;
+                        continue;
+                    };
+                    if entry.paused {
+                        continue;
+                    }
+                    let next = crate::schedule::Cron::parse(&schedule.cron)
+                        .ok()
+                        .and_then(|cron| cron.next_after(last, offset));
+                    if next.is_some_and(|next| next <= now) {
+                        entry.last_ms = Some(now);
+                        changed = true;
+                        due.push((dept.id.clone(), schedule.clone()));
+                    }
+                }
+            }
+            if changed {
+                shared.schedules.save();
+            }
+        }
+        let mut created = Vec::new();
+        for (department, schedule) in due {
+            match self.create_scheduled(&department, &schedule) {
+                Ok(task) => created.push(task.id),
+                Err(error) => crate::server_diag!("schedule {department}: {error}"),
+            }
+        }
+        created
+    }
+}
+
+fn schedule_title(schedule: &crate::department::Schedule) -> String {
+    schedule
+        .title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| crate::server::title_from(&schedule.task))
 }
 
 /// Tells the board and the bot that a rule changed.
@@ -1570,5 +1720,55 @@ mod tests {
             assert_eq!(back.returns, 0);
             assert!(matches!(back.state, WorkState::Queued | WorkState::Stuck));
         });
+    }
+
+    #[test]
+    fn schedules_fire_once_and_survive_restarts() {
+        let dir = temp();
+        let text = format!(
+            "{}\n[[schedule]]\ncron = \"0 9 * * *\"\ntask = \"Утренний отчёт\"\n",
+            crate::department::tests::SAMPLE
+        );
+        let home = home_with(&dir, &text);
+        // 2026-11-02 08:30 UTC.
+        let t0 = 1_793_577_600_000 + 8 * 3_600_000 + 30 * 60_000;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let key = rt.block_on(tokio::task::LocalSet::new().run_until(async {
+            let hub = Hub::new();
+            let env = scripted(None, &["VERDICT: APPROVED"], None);
+            let runs = Runs::start(hub.clone(), home.clone(), Ledger::memory(), env);
+            assert!(
+                runs.fire_schedules(t0).is_empty(),
+                "first sight only counts"
+            );
+            let fired = runs.fire_schedules(t0 + 3_600_000);
+            assert_eq!(fired.len(), 1);
+            let task = hub.task(&fired[0]).unwrap();
+            assert_eq!(task.title, "Утренний отчёт");
+            assert_eq!(task.work.unwrap().source, "schedule");
+            assert!(runs.fire_schedules(t0 + 3_660_000).is_empty());
+            let info = runs.schedules();
+            assert_eq!(info.len(), 1);
+            info[0].key.clone()
+        }));
+        rt.block_on(tokio::task::LocalSet::new().run_until(async {
+            // A restart reads the last firing back.
+            let hub = Hub::new();
+            let env = scripted(None, &["VERDICT: APPROVED"], None);
+            let runs = Runs::start(hub.clone(), home.clone(), Ledger::memory(), env);
+            assert!(runs.fire_schedules(t0 + 3_720_000).is_empty());
+            let next_day = t0 + 24 * 3_600_000 + 31 * 60_000;
+            runs.pause_schedule(&key, true).unwrap();
+            assert!(runs.fire_schedules(next_day).is_empty());
+            assert!(runs.schedules()[0].paused);
+            runs.pause_schedule(&key, false).unwrap();
+            assert!(runs.run_schedule(&key).is_ok());
+            assert!(runs.run_schedule("pr-00000000").is_err());
+            assert!(runs.pause_schedule("nope", true).is_err());
+        }));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

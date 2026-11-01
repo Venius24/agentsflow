@@ -1178,6 +1178,60 @@ impl Bridge {
         self.show(chat, existing, text, rows).await;
     }
 
+    // ---------- расписания ----------
+    pub(super) async fn open_schedules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            self.queue(chat, "Расписания есть только в режиме serve --home", None);
+            return;
+        };
+        let home = runs.home();
+        let offset = i64::from(home.config.offset_minutes()) * 60_000;
+        let local = |ms: u64| {
+            format_time(
+                (ms as i64 + offset).max(0) as u64,
+                (now_ms() as i64 + offset).max(0) as u64,
+            )
+        };
+        let mut text = String::new();
+        if !flash.is_empty() {
+            text.push_str(&format!("{}\n\n", self.safe(flash, 300)));
+        }
+        text.push_str(&format!(
+            "<b>Расписания</b> (время {})\n",
+            self.safe(&home.config.utc_offset, 10)
+        ));
+        let list = runs.schedules();
+        if list.is_empty() {
+            text.push_str("нет. Добавьте [[schedule]] в department.toml отдела.\n");
+        }
+        let mut rows = Vec::new();
+        for item in list.iter().take(10) {
+            let state = if item.paused {
+                "⏸ пауза".to_owned()
+            } else {
+                item.next_ms
+                    .map_or("—".to_owned(), |ms| format!("следующая {}", local(ms)))
+            };
+            text.push_str(&format!(
+                "\n<b>{}</b> · {} · <code>{}</code>\n{state}\n",
+                self.safe(&item.title, 80),
+                self.safe(&item.department, 24),
+                self.safe(&item.cron, 40)
+            ));
+            let toggle = if item.paused {
+                button("▶ Возобновить", format!("s:sc:{}:r", item.key))
+            } else {
+                button("⏸ Пауза", format!("s:sc:{}:p", item.key))
+            };
+            rows.push(vec![
+                toggle,
+                button("⚡ Сейчас", format!("s:sc:{}:n", item.key)),
+            ]);
+        }
+        rows.push(vec![button("🔄 Обновить", "s:sch")]);
+        self.show(chat, existing, text, rows).await;
+    }
+
     // ---------- правила отделов ----------
     pub(super) async fn open_rules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
@@ -1619,6 +1673,7 @@ impl Bridge {
             }
             "/rules" => self.open_rules(chat, None, "").await,
             "/spend" => self.open_spend(chat, None, "").await,
+            "/schedules" => self.open_schedules(chat, None, "").await,
             "/run" => self.open_workflows(chat, None).await,
             "/stats" => self.open_stats(chat, None).await,
             "/log" => {
@@ -1718,6 +1773,20 @@ impl Bridge {
             "ta" => flash = self.task_action(chat, message, arg(2), arg(3)).await,
             "rules" => self.open_rules(chat, message, "").await,
             "sp" => self.open_spend(chat, message, "").await,
+            "sch" => self.open_schedules(chat, message, "").await,
+            "sc" => {
+                if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
+                    flash = match arg(3) {
+                        "p" => runs.pause_schedule(arg(2), true).map(|()| "⏸ На паузе".to_owned()),
+                        "r" => runs.pause_schedule(arg(2), false).map(|()| "▶ Снова по расписанию".to_owned()),
+                        _ => runs
+                            .run_schedule(arg(2))
+                            .map(|task| format!("⚡ Задача «{}» в очереди", task.title)),
+                    }
+                    .unwrap_or_else(|error| error);
+                    self.open_schedules(chat, message, &flash).await;
+                }
+            }
             "spr" => {
                 if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
                     flash = match runs.raise_month_limit(arg(2)) {

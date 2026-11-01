@@ -72,6 +72,9 @@ pub struct Config {
     pub orchestrator: OrchestratorConfig,
     #[serde(default)]
     pub prices: Prices,
+    /// Local time of schedules, like `+05:00`.
+    #[serde(default = "default_offset")]
+    pub utc_offset: String,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -80,6 +83,7 @@ impl Default for Config {
             memory_digest_kb: default_digest_kb(),
             orchestrator: OrchestratorConfig::default(),
             prices: Prices::default(),
+            utc_offset: default_offset(),
         }
     }
 }
@@ -90,9 +94,19 @@ fn default_digest_kb() -> usize {
     8
 }
 
+fn default_offset() -> String {
+    "+00:00".into()
+}
+
 impl Config {
+    /// Minutes east of UTC for schedules.
+    pub fn offset_minutes(&self) -> i32 {
+        crate::schedule::parse_offset(&self.utc_offset).unwrap_or(0)
+    }
+
     pub fn parse(text: &str) -> Result<Self> {
         let config: Self = toml::from_str(text).context("invalid agentsflow.toml")?;
+        crate::schedule::parse_offset(&config.utc_offset).context("utc_offset")?;
         if !(1..=20).contains(&config.max_parallel_runs) {
             bail!("max_parallel_runs must be 1..=20");
         }
@@ -472,6 +486,9 @@ const CONFIG_TEMPLATE: &str = r#"# Настройки agentsflow. Отделы �
 max_parallel_runs = 3
 # Сколько килобайт памяти отдела (хвост memory/notes.md) получает агент.
 memory_digest_kb = 8
+
+# Часовой пояс расписаний отделов (cron в department.toml), например "+05:00".
+utc_offset = "+00:00"
 
 [orchestrator]
 kind = "claude"

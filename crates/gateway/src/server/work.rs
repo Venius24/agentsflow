@@ -330,6 +330,38 @@ pub(super) async fn proposal(
     }
 }
 
+pub(super) async fn schedules(State(state): State<AppState>) -> Response {
+    match runs(&state) {
+        Ok(runs) => Json(json!({"schedules": runs.schedules()})).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// `pause`, `resume` or `run` (put the task into the queue now).
+pub(super) async fn schedule_action(
+    State(state): State<AppState>,
+    axum::extract::Path((key, action)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let result = match action.as_str() {
+        "pause" => runs
+            .pause_schedule(&key, true)
+            .map(|()| json!({"ok": true})),
+        "resume" => runs
+            .pause_schedule(&key, false)
+            .map(|()| json!({"ok": true})),
+        "run" => runs.run_schedule(&key).map(|task| json!({"task": task})),
+        _ => Err("действие: pause, resume или run".into()),
+    };
+    match result {
+        Ok(body) => Json(body).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
 /// Open rule proposals and the latest added rules.
 pub(super) async fn rules(State(state): State<AppState>) -> Response {
     match runs(&state) {

@@ -15,6 +15,7 @@ mod projects;
 mod rules;
 mod runs;
 mod runtime;
+mod schedule;
 mod server;
 mod team;
 mod telegram;

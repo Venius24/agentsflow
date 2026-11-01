@@ -189,6 +189,8 @@ impl Department {
             if schedule.cron.trim().is_empty() || schedule.task.trim().is_empty() {
                 bail!("schedule needs cron and task");
             }
+            crate::schedule::Cron::parse(&schedule.cron)
+                .with_context(|| format!("schedule {:?}", schedule.cron))?;
         }
         let mut steps = raw.steps;
         for step in &mut steps {
