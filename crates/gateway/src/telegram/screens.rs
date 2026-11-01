@@ -339,7 +339,7 @@ impl Bridge {
             text.push_str(&format!("{}\n\n", self.safe(flash, 200)));
         }
         text.push_str(&format!(
-            "{} <b>{}</b>\nОтдел: {} · {} · {}\nПотрачено: ${:.2}",
+            "{} <b>{}</b>\nОтдел: {} · {} · {}\nПотрачено: {}",
             status_icon(&task.status),
             self.safe(&task.title, 200),
             self.safe(&work.department, 40),
@@ -349,9 +349,13 @@ impl Bridge {
             } else {
                 "внутреннее"
             },
-            work.cost_usd
+            crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens)
         ));
-        if let Some(reason) = &work.stuck_reason {
+        if let Some(reason) = work
+            .stuck_reason
+            .as_ref()
+            .filter(|_| work.state == WorkState::Stuck)
+        {
             text.push_str(&format!("\nПричина: {}", self.safe(reason, 300)));
         }
         if let Some(proposal) = &work.proposal {
@@ -1175,6 +1179,16 @@ impl Bridge {
         };
         let home = runs.home();
         let spend = runs.month_spend();
+        let tokens = runs.month_tokens();
+        let tokens_of = |id: &str| {
+            tokens.get(id).map_or(String::new(), |t| {
+                format!(
+                    " · {} → {} токенов",
+                    crate::ledger::tokens_short(t.input),
+                    crate::ledger::tokens_short(t.output)
+                )
+            })
+        };
         let mut text = String::new();
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 300)));
@@ -1198,20 +1212,37 @@ impl Bridge {
                     } else {
                         "•"
                     };
-                    text.push_str(&format!("{mark} {title}: ${spent:.2} из ${limit:.2}\n"));
+                    text.push_str(&format!(
+                        "{mark} {title}: ${spent:.2} из ${limit:.2}{}\n",
+                        tokens_of(&dept.id)
+                    ));
                     rows.push(vec![button(
                         &format!("➕ Лимит {} до ${:.0}", dept.id, (limit * 1.5).ceil()),
                         format!("s:spr:{}", dept.id),
                     )]);
                 }
-                None => text.push_str(&format!("• {title}: ${spent:.2}, без лимита\n")),
+                None => text.push_str(&format!(
+                    "• {title}: ${spent:.2}, без лимита{}\n",
+                    tokens_of(&dept.id)
+                )),
             }
         }
         let orchestrator = spend.get("orchestrator").copied().unwrap_or(0.0);
         total += orchestrator;
+        let unpriced = tokens.values().fold((0, 0), |(i, o), t| {
+            (i + t.unpriced_input, o + t.unpriced_output)
+        });
         text.push_str(&format!(
-            "• оркестратор: ${orchestrator:.2}\n\nВсего: ${total:.2}\nCodex без цены в [prices.codex] не учитывается."
+            "• оркестратор: ${orchestrator:.2}{}\n\nВсего: ${total:.2}",
+            tokens_of("orchestrator")
         ));
+        if unpriced != (0, 0) {
+            text.push_str(&format!(
+                "\nБез цены (Codex, нет [prices.codex]): {} → {} токенов, в долларах не учтены.",
+                crate::ledger::tokens_short(unpriced.0),
+                crate::ledger::tokens_short(unpriced.1)
+            ));
+        }
         rows.push(vec![button("🔄 Обновить", "s:sp")]);
         self.show(chat, existing, text, rows).await;
     }

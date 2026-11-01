@@ -77,11 +77,16 @@ pub fn build(
              («на свой вкус», «сам реши»), выбери разумный вариант, запиши выбор в начале \
              result.md и не переспрашивай.\n\n",
         );
-        for (question, answer) in answered {
-            out.push_str(&format!(
-                "- Вопрос: {}\n  Ответ: {}\n",
-                question.text, answer
-            ));
+        // One owner message answers all the open questions at once: list
+        // the questions it answered, then the answer once.
+        let mut rest = answered.as_slice();
+        while let Some(((_, answer), _)) = rest.split_first() {
+            let same = rest.iter().take_while(|(_, a)| a == answer).count();
+            for (question, _) in &rest[..same] {
+                out.push_str(&format!("- Вопрос: {}\n", question.text));
+            }
+            out.push_str(&format!("  Ответ: {answer}\n"));
+            rest = &rest[same..];
         }
     }
     if !inputs.is_empty() {
@@ -99,7 +104,7 @@ pub fn build(
     }
     out.push_str("\n# Как сдать работу\n\n");
     out.push_str(&format!(
-        "- Рабочая папка: {}. Работай только в ней.\n",
+        "- Рабочая папка: {}. Работай только в ней; папки других отделов и служебная папка .agentsflow закрыты.\n",
         run_dir.display()
     ));
     out.push_str(
@@ -110,6 +115,10 @@ pub fn build(
         out.push_str("- Результат уйдёт наружу только после одобрения хозяина: ничего не отправляй и не публикуй сам, готовь черновик.\n");
     }
     out.push_str("- Если не знаешь и не можешь проверить, так и напиши; не выдумывай.\n");
+    out.push_str(&format!(
+        "- Если без ответа хозяина задачу не сделать и разумно предположить нельзя, запиши вопросы в {}, по одному в строке, и закончи работу: задача подождёт ответов и запустится снова.\n",
+        crate::runs::QUESTIONS_FILE
+    ));
     if let Some(catalog) = requests {
         out.push_str("\n# Заказ другому отделу\n\n");
         out.push_str(&format!(

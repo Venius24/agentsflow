@@ -469,7 +469,59 @@ fn check_inner(command: &str, cwd: &Path, depth: usize, in_cmd: bool) -> Option<
 }
 
 pub fn check(command: &str, cwd: &Path) -> Option<Violation> {
-    check_inner(command, cwd, 0, false)
+    check_inner(command, cwd, 0, false).or_else(|| {
+        // Words that look like paths: a department run must not reach into
+        // other departments or the home's own files.
+        lex(command)?
+            .iter()
+            .flatten()
+            .filter(|word| word.text.contains(['/', '\\']) || word.text == "..")
+            .find_map(|word| foreign_path(&word.text, cwd))
+    })
+}
+
+/// The rule of [`foreign_path`]: always denied, never asked.
+pub const FOREIGN: &str = "foreign-department";
+
+/// A run of a department works in `<home>/departments/<id>/runs/<task>`; it
+/// may read its own department, but not other departments, the
+/// orchestrator or `.agentsflow`. Other working folders are not affected.
+pub fn foreign_path(path: &str, cwd: &Path) -> Option<Violation> {
+    let cwd = normalized(cwd);
+    let runs = cwd.parent()?;
+    let department = runs.parent()?;
+    let departments = department.parent()?;
+    let named = |dir: &Path, name: &str| dir.file_name().is_some_and(|n| n == name);
+    if !named(runs, "runs") || !named(departments, "departments") {
+        return None;
+    }
+    let home = departments.parent()?;
+    let mut path = path.trim().trim_matches(['"', '\'']).replace('\\', "/");
+    // Git Bash on Windows spells C:/x as /c/x or /cygdrive/c/x.
+    if cfg!(windows) {
+        let msys = path.strip_prefix("/cygdrive").unwrap_or(&path);
+        let bytes = msys.as_bytes();
+        if bytes.len() >= 2
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && (bytes.len() == 2 || bytes[2] == b'/')
+        {
+            path = format!("{}:/{}", bytes[1] as char, msys.get(3..).unwrap_or(""));
+        }
+    }
+    let path = Path::new(&path);
+    let resolved = if path.is_absolute() {
+        normalized(path)
+    } else {
+        normalized(&cwd.join(path))
+    };
+    let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
+    let (resolved, home, department) = (lower(&resolved), lower(home), lower(department));
+    let inside = |dir: &str| resolved == dir || resolved.starts_with(&format!("{dir}/"));
+    (inside(&home) && !inside(&department)).then(|| Violation {
+        rule: FOREIGN,
+        reason: "папки других отделов и служебные файлы дома закрыты для этого отдела".into(),
+    })
 }
 
 #[cfg(test)]
@@ -656,5 +708,46 @@ mod tests {
         let home = run.join("../../../..");
         let rules = format!("rm -rf {}", normalized(&home).join("departments").display());
         assert_eq!(check(&rules, &run).map(|v| v.rule), Some("rm-recursive"));
+    }
+
+    #[test]
+    fn department_runs_stay_out_of_other_departments() {
+        let base = if cfg!(windows) {
+            PathBuf::from(r"C:\srv\agentsflow")
+        } else {
+            PathBuf::from("/srv/agentsflow")
+        };
+        let run = base.join("departments").join("pr").join("runs").join("t1");
+        let research = base.join("departments").join("research").join("AGENTS.md");
+        for (path, foreign) in [
+            ("result.md", false),
+            ("../t2/result.md", false),
+            ("../../AGENTS.md", false),
+            ("../../memory/notes.md", false),
+            ("../../../research/AGENTS.md", true),
+            ("../../../..", true),
+            ("../../../../.agentsflow/board.json", true),
+            (research.to_str().unwrap(), true),
+            ("C:/Windows/notes.txt", false),
+        ] {
+            assert_eq!(foreign_path(path, &run).is_some(), foreign, "{path}");
+        }
+        assert_eq!(
+            check("cat ../../../research/memory/notes.md", &run).map(|v| v.rule),
+            Some(FOREIGN)
+        );
+        assert_eq!(check("cat ../../memory/notes.md", &run), None);
+        if cfg!(windows) {
+            assert_eq!(
+                check("cd /c/srv/agentsflow && ls departments", &run).map(|v| v.rule),
+                Some(FOREIGN)
+            );
+            assert_eq!(
+                check("cd /c/srv/agentsflow/departments/pr && ls", &run),
+                None
+            );
+        }
+        // Outside a department run nothing changes.
+        assert_eq!(foreign_path("../../../research/AGENTS.md", &base), None);
     }
 }

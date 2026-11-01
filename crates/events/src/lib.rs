@@ -167,6 +167,11 @@ pub struct WorkInfo {
     pub questions: Vec<Question>,
     #[serde(default)]
     pub cost_usd: f64,
+    /// Tokens of all turns, Codex without a price included.
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
     #[serde(default)]
     pub budget_usd: Option<f64>,
     #[serde(default)]

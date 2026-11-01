@@ -282,6 +282,10 @@ impl Runs {
         self.ledger.month(&ledger::month_of(now_ms()))
     }
 
+    pub fn month_tokens(&self) -> HashMap<String, ledger::Tokens> {
+        self.ledger.month_tokens(&ledger::month_of(now_ms()))
+    }
+
     /// Puts a department task in the queue.
     pub fn create(&self, by: AgentId, new: NewWork) -> Result<TaskSnapshot, String> {
         let home = self.home();
@@ -765,6 +769,28 @@ fn take_request(run_dir: &std::path::Path) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Questions for the owner an agent leaves in the run folder, one per line.
+pub const QUESTIONS_FILE: &str = "questions.md";
+
+fn take_questions(run_dir: &std::path::Path) -> Vec<String> {
+    let path = run_dir.join(QUESTIONS_FILE);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let _ = std::fs::remove_file(&path);
+    text.lines()
+        .map(|line| {
+            let line = line.trim().trim_start_matches(['-', '*', '•']).trim_start();
+            let digits = line.len() - line.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            match line[digits..].strip_prefix(['.', ')']) {
+                Some(rest) if digits > 0 => rest.trim().to_owned(),
+                _ => line.to_owned(),
+            }
+        })
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
 /// The tasks that ordered this one, nearest first.
 pub(crate) fn ancestors(hub: &Hub, task: &str) -> Vec<TaskSnapshot> {
     let mut out: Vec<TaskSnapshot> = Vec::new();
@@ -953,6 +979,8 @@ impl Engine {
             (meta.task.clone(), meta.run.clone(), meta.department.clone());
         let updated = self.hub.update_work(Self::by(), &task, |_, work| {
             work.cost_usd += usd;
+            work.input_tokens += input;
+            work.output_tokens += output;
             if let Some(entry) = work.runs.iter_mut().find(|r| r.id == run) {
                 entry.cost_usd += usd;
             }
@@ -961,6 +989,8 @@ impl Engine {
         for ancestor in ancestors(&self.hub, &task) {
             let _ = self.hub.update_work(Self::by(), &ancestor.id, |_, work| {
                 work.cost_usd += usd;
+                work.input_tokens += input;
+                work.output_tokens += output;
                 Ok(())
             });
         }
@@ -1114,6 +1144,10 @@ impl Engine {
         std::fs::write(run_dir.join("brief.md"), &text)?;
         let mut plan = dept.run_plan(&task.id)?;
         plan.spec.bind("brief", text);
+        for file in [REQUEST_FILE, QUESTIONS_FILE] {
+            let _ = std::fs::remove_file(run_dir.join(file));
+            plan.spec.halt_on(run_dir.join(file));
+        }
         let started_ms = now_ms();
         self.hub
             .update_work(Self::by(), &task.id, |_, work| {
@@ -1280,6 +1314,28 @@ impl Engine {
             self.request(&task, request, now);
             return;
         }
+        let questions = take_questions(&active.run_dir);
+        if finished.result.is_ok() && !questions.is_empty() {
+            let from = format!("отдел {}", active.department);
+            let _ = self.hub.update_work(Self::by(), &task, |_, work| {
+                for text in &questions {
+                    work.questions.push(agentsflow_events::Question {
+                        text: text.clone(),
+                        answer: None,
+                        from: from.clone(),
+                    });
+                }
+                work.state = WorkState::Waiting;
+                work.stuck_reason = None;
+                work.result_summary = "Отдел ждёт ответов на вопросы.".into();
+                if let Some(run) = work.runs.last_mut() {
+                    run.finished_ms = Some(now);
+                    run.outcome = "questions".into();
+                }
+                Ok(())
+            });
+            return;
+        }
         match finished.result {
             Ok(()) => {
                 let path = active.run_dir.join("result.md");
@@ -1355,8 +1411,11 @@ impl Engine {
                     ));
                 }
                 summary.push_str(&format!(
-                    "Потрачено: ${:.2}",
-                    work.map_or(0.0, |w| w.cost_usd)
+                    "Потрачено: {}",
+                    work.map_or_else(
+                        || ledger::spent(0.0, 0, 0),
+                        |w| ledger::spent(w.cost_usd, w.input_tokens, w.output_tokens)
+                    )
                 ));
                 let _ = self.hub.update_work(Self::by(), &task, |_, work| {
                     work.state = WorkState::Stuck;
@@ -1813,6 +1872,50 @@ mod tests {
             runs.approve_rule("pr", &task.id).unwrap();
             let rules = std::fs::read_to_string(dir.join("departments/pr/AGENTS.md")).unwrap();
             assert!(rules.contains("Посты до 600 знаков"));
+        });
+    }
+
+    #[test]
+    fn questions_skip_review_and_wait_for_the_owner() {
+        let env = RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(|hub, member, dir| {
+                let dir = dir.to_path_buf();
+                let doer = member.roles.iter().any(|r| r == "doer");
+                if doer {
+                    std::fs::write(
+                        dir.join(QUESTIONS_FILE),
+                        "1. Какие услуги?\n- Какой рынок?\n",
+                    )
+                    .unwrap();
+                }
+                // A reviewer that never approves: reaching it would loop the run into stuck.
+                let replies: &'static [&'static str] = if doer {
+                    &["нужны данные"]
+                } else {
+                    &["нет"]
+                };
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(replies, None, &dir)) }
+                })
+            })),
+        };
+        run_case(env, async |runs, hub, task, dir| {
+            let waiting = wait_state(&hub, &task.id, WorkState::Waiting).await;
+            let work = waiting.work.unwrap();
+            let asked: Vec<_> = work.questions.iter().map(|q| q.text.as_str()).collect();
+            assert_eq!(asked, ["Какие услуги?", "Какой рынок?"]);
+            assert_eq!(work.runs.last().unwrap().outcome, "questions");
+            assert!(
+                !dir.join("departments/pr/runs")
+                    .join(&task.id)
+                    .join(QUESTIONS_FILE)
+                    .exists()
+            );
+            runs.answer(&task.id, "на свой вкус").unwrap();
+            let again = hub.task(&task.id).unwrap().work.unwrap();
+            assert_ne!(again.state, WorkState::Waiting);
         });
     }
 

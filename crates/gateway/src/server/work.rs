@@ -23,6 +23,7 @@ pub(super) async fn departments(State(state): State<AppState>) -> Response {
     };
     let home = runs.home();
     let spend = runs.month_spend();
+    let tokens = runs.month_tokens();
     let running = runs.running();
     let list: Vec<Value> = home
         .departments
@@ -50,6 +51,7 @@ pub(super) async fn departments(State(state): State<AppState>) -> Response {
                 "agents": agents,
                 "running": running.iter().filter(|run| run.department == dept.id).count(),
                 "month_spent_usd": spend.get(&dept.id).copied().unwrap_or(0.0),
+                "month_tokens": tokens.get(&dept.id).copied().unwrap_or_default(),
             })
         })
         .collect();
@@ -236,8 +238,9 @@ pub(super) async fn spend(State(state): State<AppState>) -> Response {
         Err(response) => return *response,
     };
     let month = runs.month_spend();
+    let tokens = runs.month_tokens();
     let total = month.values().fold(0.0, |sum, usd| sum + usd);
-    Json(json!({"month": month, "total_usd": total})).into_response()
+    Json(json!({"month": month, "tokens": tokens, "total_usd": total})).into_response()
 }
 
 #[derive(Deserialize)]

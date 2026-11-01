@@ -21,6 +21,9 @@ pub struct Spec {
     pub step: Vec<Step>,
     #[serde(skip)]
     bindings: HashMap<String, String>,
+    /// The run ends successfully after any step that leaves one of these files.
+    #[serde(skip)]
+    halt_files: Vec<std::path::PathBuf>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +143,11 @@ impl Spec {
     /// Value for a `{key}` placeholder, such as the department brief.
     pub fn bind(&mut self, key: &str, value: String) {
         self.bindings.insert(key.to_owned(), value);
+    }
+    /// Ends the run after the step that creates `path` (an order or questions
+    /// for the owner: reviewing them is wasted rounds).
+    pub fn halt_on(&mut self, path: std::path::PathBuf) {
+        self.halt_files.push(path);
     }
     pub fn resolve_team(&self, team: &crate::team::Team) -> Result<Self> {
         let mut resolved = self.clone();
@@ -787,6 +795,9 @@ async fn execute_steps(
             WorkflowStatus::StepDone,
             detail,
         );
+        if context.spec.halt_files.iter().any(|path| path.exists()) {
+            return Ok(());
+        }
         match next_index(context.spec, index, &outcome.output, &mut loops)? {
             Next::Goto(next) => index = next,
             Next::Loop {

@@ -1659,6 +1659,10 @@ function scheduleHome() {
   homeTimer = setTimeout(() => { homeTimer = 0; renderHome(); }, 150);
 }
 function money(usd) { return "$" + (usd || 0).toFixed(2); }
+function tokens(n) { n = n || 0; return n < 1000 ? String(n) : n < 1e6 ? Math.round(n / 1000) + "k" : (n / 1e6).toFixed(1) + "M"; }
+// "$0.25 · 340k → 3k токенов": dollars and the tokens behind them.
+function spent(usd, input, output) { return money(usd) + (input || output ? " · " + tokens(input) + " → " + tokens(output) + " токенов" : ""); }
+function workSpent(work) { return spent(work.cost_usd, work.input_tokens, work.output_tokens); }
 function taskPath(task, tail) { return "/api/tasks/" + encodeURIComponent(task.id) + tail; }
 function showError(card, err) { const node = card.querySelector(".board-error"); if (node) node.textContent = err.message; }
 // A button that disables itself while its request runs and reports a failure in its card.
@@ -1695,7 +1699,7 @@ function waitCard(task) {
   const card = el("article", "wait-card");
   const head = el("h3", "", task.title);
   head.prepend(el("span", "chip", work.department));
-  card.append(head, el("p", "", [workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", money(work.cost_usd)].join(" · ")));
+  card.append(head, el("p", "", [workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", workSpent(work)].join(" · ")));
   const btns = el("div", "btns");
   if (work.state === "waiting" && work.proposal) {
     const p = work.proposal;
@@ -1794,7 +1798,7 @@ function renderHome() {
     const card = el("article", "board-card");
     const head = el("div", "home-line");
     head.append(el("span", "chip", task.work.department), el("strong", "", task.title));
-    const meta = [workStates[task.work.state] || task.work.state, money(task.work.cost_usd)];
+    const meta = [workStates[task.work.state] || task.work.state, workSpent(task.work)];
     if (task.work.parent) meta.push("заказ для " + task.work.parent);
     if (task.work.state === "review") meta.push("проверяет оркестратор");
     card.append(head, el("div", "board-meta", meta.join(" · ")));
@@ -1806,14 +1810,21 @@ function renderHome() {
   if (done.length) {
     const more = el("details", "dash-more");
     more.append(el("summary", "", "Готово недавно: " + done.length));
-    for (const task of done) more.append(el("div", "board-meta", task.work.department + " · " + task.title + " · " + money(task.work.cost_usd)));
+    for (const task of done) more.append(el("div", "board-meta", task.work.department + " · " + task.title + " · " + workSpent(task.work)));
     work.append(more);
   }
   left.append(work);
 
   const depts = homeSection("Отделы");
-  if (homeData.spend) depts.append(el("div", "board-meta", "Расход за месяц: " + money(homeData.spend.total_usd)
-    + (homeData.spend.month && homeData.spend.month.orchestrator ? ", из них оркестратор " + money(homeData.spend.month.orchestrator) : "")));
+  if (homeData.spend) {
+    const all = Object.values(homeData.spend.tokens || {});
+    const sum = key => all.reduce((s, t) => s + (t[key] || 0), 0);
+    const orch = homeData.spend.month && homeData.spend.month.orchestrator;
+    depts.append(el("div", "board-meta", "Расход за месяц: " + spent(homeData.spend.total_usd, sum("input"), sum("output"))
+      + (orch ? ", из них оркестратор " + money(orch) : "")));
+    if (sum("unpriced_input") || sum("unpriced_output"))
+      depts.append(el("div", "board-meta", "Без цены (Codex, нет [prices.codex]): " + tokens(sum("unpriced_input")) + " → " + tokens(sum("unpriced_output")) + " токенов, в долларах не учтены."));
+  }
   for (const dept of homeData.departments) {
     const card = el("article", "dash-card home-dept");
     card.append(el("h2", "", dept.title + " · " + dept.id), el("div", "board-meta", dept.description));
@@ -1821,7 +1832,9 @@ function renderHome() {
     const row = (k, v) => dl.append(el("dt", "", k), el("dd", "", v));
     row("Состав", dept.agents.map(a => a.id + " (" + a.kind + (a.roles.length ? ", " + a.roles.join(", ") : "") + ")").join(" · "));
     row("Идёт", dept.running + " из " + dept.max_parallel);
+    const used = dept.month_tokens || {};
     row("За месяц", money(dept.month_spent_usd) + (dept.limits.month_usd ? " из " + money(dept.limits.month_usd) : ""));
+    row("Токены", tokens(used.input) + " → " + tokens(used.output) + (used.unpriced_input ? ", из них без цены " + tokens(used.unpriced_input) + " → " + tokens(used.unpriced_output) : ""));
     row("Задача", "до " + money(dept.limits.task_usd) + ", " + dept.limits.timeout_mins + " мин, кругов " + dept.limits.max_loops);
     card.append(dl);
     if (dept.limits.month_usd) {

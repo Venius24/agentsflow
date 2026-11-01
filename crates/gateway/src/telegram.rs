@@ -622,8 +622,8 @@ impl Bridge {
                             };
                             self.broadcast_buttons(
                                 &format!(
-                                    "👀 <b>{dept}</b>: «{title}» готово, {who} · ${:.2}\n\n{summary}",
-                                    work.cost_usd
+                                    "👀 <b>{dept}</b>: «{title}» готово, {who} · {}\n\n{summary}",
+                                    crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens)
                                 ),
                                 json!({"inline_keyboard":[[{"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")},again],[note,open]]}),
                             );

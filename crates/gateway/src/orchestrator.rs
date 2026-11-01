@@ -50,7 +50,7 @@ impl Orchestrator {
             env,
             queue: VecDeque::new(),
             seen: HashSet::new(),
-            calls: 0,
+            session: String::new(),
         };
         tokio::task::spawn_local(engine.run(rx));
         Self { tx }
@@ -84,7 +84,9 @@ struct Engine {
     queue: VecDeque<Trigger>,
     /// Results already handed to acceptance: (task, run count).
     seen: HashSet<(String, usize)>,
-    calls: u64,
+    /// Id of the current session: unique across restarts, so the ledger and
+    /// the page never mix two sessions.
+    session: String,
 }
 
 impl Engine {
@@ -221,7 +223,7 @@ impl Engine {
             }
         }
         let prompt = prompt(&home, &self.runs.hub().tasks(false), &trigger);
-        self.calls += 1;
+        self.session = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
         let reply = self.call(&home, prompt).await;
         // Usage events of the session arrive before it finishes; drain them.
         while let Ok(envelope) = events.try_recv() {
@@ -269,7 +271,7 @@ impl Engine {
 
     async fn call(&self, home: &Home, prompt: String) -> Result<String, String> {
         let config = &home.config.orchestrator;
-        let id = AgentId::from(format!("{AGENT_PREFIX}{}", self.calls).as_str());
+        let id = AgentId::from(format!("{AGENT_PREFIX}{}", self.session).as_str());
         let member = Member {
             id: id.clone(),
             kind: config.kind,

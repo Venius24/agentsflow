@@ -925,7 +925,7 @@ impl Hub {
                 // Department tasks: the owner may accept, cancel or requeue;
                 // everything else is the run manager's business.
                 work.state = owner_transition(work.state, &status)?;
-                if work.state == WorkState::Queued {
+                if matches!(work.state, WorkState::Queued | WorkState::Done) {
                     work.stuck_reason = None;
                 }
                 task.status = work.state.status();
@@ -1532,12 +1532,20 @@ async fn run_actor<A, F, Fut>(
                                     if let Some(command) = input.get("command").and_then(serde_json::Value::as_str) {
                                         *note = crate::guard::check(command, cwd).map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
                                     }
+                                } else {
+                                    // File tools (Read, Edit, Glob, Grep…): only department isolation applies.
+                                    *note = ["file_path", "path", "notebook_path"].iter()
+                                        .filter_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
+                                        .find_map(|path| crate::guard::foreign_path(path, cwd))
+                                        .map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
                                 }
                             }
+                            let foreign = matches!(&event, Event::PermissionRequest { guard: Some(note), .. } if note.rule == crate::guard::FOREIGN);
                             let flagged = matches!(&event, Event::PermissionRequest { guard: Some(_), .. });
-                            // Smart mode answers safe requests itself and hands guard-flagged ones to the owner.
-                            let human = !yes || (smart && flagged);
-                            let blocked = yes && !smart && flagged;
+                            // Smart mode answers safe requests itself and hands guard-flagged ones to the owner;
+                            // another department's files are refused without asking.
+                            let human = (!yes || (smart && flagged)) && !foreign;
+                            let blocked = (yes && !smart && flagged) || foreign;
                             let deny_reason = if blocked {
                                 if let Event::PermissionRequest { guard: Some(note), .. } = &event { Some(format!("blocked by agentsflow guard ({}): {}", note.rule, note.reason)) } else { None }
                             } else { None };
