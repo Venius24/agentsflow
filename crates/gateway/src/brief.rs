@@ -71,7 +71,12 @@ pub fn build(
         .filter_map(|q| q.answer.as_ref().map(|a| (q, a)))
         .collect();
     if !answered.is_empty() {
-        out.push_str("\n# Уточнения хозяина\n\n");
+        out.push_str(
+            "\n# Уточнения хозяина\n\n\
+             Ответы хозяина важнее условий в постановке. Если он оставил выбор тебе \
+             («на свой вкус», «сам реши»), выбери разумный вариант, запиши выбор в начале \
+             result.md и не переспрашивай.\n\n",
+        );
         for (question, answer) in answered {
             out.push_str(&format!(
                 "- Вопрос: {}\n  Ответ: {}\n",
