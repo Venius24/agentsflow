@@ -311,6 +311,59 @@ pub(super) async fn proposal(
     }
 }
 
+/// Open rule proposals and the latest added rules.
+pub(super) async fn rules(State(state): State<AppState>) -> Response {
+    match runs(&state) {
+        Ok(runs) => {
+            Json(json!({"proposals": runs.rule_proposals(), "recent": runs.recent_rules(20)}))
+                .into_response()
+        }
+        Err(response) => *response,
+    }
+}
+
+pub(super) async fn approve_rule(
+    State(state): State<AppState>,
+    axum::extract::Path((target, id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    match runs.approve_rule(&target, &id) {
+        Ok(rule) => Json(json!({"rule": rule})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+pub(super) async fn reject_rule(
+    State(state): State<AppState>,
+    axum::extract::Path((target, id)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    match runs.reject_rule(&target, &id) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+pub(super) async fn revert_rule(
+    State(state): State<AppState>,
+    axum::extract::Path(commit): axum::extract::Path<String>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    match runs.revert_rule(&commit) {
+        Ok(rule) => Json(json!({"rule": rule})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::title_from;

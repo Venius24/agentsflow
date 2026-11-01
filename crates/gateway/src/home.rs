@@ -296,6 +296,57 @@ pub fn init(root: &Path) -> Result<()> {
 /// Writes a new department from an approved proposal: the roster and
 /// workflow of the general department, the proposal's title, description and
 /// rules. Returns the department folder.
+/// Sets `limits.month_usd` of a department, keeping the rest of the file as
+/// the owner wrote it, and commits the change.
+pub fn set_month_limit(root: &Path, id: &str, usd: f64) -> Result<()> {
+    if !department::valid_id(id) {
+        bail!("недопустимый id отдела");
+    }
+    let dir = root.join("departments").join(id);
+    let path = dir.join(department::FILE);
+    let text = std::fs::read_to_string(&path).with_context(|| format!("нет отдела {id}"))?;
+    let line = format!("month_usd = {usd:.2}");
+    let mut out = Vec::new();
+    let mut section = String::new();
+    let mut done = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.starts_with('[') {
+            if section == "[limits]" && !done {
+                out.push(line.clone());
+                done = true;
+            }
+            section = trimmed.to_owned();
+        } else if section == "[limits]" && trimmed.starts_with("month_usd") {
+            if !done {
+                out.push(line.clone());
+                done = true;
+            }
+            continue;
+        }
+        out.push(raw.to_owned());
+    }
+    if !done {
+        if section != "[limits]" {
+            out.push(String::new());
+            out.push("[limits]".into());
+        }
+        out.push(line);
+    }
+    let mut updated = out.join("\n");
+    updated.push('\n');
+    Department::parse(&updated, &dir).context("лимит не записан")?;
+    std::fs::write(&path, updated)?;
+    if let Err(error) = commit(
+        root,
+        &[&path],
+        &format!("limits({id}): month_usd = {usd:.2}"),
+    ) {
+        crate::server_diag!("limit commit failed: {error:#}");
+    }
+    Ok(())
+}
+
 pub fn create_department(
     root: &Path,
     proposal: &agentsflow_events::DepartmentProposal,
@@ -435,7 +486,8 @@ effort = "medium"
 # output = 0.0
 "#;
 
-const GITIGNORE: &str = ".agentsflow/\ndepartments/*/runs/\n";
+// Rule proposals wait for the owner; only approved rules are history.
+const GITIGNORE: &str = ".agentsflow/\ndepartments/*/runs/\ndepartments/*/memory/proposals/\norchestrator/memory/proposals/\n";
 
 const ORCHESTRATOR_RULES: &str = r#"# Правила оркестратора
 
@@ -455,6 +507,9 @@ const ORCHESTRATOR_RULES: &str = r#"# Правила оркестратора
 ## Приёмка
 - `internal`: сверь результат с задачей. Подходит — прими. Не подходит — верни один раз с конкретной причиной.
 - `external`: всегда отдай хозяину на приёмку.
+
+## Правила
+- Хозяин просит «запомни» или повторяет одно и то же указание — предложи правило отделу (или себе, `orchestrator`) действием `propose_rule`. Правила меняет только хозяин.
 
 ## Как писать хозяину
 Коротко, по-русски, без воды: что разложил, что нужно от хозяина, что готово, что застряло.
@@ -568,5 +623,48 @@ mod tests {
         assert!(Config::parse("[prices.codex.m]\ninput = -1\noutput = 1").is_err());
         assert!(Config::parse("bogus = 1").is_err());
         assert_eq!(Config::parse("").unwrap(), Config::default());
+    }
+
+    #[test]
+    fn month_limit_is_written_into_limits() {
+        let root = temp();
+        init(&root).unwrap();
+        set_month_limit(&root, "general", 10.0).unwrap();
+        let home = Home::load(&root).unwrap();
+        assert_eq!(home.departments["general"].limits.month_usd, Some(10.0));
+        set_month_limit(&root, "general", 15.0).unwrap();
+        let text = std::fs::read_to_string(root.join("departments/general").join(department::FILE))
+            .unwrap();
+        assert_eq!(text.matches("month_usd").count(), 1);
+        assert!(text.contains("month_usd = 15.00"));
+        assert!(set_month_limit(&root, "general", -1.0).is_err());
+        assert!(set_month_limit(&root, "nope", 1.0).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn approved_proposal_becomes_a_department() {
+        let root = temp();
+        init(&root).unwrap();
+        let proposal = agentsflow_events::DepartmentProposal {
+            id: "hr".into(),
+            title: "Кадры".into(),
+            description: "Найм".into(),
+            rules: String::new(),
+            default_risk: agentsflow_events::Risk::External,
+        };
+        create_department(&root, &proposal).unwrap();
+        let home = Home::load(&root).unwrap();
+        let hr = &home.departments["hr"];
+        assert_eq!(hr.title, "Кадры");
+        assert_eq!(hr.default_risk, agentsflow_events::Risk::External);
+        assert!(!hr.rules().trim().is_empty());
+        assert!(create_department(&root, &proposal).is_err());
+        let bad = agentsflow_events::DepartmentProposal {
+            id: "Bad Id".into(),
+            ..proposal
+        };
+        assert!(create_department(&root, &bad).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -534,12 +534,34 @@ impl Bridge {
                 thread,
                 ..
             } if to == AgentId::orchestrator() => {
+                let limit = from.as_str() == crate::runs::NOTICE_FROM && subject.contains("лимит");
                 let from = message_text(from.as_str(), &self.config.token, 100);
                 let subject = message_text(&subject, &self.config.token, 200);
                 let body = message_text(&body, &self.config.token, 400);
+                let mut row = vec![
+                    json!({"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}),
+                ];
+                if limit {
+                    row.push(json!({"text":"💰 Расходы","callback_data":"s:sp"}));
+                }
                 self.broadcast_buttons(
                     &format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{body}"),
-                    json!({"inline_keyboard":[[{"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}]]}),
+                    json!({ "inline_keyboard": [row] }),
+                );
+            }
+            Event::Rule {
+                target,
+                id,
+                text,
+                status: agentsflow_events::RuleStatus::Proposed,
+            } => {
+                let who = message_text(&target, &self.config.token, 40);
+                let rule = message_text(&text, &self.config.token, 800);
+                self.broadcast_buttons(
+                    &format!("📜 <b>{who}</b> предлагает правило:
+
+{rule}"),
+                    json!({"inline_keyboard":[[{"text":"✅ Добавить","callback_data":format!("s:rl:{target}:{id}:a")},{"text":"✖ Отклонить","callback_data":format!("s:rl:{target}:{id}:r")}]]}),
                 );
             }
             Event::Task { task } if task.work.is_some() => {

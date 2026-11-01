@@ -204,6 +204,15 @@ pub struct DepartmentProposal {
     pub default_risk: Risk,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleStatus {
+    Proposed,
+    Added,
+    Rejected,
+    Reverted,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -214,6 +223,14 @@ pub enum Event {
     },
     Task {
         task: Box<TaskSnapshot>,
+    },
+    /// A department rule changed: proposed by an agent, added, rejected or
+    /// reverted by the owner. `id` is the proposal, or the commit once added.
+    Rule {
+        target: String,
+        id: String,
+        text: String,
+        status: RuleStatus,
     },
     Message {
         role: Role,

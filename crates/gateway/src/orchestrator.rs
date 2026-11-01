@@ -356,13 +356,14 @@ const FORMAT: &str = r#"# Как ответить
 - {"type":"accept","task":"id","note":"..."} — принять internal-результат.
 - {"type":"return_task","task":"id","reason":"что конкретно исправить"} — вернуть отделу (один раз).
 - {"type":"send_to_owner","task":"id","summary":"..."} — отдать результат хозяину на приёмку.
+- {"type":"propose_rule","department":"id отдела или orchestrator","text":"одно правило коротко"} — постоянное правило; добавится только после «да» хозяина. Предлагай, когда хозяин просит запомнить или повторяет одно и то же указание.
 
 Если делать нечего, верни пустой "actions" и ответь хозяину в "message"."#;
 
 /// The whole input of one orchestrator session.
 fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
     let mut out = String::new();
-    let rules = std::fs::read_to_string(home.orchestrator_rules()).unwrap_or_default();
+    let rules = home.orchestrator_rules();
     out.push_str(rules.trim());
     out.push_str("\n\n# Отделы\n\n");
     for dept in home.departments.values() {
@@ -500,6 +501,10 @@ enum Action {
         task: String,
         #[serde(default)]
         summary: String,
+    },
+    ProposeRule {
+        department: String,
+        text: String,
     },
 }
 
@@ -665,6 +670,15 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 }
                 line
             }),
+            Action::ProposeRule { department, text } => {
+                runs.propose_rule(&department, &text).map(|p| {
+                    format!(
+                        "📜 предложил правило для {}: {}",
+                        p.target,
+                        short(text.trim(), 120)
+                    )
+                })
+            }
             Action::CreateTask(_) | Action::ProposeDepartment { .. } => unreachable!("partitioned"),
         };
         report.push(line.unwrap_or_else(|error| format!("⚠ {error}")));

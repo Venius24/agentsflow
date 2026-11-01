@@ -35,6 +35,12 @@ pub fn format_event(agent: &str, event: &Event) -> String {
             "[task] {}: {} ({:?}, {}%)",
             task.id, task.title, task.status, task.progress
         ),
+        Event::Rule {
+            target,
+            status,
+            text,
+            ..
+        } => format!("[rule:{status:?}] {target}: {}", truncate(text)),
         Event::Message { text, .. } => format!("{agent}> {text}"),
         Event::ToolCall { name, input, .. } => {
             format!("[tool] {name} {}", truncate(&input.to_string()))

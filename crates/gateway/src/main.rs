@@ -12,6 +12,7 @@ mod mail;
 mod mail_mcp;
 mod orchestrator;
 mod projects;
+mod rules;
 mod runs;
 mod runtime;
 mod server;

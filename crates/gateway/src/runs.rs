@@ -12,7 +12,7 @@ use crate::{
     workflow::{self, StepRecord},
 };
 use agentsflow_events::{
-    AgentId, AgentKind, Event, Risk, RunRef, TaskSnapshot, WorkInfo, WorkState,
+    AgentId, AgentKind, Event, Risk, RuleStatus, RunRef, TaskSnapshot, WorkInfo, WorkState,
 };
 use serde::Serialize;
 use std::{
@@ -497,6 +497,104 @@ impl Runs {
     }
 }
 
+impl Runs {
+    /// Raises a department's month limit by half, rounded up to a dollar.
+    pub fn raise_month_limit(&self, department: &str) -> Result<(f64, f64), String> {
+        let home = self.home();
+        let dept = home
+            .departments
+            .get(department)
+            .ok_or_else(|| format!("нет отдела {department}"))?;
+        let old = dept
+            .limits
+            .month_usd
+            .ok_or("у отдела нет месячного лимита")?;
+        let new = (old * 1.5).ceil();
+        crate::home::set_month_limit(&home.root, department, new).map_err(|e| format!("{e:#}"))?;
+        self.reload().map_err(|e| format!("{e:#}"))?;
+        self.kick();
+        Ok((old, new))
+    }
+
+    pub fn rule_proposals(&self) -> Vec<crate::rules::Proposal> {
+        crate::rules::proposals(&self.home())
+    }
+
+    pub fn recent_rules(&self, limit: usize) -> Vec<crate::rules::RuleCommit> {
+        crate::rules::recent(&self.home(), limit)
+    }
+
+    /// A rule proposed by the orchestrator for a department or itself.
+    pub fn propose_rule(&self, target: &str, text: &str) -> Result<crate::rules::Proposal, String> {
+        let proposal =
+            crate::rules::propose(&self.home(), target, text).map_err(|e| format!("{e:#}"))?;
+        publish_rule(
+            &self.hub,
+            proposal.target.clone(),
+            proposal.id.clone(),
+            proposal.text.clone(),
+            RuleStatus::Proposed,
+        );
+        Ok(proposal)
+    }
+
+    pub fn approve_rule(&self, target: &str, id: &str) -> Result<crate::rules::RuleCommit, String> {
+        let rule = crate::rules::approve(&self.home(), target, id).map_err(|e| format!("{e:#}"))?;
+        publish_rule(
+            &self.hub,
+            rule.target.clone(),
+            rule.commit.clone(),
+            rule.subject.clone(),
+            RuleStatus::Added,
+        );
+        Ok(rule)
+    }
+
+    pub fn reject_rule(&self, target: &str, id: &str) -> Result<(), String> {
+        crate::rules::reject(&self.home(), target, id).map_err(|e| format!("{e:#}"))?;
+        publish_rule(
+            &self.hub,
+            target.to_owned(),
+            id.to_owned(),
+            String::new(),
+            RuleStatus::Rejected,
+        );
+        Ok(())
+    }
+
+    pub fn revert_rule(&self, commit: &str) -> Result<crate::rules::RuleCommit, String> {
+        let rule = crate::rules::revert(&self.home(), commit).map_err(|e| format!("{e:#}"))?;
+        publish_rule(
+            &self.hub,
+            rule.target.clone(),
+            rule.commit.clone(),
+            rule.subject.clone(),
+            RuleStatus::Reverted,
+        );
+        Ok(rule)
+    }
+}
+
+/// Tells the board and the bot that a rule changed.
+pub(crate) fn publish_rule(
+    hub: &Hub,
+    target: String,
+    id: String,
+    text: String,
+    status: RuleStatus,
+) {
+    hub.publish(
+        AgentId::from(NOTICE_FROM),
+        "rules",
+        Event::Rule {
+            target,
+            id,
+            text,
+            status,
+        },
+    );
+}
+
 /// A waiting task may run once every question is answered and its
 /// department exists.
 fn ready(work: &WorkInfo) -> bool {
@@ -880,6 +978,19 @@ impl Engine {
         let home = self.home();
         let now = now_ms();
         let task = finished.task.clone();
+        if let Some(dept) = home.departments.get(&active.department) {
+            match crate::rules::harvest(&dept.id, &dept.dir, &task, &active.run_dir) {
+                Ok((_, Some(proposal))) => publish_rule(
+                    &self.hub,
+                    proposal.target,
+                    proposal.id,
+                    proposal.text,
+                    RuleStatus::Proposed,
+                ),
+                Ok(_) => {}
+                Err(error) => crate::server_diag!("memory harvest failed: {error:#}"),
+            }
+        }
         match finished.result {
             Ok(()) => {
                 let path = active.run_dir.join("result.md");
@@ -1364,6 +1475,55 @@ mod tests {
             assert!(owner.owner_review);
             assert_eq!(owner.state, WorkState::Review);
             assert!(runs.accept(AgentId::orchestrator(), &redo.id).is_err());
+        });
+    }
+
+    #[test]
+    fn runs_leave_memory_and_rule_proposals() {
+        let env = RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(|hub, member, dir| {
+                let dir = dir.to_path_buf();
+                let doer = member.roles.iter().any(|r| r == "doer");
+                if doer {
+                    std::fs::write(dir.join(crate::rules::NOTE_FILE), "Канал: @orca").unwrap();
+                    std::fs::write(dir.join(crate::rules::RULE_FILE), "Посты до 600 знаков")
+                        .unwrap();
+                }
+                let replies: &'static [&'static str] = if doer {
+                    &["write:Пост"]
+                } else {
+                    &["VERDICT: APPROVED"]
+                };
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(replies, None, &dir)) }
+                })
+            })),
+        };
+        run_case(env, async |runs, hub, task, dir| {
+            wait_state(&hub, &task.id, WorkState::Review).await;
+            let (history, _) = hub.subscribe();
+            let notes =
+                std::fs::read_to_string(dir.join("departments/pr/memory/notes.md")).unwrap();
+            assert!(notes.contains("Канал: @orca"));
+            let proposals = runs.rule_proposals();
+            assert_eq!(proposals.len(), 1);
+            assert_eq!(proposals[0].target, "pr");
+            assert_eq!(proposals[0].id, task.id);
+            let announced = history.iter().any(|envelope| {
+                matches!(
+                    envelope.event,
+                    Event::Rule {
+                        status: RuleStatus::Proposed,
+                        ..
+                    }
+                )
+            });
+            assert!(announced);
+            runs.approve_rule("pr", &task.id).unwrap();
+            let rules = std::fs::read_to_string(dir.join("departments/pr/AGENTS.md")).unwrap();
+            assert!(rules.contains("Посты до 600 знаков"));
         });
     }
 }

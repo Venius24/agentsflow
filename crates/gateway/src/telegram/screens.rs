@@ -1105,6 +1105,124 @@ impl Bridge {
         }
     }
 
+    // ---------- расходы ----------
+    pub(super) async fn open_spend(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            self.queue(chat, "Расходы есть только в режиме serve --home", None);
+            return;
+        };
+        let home = runs.home();
+        let spend = runs.month_spend();
+        let mut text = String::new();
+        if !flash.is_empty() {
+            text.push_str(&format!("{}\n\n", self.safe(flash, 300)));
+        }
+        text.push_str(&format!(
+            "<b>Расходы за {}</b> (UTC)\n",
+            crate::ledger::month_of(now_ms())
+        ));
+        let mut rows = Vec::new();
+        let mut total = 0.0;
+        for dept in home.departments.values() {
+            let spent = spend.get(&dept.id).copied().unwrap_or(0.0);
+            total += spent;
+            let title = self.safe(&dept.title, 60);
+            match dept.limits.month_usd {
+                Some(limit) => {
+                    let mark = if spent >= limit {
+                        "🛑"
+                    } else if spent >= limit * dept.limits.warn_ratio {
+                        "⚠"
+                    } else {
+                        "•"
+                    };
+                    text.push_str(&format!("{mark} {title}: ${spent:.2} из ${limit:.2}\n"));
+                    rows.push(vec![button(
+                        &format!("➕ Лимит {} до ${:.0}", dept.id, (limit * 1.5).ceil()),
+                        format!("s:spr:{}", dept.id),
+                    )]);
+                }
+                None => text.push_str(&format!("• {title}: ${spent:.2}, без лимита\n")),
+            }
+        }
+        let orchestrator = spend.get("orchestrator").copied().unwrap_or(0.0);
+        total += orchestrator;
+        text.push_str(&format!(
+            "• оркестратор: ${orchestrator:.2}\n\nВсего: ${total:.2}\nCodex без цены в [prices.codex] не учитывается."
+        ));
+        rows.push(vec![button("🔄 Обновить", "s:sp")]);
+        self.show(chat, existing, text, rows).await;
+    }
+
+    // ---------- правила отделов ----------
+    pub(super) async fn open_rules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            self.queue(chat, "Правила есть только в режиме serve --home", None);
+            return;
+        };
+        let mut text = String::new();
+        if !flash.is_empty() {
+            text.push_str(&format!(
+                "{}
+
+",
+                self.safe(flash, 300)
+            ));
+        }
+        let mut rows = Vec::new();
+        text.push_str(
+            "<b>Предложения правил</b>
+",
+        );
+        let proposals = runs.rule_proposals();
+        if proposals.is_empty() {
+            text.push_str(
+                "нет
+",
+            );
+        }
+        for proposal in proposals.iter().take(6) {
+            text.push_str(&format!(
+                "
+📜 <b>{}</b>: {}
+",
+                self.safe(&proposal.target, 24),
+                self.safe(&proposal.text, 400)
+            ));
+            rows.push(vec![
+                button(
+                    &format!("✅ Добавить в {}", proposal.target),
+                    format!("s:rl:{}:{}:a", proposal.target, proposal.id),
+                ),
+                button(
+                    "✖ Отклонить",
+                    format!("s:rl:{}:{}:r", proposal.target, proposal.id),
+                ),
+            ]);
+        }
+        let recent = runs.recent_rules(6);
+        if !recent.is_empty() {
+            text.push_str(
+                "
+<b>Последние правила</b>
+",
+            );
+        }
+        for rule in &recent {
+            text.push_str(&format!(
+                "• {} {}
+",
+                rule.date,
+                self.safe(&rule.subject, 150)
+            ));
+            rows.push(vec![button(
+                &format!("↩ Отменить {}", rule.commit),
+                format!("s:rv:{}", rule.commit),
+            )]);
+        }
+        self.show(chat, existing, text, rows).await;
+    }
+
     // ---------- статистика, история, экспорт ----------
     pub(super) async fn open_stats(&mut self, chat: i64, existing: Option<i64>) {
         let stats = serde_json::to_value(self.hub.stats()).unwrap_or_default();
@@ -1462,6 +1580,8 @@ impl Bridge {
                     }
                 }
             }
+            "/rules" => self.open_rules(chat, None, "").await,
+            "/spend" => self.open_spend(chat, None, "").await,
             "/run" => self.open_workflows(chat, None).await,
             "/stats" => self.open_stats(chat, None).await,
             "/log" => {
@@ -1559,6 +1679,34 @@ impl Bridge {
                 .await
             }
             "ta" => flash = self.task_action(chat, message, arg(2), arg(3)).await,
+            "rules" => self.open_rules(chat, message, "").await,
+            "sp" => self.open_spend(chat, message, "").await,
+            "spr" => {
+                if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
+                    flash = match runs.raise_month_limit(arg(2)) {
+                        Ok((old, new)) => format!("✔ Лимит {}: ${old:.2} → ${new:.2}", arg(2)),
+                        Err(error) => error,
+                    };
+                    self.open_spend(chat, message, &flash).await;
+                }
+            }
+            "rl" | "rv" => {
+                if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
+                    flash = match (parts[1], arg(4)) {
+                        ("rv", _) => runs
+                            .revert_rule(arg(2))
+                            .map(|rule| format!("↩ Правило отменено: {}", rule.subject)),
+                        (_, "a") => runs
+                            .approve_rule(arg(2), arg(3))
+                            .map(|rule| format!("✔ Добавлено: {}", rule.subject)),
+                        _ => runs
+                            .reject_rule(arg(2), arg(3))
+                            .map(|()| "✖ Отклонено, больше не предложат".to_owned()),
+                    }
+                    .unwrap_or_else(|error| error);
+                    self.open_rules(chat, message, &flash).await;
+                }
+            }
             "ts" => {
                 let status = number(3).and_then(|i| STATUSES.get(i)).cloned();
                 if let Some(status) = status {

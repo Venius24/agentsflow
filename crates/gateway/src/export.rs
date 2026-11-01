@@ -93,7 +93,7 @@ fn render_event(envelope: &Envelope) -> Option<String> {
     let agent = agent_name(&envelope.agent);
     let mut out = String::new();
     match &envelope.event {
-        Event::Task { .. } | Event::Usage { .. } => return None,
+        Event::Task { .. } | Event::Usage { .. } | Event::Rule { .. } => return None,
         Event::Message { role, text, .. } => {
             let role = match role {
                 Role::User => "user",
