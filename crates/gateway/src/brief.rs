@@ -22,6 +22,7 @@ pub fn memory_digest(dept: &Department, limit: usize) -> String {
 }
 
 pub struct Input {
+    pub task: String,
     pub title: String,
     pub result: std::path::PathBuf,
 }

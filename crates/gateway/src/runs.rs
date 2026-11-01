@@ -18,7 +18,7 @@ use serde::Serialize;
 use std::{
     cell::Cell,
     collections::{BTreeMap, HashMap},
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -791,6 +791,45 @@ fn take_questions(run_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// Results of the tasks this one depends on, copied into `inputs/<task>/` of
+/// the run folder: the run may not read other departments' folders.
+fn copy_inputs(inputs: &[brief::Input], run_dir: &Path) -> anyhow::Result<Vec<brief::Input>> {
+    let mut local = Vec::new();
+    for input in inputs {
+        let to = run_dir.join("inputs").join(&input.task);
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::create_dir_all(&to)?;
+        let result = to.join("result.md");
+        std::fs::copy(&input.result, &result)?;
+        if let Some(from) = input.result.parent() {
+            copy_dir(&from.join("artifacts"), &to.join("artifacts"))?;
+        }
+        local.push(brief::Input {
+            task: input.task.clone(),
+            title: input.title.clone(),
+            result,
+        });
+    }
+    Ok(local)
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(to)?;
+    for entry in entries {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// The tasks that ordered this one, nearest first.
 pub(crate) fn ancestors(hub: &Hub, task: &str) -> Vec<TaskSnapshot> {
     let mut out: Vec<TaskSnapshot> = Vec::new();
@@ -1093,6 +1132,7 @@ impl Engine {
                     Some((dep_task, dep_work)) if dep_work.state == WorkState::Done => {
                         if let Some(path) = &dep_work.result_path {
                             inputs.push(brief::Input {
+                                task: dep_task.id.clone(),
                                 title: dep_task.title.clone(),
                                 result: home.root.join(path),
                             });
@@ -1132,11 +1172,12 @@ impl Engine {
         let run_id = Uuid::new_v4().simple().to_string()[..8].to_owned();
         let run_dir = dept.run_dir(&task.id);
         std::fs::create_dir_all(run_dir.join("artifacts"))?;
+        let inputs = copy_inputs(inputs, &run_dir)?;
         let requests = request_catalog(home, &self.hub, task);
         let text = brief::build(
             dept,
             task,
-            inputs,
+            &inputs,
             home.config.memory_digest_kb,
             &run_dir,
             requests.as_deref(),
@@ -1873,6 +1914,27 @@ mod tests {
             let rules = std::fs::read_to_string(dir.join("departments/pr/AGENTS.md")).unwrap();
             assert!(rules.contains("Посты до 600 знаков"));
         });
+    }
+
+    #[test]
+    fn inputs_are_copied_into_the_run_folder() {
+        let dir = std::env::temp_dir().join(format!("agentsflow-inputs-{}", Uuid::new_v4()));
+        let source = dir.join("research/runs/t1");
+        std::fs::create_dir_all(source.join("artifacts/raw")).unwrap();
+        std::fs::write(source.join("result.md"), "цены").unwrap();
+        std::fs::write(source.join("artifacts/raw/prices.md"), "таблица").unwrap();
+        let run = dir.join("general/runs/t2");
+        let input = brief::Input {
+            task: "t1".into(),
+            title: "Цены".into(),
+            result: source.join("result.md"),
+        };
+        let local = copy_inputs(&[input], &run).unwrap();
+        assert_eq!(local[0].result, run.join("inputs/t1/result.md"));
+        assert_eq!(std::fs::read_to_string(&local[0].result).unwrap(), "цены");
+        let table = run.join("inputs/t1/artifacts/raw/prices.md");
+        assert_eq!(std::fs::read_to_string(table).unwrap(), "таблица");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
