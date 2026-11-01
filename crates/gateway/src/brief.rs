@@ -32,6 +32,7 @@ pub fn build(
     inputs: &[Input],
     digest_kb: usize,
     run_dir: &Path,
+    requests: Option<&str>,
 ) -> String {
     let work = task.work.clone().unwrap_or_default();
     let mut out = String::new();
@@ -104,6 +105,13 @@ pub fn build(
         out.push_str("- Результат уйдёт наружу только после одобрения хозяина: ничего не отправляй и не публикуй сам, готовь черновик.\n");
     }
     out.push_str("- Если не знаешь и не можешь проверить, так и напиши; не выдумывай.\n");
+    if let Some(catalog) = requests {
+        out.push_str("\n# Заказ другому отделу\n\n");
+        out.push_str(&format!(
+            "Если без результата другого отдела задачу не сделать, опиши заказ в {}: что нужно, в каком виде и зачем. Потом закончи работу: задача продолжится, когда заказ выполнят, а его результат придёт во входных данных. Отделы:\n{catalog}\n",
+            crate::runs::REQUEST_FILE
+        ));
+    }
     out.push_str("\n# Память и правила\n\n");
     out.push_str(&format!(
         "- Узнал то, что пригодится следующим задачам отдела (где лежат данные, что не сработало, договорённости) — допиши коротко в {} в рабочей папке. Это память отдела, её прочитают следующие запуски.\n",
@@ -161,7 +169,15 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let brief = build(&dept, &task, &[], 1, &dir.join("runs").join("t1"));
+        let brief = build(
+            &dept,
+            &task,
+            &[],
+            1,
+            &dir.join("runs").join("t1"),
+            Some("- hr — Кадры: найм"),
+        );
+        assert!(brief.contains("request.md") && brief.contains("hr — Кадры"));
         assert!(brief.contains("Пиши коротко."));
         assert!(brief.contains("последняя заметка"));
         assert!(brief.contains("не поместилось"));

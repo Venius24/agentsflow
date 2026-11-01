@@ -5,7 +5,7 @@ use super::*;
 use crate::hub::{MailError, MailMsg, TaskError, TaskPatch};
 use agentsflow_events::{TaskSnapshot, TaskStatus};
 
-pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
+pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. /rules — правила отделов, /spend — расходы, /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
 
 pub(super) fn help_text() -> String {
     format!("{HELP}\nВерсия: {}", env!("CARGO_PKG_VERSION"))
@@ -353,6 +353,44 @@ impl Bridge {
         ));
         if let Some(reason) = &work.stuck_reason {
             text.push_str(&format!("\nПричина: {}", self.safe(reason, 300)));
+        }
+        if let Some(proposal) = &work.proposal {
+            text.push_str(&format!(
+                "\nЖдёт нового отдела <b>{}</b> (<code>{}</code>): {}",
+                self.safe(&proposal.title, 80),
+                self.safe(&proposal.id, 40),
+                self.safe(&proposal.description, 300)
+            ));
+        }
+        for question in &work.questions {
+            match &question.answer {
+                Some(answer) => text.push_str(&format!(
+                    "\n❓ {}\n↳ {}",
+                    self.safe(&question.text, 200),
+                    self.safe(answer, 200)
+                )),
+                None => text.push_str(&format!("\n❓ {}", self.safe(&question.text, 300))),
+            }
+        }
+        for note in &work.review_notes {
+            text.push_str(&format!("\nЗамечание: {}", self.safe(note, 300)));
+        }
+        if let Some(parent) = work.parent.as_ref().and_then(|id| self.hub.task(id)) {
+            text.push_str(&format!("\nЗаказ для «{}»", self.safe(&parent.title, 120)));
+        }
+        for child in self.hub.tasks(true).into_iter().filter(|t| {
+            t.work
+                .as_ref()
+                .is_some_and(|w| w.parent.as_deref() == Some(task.id.as_str()))
+        }) {
+            let state = child
+                .work
+                .as_ref()
+                .map_or("", |w| work_state_label(w.state));
+            text.push_str(&format!(
+                "\nЗаказ: «{}» · {state}",
+                self.safe(&child.title, 120)
+            ));
         }
         if !task.description.is_empty() {
             text.push_str(&format!("\n\n{}", self.safe(&task.description, 500)));

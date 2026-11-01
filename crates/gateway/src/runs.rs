@@ -751,6 +751,58 @@ fn schedule_title(schedule: &crate::department::Schedule) -> String {
         .unwrap_or_else(|| crate::server::title_from(&schedule.task))
 }
 
+/// How many levels of orders may stack: the owner's task, its order and
+/// the order's order.
+pub const MAX_REQUEST_DEPTH: usize = 2;
+/// An order for another department an agent leaves in the run folder.
+pub const REQUEST_FILE: &str = "request.md";
+
+fn take_request(run_dir: &std::path::Path) -> Option<String> {
+    let path = run_dir.join(REQUEST_FILE);
+    let text = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let text = text.trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+/// The tasks that ordered this one, nearest first.
+pub(crate) fn ancestors(hub: &Hub, task: &str) -> Vec<TaskSnapshot> {
+    let mut out: Vec<TaskSnapshot> = Vec::new();
+    let mut next = hub.task(task).and_then(|t| t.work).and_then(|w| w.parent);
+    while let Some(id) = next {
+        if out.iter().any(|t| t.id == id) || out.len() > MAX_REQUEST_DEPTH + 1 {
+            break;
+        }
+        let Some(parent) = hub.task(&id) else { break };
+        next = parent.work.as_ref().and_then(|w| w.parent.clone());
+        out.push(parent);
+    }
+    out
+}
+
+/// Departments a run may order work from, for the brief; `None` when the
+/// chain is already as deep as allowed.
+fn request_catalog(home: &Home, hub: &Hub, task: &TaskSnapshot) -> Option<String> {
+    let chain = ancestors(hub, &task.id);
+    if chain.len() >= MAX_REQUEST_DEPTH {
+        return None;
+    }
+    let mut busy: Vec<String> = chain
+        .iter()
+        .filter_map(|t| t.work.as_ref().map(|w| w.department.clone()))
+        .collect();
+    if let Some(work) = &task.work {
+        busy.push(work.department.clone());
+    }
+    let lines: Vec<String> = home
+        .departments
+        .values()
+        .filter(|dept| !busy.contains(&dept.id))
+        .map(|dept| format!("- {} — {}: {}", dept.id, dept.title, dept.description))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
 /// Tells the board and the bot that a rule changed.
 pub(crate) fn publish_rule(
     hub: &Hub,
@@ -906,6 +958,12 @@ impl Engine {
             }
             Ok(())
         });
+        for ancestor in ancestors(&self.hub, &task) {
+            let _ = self.hub.update_work(Self::by(), &ancestor.id, |_, work| {
+                work.cost_usd += usd;
+                Ok(())
+            });
+        }
         let Some(dept) = home.departments.get(&department) else {
             return;
         };
@@ -1044,7 +1102,15 @@ impl Engine {
         let run_id = Uuid::new_v4().simple().to_string()[..8].to_owned();
         let run_dir = dept.run_dir(&task.id);
         std::fs::create_dir_all(run_dir.join("artifacts"))?;
-        let text = brief::build(dept, task, inputs, home.config.memory_digest_kb, &run_dir);
+        let requests = request_catalog(home, &self.hub, task);
+        let text = brief::build(
+            dept,
+            task,
+            inputs,
+            home.config.memory_digest_kb,
+            &run_dir,
+            requests.as_deref(),
+        );
         std::fs::write(run_dir.join("brief.md"), &text)?;
         let mut plan = dept.run_plan(&task.id)?;
         plan.spec.bind("brief", text);
@@ -1145,6 +1211,47 @@ impl Engine {
         Ok(())
     }
 
+    /// The run ordered work from another department: the task waits until
+    /// the orchestrator files the order and the order is done.
+    fn request(&mut self, task: &str, text: String, now: u64) {
+        let depth = ancestors(&self.hub, task).len();
+        let orchestrator = self.shared.lock().unwrap().orchestrator.clone();
+        let refusal = if depth >= MAX_REQUEST_DEPTH {
+            Some(format!(
+                "заказ другому отделу не принят: цепочка заказов уже {MAX_REQUEST_DEPTH} уровня"
+            ))
+        } else if orchestrator.is_none() {
+            Some("заказ другому отделу не принят: оркестратор не запущен".to_owned())
+        } else {
+            None
+        };
+        let summary = format!("Ждёт заказа другому отделу:\n{}", short(&text, 600));
+        let _ = self.hub.update_work(Self::by(), task, |_, work| {
+            match &refusal {
+                Some(reason) => {
+                    work.state = WorkState::Stuck;
+                    work.stuck_reason = Some(reason.clone());
+                }
+                None => {
+                    work.state = WorkState::Waiting;
+                    work.stuck_reason = None;
+                }
+            }
+            work.result_summary = summary.clone();
+            if let Some(run) = work.runs.last_mut() {
+                run.finished_ms = Some(now);
+                run.outcome = "request".into();
+            }
+            Ok(())
+        });
+        if refusal.is_none()
+            && let Some(orchestrator) = orchestrator
+            && let Err(error) = orchestrator.request(task, &text)
+        {
+            self.mark_stuck(task, error);
+        }
+    }
+
     fn finish(&mut self, finished: Finished) {
         let Some(active) = self.active.remove(&finished.task) else {
             return;
@@ -1166,6 +1273,12 @@ impl Engine {
                 Ok(_) => {}
                 Err(error) => crate::server_diag!("memory harvest failed: {error:#}"),
             }
+        }
+        if finished.result.is_ok()
+            && let Some(request) = take_request(&active.run_dir)
+        {
+            self.request(&task, request, now);
+            return;
         }
         match finished.result {
             Ok(()) => {

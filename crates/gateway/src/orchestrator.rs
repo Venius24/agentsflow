@@ -35,6 +35,11 @@ pub struct Orchestrator {
 enum Trigger {
     Owner(String),
     Review(String),
+    /// A department run ordered work from another department.
+    Request {
+        parent: String,
+        text: String,
+    },
 }
 
 impl Orchestrator {
@@ -52,6 +57,16 @@ impl Orchestrator {
     }
 
     /// A free-form message of the owner: tasks, answers, anything.
+    /// An order of a department run, filed as a task of another department.
+    pub fn request(&self, parent: &str, text: &str) -> Result<(), String> {
+        self.tx
+            .send(Trigger::Request {
+                parent: parent.to_owned(),
+                text: text.to_owned(),
+            })
+            .map_err(|_| "оркестратор остановлен".to_owned())
+    }
+
     pub fn message(&self, text: &str) -> Result<(), String> {
         let text = text.trim();
         if text.is_empty() {
@@ -184,6 +199,13 @@ impl Engine {
                     "Сообщение не разобрано: в agentsflow.toml [orchestrator] enabled = false. Создайте задачу вручную.".into(),
                 );
             }
+            if let Trigger::Request { parent, .. } = &trigger {
+                fail_request(
+                    &self.runs,
+                    parent,
+                    "оркестратор выключен, заказ не оформлен",
+                );
+            }
             return;
         }
         if let Trigger::Review(id) = &trigger {
@@ -220,6 +242,7 @@ impl Engine {
                     let subject = match &trigger {
                         Trigger::Owner(_) => "Разобрал сообщение",
                         Trigger::Review(_) => "Приёмка",
+                        Trigger::Request { .. } => "Заказ отдела",
                     };
                     self.tell(subject, body);
                 }
@@ -231,6 +254,9 @@ impl Engine {
                     short(text, 300)
                 ),
             ),
+            (Err(error), Trigger::Request { parent, .. }) => {
+                fail_request(&self.runs, parent, &format!("заказ не оформлен: {error}"));
+            }
             (Err(error), Trigger::Review(id)) => {
                 let _ = self.runs.to_owner(AgentId::from(FROM), id);
                 self.tell(
@@ -437,10 +463,42 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                 ));
             }
         }
+        Trigger::Request { parent, text } => {
+            out.push_str("\n# Заказ отдела\n\n");
+            if let Some(task) = tasks.iter().find(|task| &task.id == parent)
+                && let Some(work) = &task.work
+            {
+                out.push_str(&format!(
+                    "Отдел `{}` по задаче `{}` «{}» просит работу другого отдела:\n\n{}\n\n",
+                    work.department,
+                    task.id,
+                    task.title,
+                    text.trim()
+                ));
+            }
+            out.push_str(
+                "Оформи заказ одной задачей create_task (можно с вопросами хозяину, если без них никак) \
+                 в подходящий отдел, но не в отдел, который заказывает, и не выше по цепочке. \
+                 Задача заказчика продолжится, когда заказ будет готов.\n",
+            );
+        }
     }
     out.push('\n');
     out.push_str(FORMAT);
     out
+}
+
+/// The order could not be filed: the ordering task stops and says why.
+fn fail_request(runs: &Runs, parent: &str, reason: &str) {
+    let _ = runs
+        .hub()
+        .update_work(AgentId::from(FROM), parent, |_, work| {
+            if work.state == WorkState::Waiting {
+                work.state = WorkState::Stuck;
+                work.stuck_reason = Some(reason.to_owned());
+            }
+            Ok(())
+        });
 }
 
 #[derive(Debug, Deserialize)]
@@ -547,7 +605,30 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
     let source = match trigger {
         Trigger::Owner(_) => "owner",
         Trigger::Review(_) => "orchestrator",
+        Trigger::Request { .. } => "request",
     };
+    // An order: the new tasks belong to the ordering task, never go up the
+    // chain and spend what is left of its budget.
+    let order = match trigger {
+        Trigger::Request { parent, .. } => runs.hub().task(parent).map(|task| {
+            let mut forbidden: Vec<String> = crate::runs::ancestors(runs.hub(), parent)
+                .into_iter()
+                .chain(std::iter::once(task.clone()))
+                .filter_map(|t| t.work.map(|w| w.department))
+                .collect();
+            forbidden.dedup();
+            let work = task.work.unwrap_or_default();
+            let budget = work.budget_usd.unwrap_or_else(|| {
+                runs.home()
+                    .departments
+                    .get(&work.department)
+                    .map_or(0.0, |dept| dept.limits.task_usd)
+            });
+            (parent.clone(), forbidden, (budget - work.cost_usd).max(0.0))
+        }),
+        _ => None,
+    };
+    let mut ordered: Vec<String> = Vec::new();
     let mut keys: HashMap<String, String> = HashMap::new();
     let mut report = Vec::new();
     let (creates, decisions): (Vec<_>, Vec<_>) = actions.into_iter().partition(|action| {
@@ -563,6 +644,26 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 .iter()
                 .map(|dep| keys.get(dep).cloned().unwrap_or_else(|| dep.clone()))
                 .collect();
+            let mut budget_usd = task.budget_usd;
+            let mut parent = None;
+            if let Some((id, forbidden, left)) = &order {
+                if forbidden.contains(&task.department) {
+                    report.push(format!(
+                        "⚠ «{}» не создана: заказ не может идти в отдел {} из своей цепочки",
+                        task.title, task.department
+                    ));
+                    return;
+                }
+                if *left <= 0.0 {
+                    report.push(format!(
+                        "⚠ «{}» не создана: у заказчика кончился бюджет",
+                        task.title
+                    ));
+                    return;
+                }
+                budget_usd = Some(budget_usd.map_or(*left, |b| b.min(*left)));
+                parent = Some(id.clone());
+            }
             let questions = task
                 .questions
                 .iter()
@@ -579,11 +680,11 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 department: task.department,
                 risk: task.risk,
                 depends_on,
-                budget_usd: task.budget_usd,
+                budget_usd,
+                parent,
                 source: source.into(),
                 questions,
                 proposal,
-                ..Default::default()
             };
             if new.title.is_empty() {
                 report.push("⚠ задача без названия пропущена".into());
@@ -603,6 +704,9 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                             ""
                         }
                     ));
+                    if order.is_some() {
+                        ordered.push(created.id.clone());
+                    }
                     if let Some(key) = task.key {
                         keys.insert(key, created.id);
                     }
@@ -638,6 +742,21 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 }
             }
             _ => unreachable!("partitioned"),
+        }
+    }
+    if let Some((parent, _, _)) = &order {
+        if ordered.is_empty() {
+            fail_request(runs, parent, "оркестратор не оформил заказ");
+            report.push(format!("⚠ заказ задачи {parent} не оформлен"));
+        } else {
+            let _ = runs.hub().update_work(by.clone(), parent, |_, work| {
+                work.depends_on.extend(ordered.iter().cloned());
+                if work.state == WorkState::Waiting {
+                    work.state = WorkState::Queued;
+                }
+                Ok(())
+            });
+            runs.kick();
         }
     }
     for action in decisions {
@@ -860,5 +979,139 @@ mod tests {
                 assert!(hub.tasks(false).is_empty());
             },
         );
+    }
+
+    async fn wait_for(hub: &Hub, id: &str, state: WorkState) -> TaskSnapshot {
+        for _ in 0..1000 {
+            if let Some(task) = hub.task(id)
+                && task.work.as_ref().is_some_and(|w| w.state == state)
+            {
+                return task;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("{id} did not reach {state:?}: {:?}", hub.task(id));
+    }
+
+    #[test]
+    fn departments_order_work_through_the_orchestrator() {
+        let dir = std::env::temp_dir().join(format!("agentsflow-order-{}", uuid::Uuid::new_v4()));
+        crate::home::init(&dir).unwrap();
+        let pr = dir.join("departments").join("pr");
+        std::fs::create_dir_all(&pr).unwrap();
+        std::fs::write(pr.join("department.toml"), crate::department::tests::SAMPLE).unwrap();
+        let home = Home::load(&dir).unwrap();
+        let hub = Hub::new();
+        // The first doer of `pr` orders figures; everyone else just works.
+        let ordered = Rc::new(std::cell::Cell::new(false));
+        let runs_env = RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(move |hub, member, dir| {
+                let dir = dir.to_path_buf();
+                let doer = member.roles.iter().any(|r| r == "doer");
+                if doer && member.id.as_str().starts_with("pr:") && !ordered.get() {
+                    ordered.set(true);
+                    std::fs::write(
+                        dir.join(crate::runs::REQUEST_FILE),
+                        "Нужны продажи Байтака за октябрь",
+                    )
+                    .unwrap();
+                }
+                let replies: &'static [&'static str] = if doer {
+                    &["write:Готово"]
+                } else {
+                    &["VERDICT: APPROVED"]
+                };
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(replies, Some(0.1), &dir)) }
+                })
+            })),
+        };
+        let calls = Rc::new(std::cell::Cell::new(0));
+        let orchestrator_env = RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(move |hub, member, dir| {
+                let dir = dir.to_path_buf();
+                calls.set(calls.get() + 1);
+                // First the order, then a review it leaves to the owner.
+                let replies: &'static [&'static str] = if calls.get() == 1 {
+                    &[
+                        r#"{"message":"","actions":[{"type":"create_task","title":"Продажи Байтака","text":"за октябрь","department":"general"},{"type":"create_task","title":"Мимо","text":"x","department":"pr"}]}"#,
+                    ]
+                } else {
+                    &[r#"{"message":"","actions":[]}"#]
+                };
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(replies, None, &dir)) }
+                })
+            })),
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(tokio::task::LocalSet::new().run_until(async {
+                let runs = Runs::start(hub.clone(), home, Ledger::memory(), runs_env);
+                runs.set_orchestrator(Orchestrator::start(runs.clone(), orchestrator_env));
+                let parent = runs
+                    .create(
+                        AgentId::from("owner"),
+                        NewWork {
+                            title: "Пост по итогам".into(),
+                            text: "Пост о продажах".into(),
+                            department: "pr".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                let body = wait_mail(&hub, "Заказ отдела").await;
+                assert!(body.contains("из своей цепочки"), "{body}");
+                let child = hub
+                    .tasks(false)
+                    .into_iter()
+                    .find(|t| t.title == "Продажи Байтака")
+                    .unwrap();
+                let child_work = child.work.clone().unwrap();
+                assert_eq!(child_work.parent.as_deref(), Some(parent.id.as_str()));
+                assert_eq!(child_work.source, "request");
+                // What is left of the parent's $2.50 after its first run.
+                assert!(child_work.budget_usd.unwrap() < 2.5);
+                let waiting = hub.task(&parent.id).unwrap().work.unwrap();
+                assert_eq!(waiting.depends_on, vec![child.id.clone()]);
+                assert_eq!(waiting.runs[0].outcome, "request");
+                // The child is internal; the orchestrator leaves it to the owner.
+                let reviewed = wait_for(&hub, &child.id, WorkState::Review).await;
+                for _ in 0..200 {
+                    if hub.task(&child.id).unwrap().work.unwrap().owner_review {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let spent_child = reviewed.work.unwrap().cost_usd;
+                hub.update_task(
+                    AgentId::orchestrator(),
+                    &child.id,
+                    crate::hub::TaskPatch {
+                        status: Some(agentsflow_events::TaskStatus::Done),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let done = wait_for(&hub, &parent.id, WorkState::Review).await;
+                let work = done.work.unwrap();
+                assert_eq!(work.runs.len(), 2);
+                // The order's spending counts against the parent.
+                assert!(work.cost_usd >= spent_child + 0.2 - 1e-9);
+                let brief = std::fs::read_to_string(
+                    dir.join("departments/pr/runs")
+                        .join(&parent.id)
+                        .join("brief.md"),
+                )
+                .unwrap();
+                assert!(brief.contains("Продажи Байтака"), "inputs list the order");
+            }));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
