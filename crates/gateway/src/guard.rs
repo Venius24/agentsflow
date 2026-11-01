@@ -634,4 +634,27 @@ mod tests {
         assert!(unsafe_target("%TEMP%", &temp));
         assert!(unsafe_target(&temp.join("*").to_string_lossy(), &temp));
     }
+
+    #[test]
+    fn department_runs_may_only_clean_their_own_folder() {
+        // Outside the system temp folder, which the guard leaves open.
+        let base = if cfg!(windows) {
+            PathBuf::from(r"C:\srv\agentsflow")
+        } else {
+            PathBuf::from("/srv/agentsflow")
+        };
+        let run = base.join("departments").join("pr").join("runs").join("t1");
+        for (command, expected) in [
+            ("rm -rf artifacts/old", None),
+            ("rm -rf ./artifacts", None),
+            ("rm -rf ../../memory", Some("rm-recursive")),
+            ("rm -rf ../t2", Some("rm-recursive")),
+            ("rm -rf .", Some("rm-recursive")),
+        ] {
+            assert_eq!(check(command, &run).map(|v| v.rule), expected, "{command}");
+        }
+        let home = run.join("../../../..");
+        let rules = format!("rm -rf {}", normalized(&home).join("departments").display());
+        assert_eq!(check(&rules, &run).map(|v| v.rule), Some("rm-recursive"));
+    }
 }

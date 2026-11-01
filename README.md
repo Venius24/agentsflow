@@ -11,6 +11,8 @@
 
 Весь код на Rust, страница — один HTML-файл без сборки и внешних зависимостей.
 
+**Режим отделов** (`serve --home`): вы пишете задачи текстом в Telegram, ИИ-оркестратор раскладывает их по отделам, каждый отдел работает в свежих сессиях по своим правилам и памяти, внутреннее принимает оркестратор, внешнее — вы. Описание — [docs/departments.md](docs/departments.md), установка на сервер — [docs/vps.md](docs/vps.md).
+
 ## Быстрый старт
 
 Нужны Rust (stable), установленные и авторизованные CLI `claude` и `codex`.
@@ -34,6 +36,8 @@ cargo run -p agentsflow-gateway -- serve --cwd path/to/project
 | Команда | Что делает |
 |---|---|
 | `agentsflow serve [--port N] [--cwd DIR] [--team pair\|trio\|FILE] [--allow-bypass] [--workflow FILE]…` | Сервер и веб-страница. `--port 0` — свободный порт. |
+| `agentsflow serve --home DIR [--telegram]` | Режим отделов: оркестратор, очередь задач, расписания ([docs/departments.md](docs/departments.md)). |
+| `agentsflow home init DIR` / `home check [DIR]` | Создать дом с общим отделом или проверить его. |
 | `agentsflow team init [FILE]` / `team check <pair\|trio\|FILE>` / `team show` | Создать конфигурацию, проверить команду или показать пресеты. |
 | `agentsflow claude "<prompt>" [--model M] [--cwd DIR] [--yes]` | Один ход Claude, события в консоль, разрешения через `y/N`. |
 | `agentsflow codex "<prompt>" [--sandbox read-only\|workspace-write] [--codex-bin PATH] …` | То же для Codex. |

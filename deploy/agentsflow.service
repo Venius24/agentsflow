@@ -1,0 +1,27 @@
+# systemd unit for agentsflow in department mode. Install:
+#   sudo cp deploy/agentsflow.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now agentsflow
+# Paths assume the user `agentsflow` with the home at ~/home; see docs/vps.md.
+
+[Unit]
+Description=agentsflow: departments of agents and the orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentsflow
+Group=agentsflow
+WorkingDirectory=/home/agentsflow
+EnvironmentFile=/etc/agentsflow.env
+# The agents run this user's claude and codex CLIs.
+Environment=PATH=/home/agentsflow/.npm-global/bin:/home/agentsflow/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/agentsflow serve --home /home/agentsflow/home --port 7878 --telegram
+# SIGINT stops running departments cleanly; they become "stuck: server stopped".
+KillSignal=SIGINT
+TimeoutStopSec=40
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
