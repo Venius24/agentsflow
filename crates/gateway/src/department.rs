@@ -109,6 +109,25 @@ pub struct RunPlan {
     pub team: Team,
 }
 
+/// Who does a run. `small` and `fallback` are spare roles: those agents take
+/// no part in a normal run and start only for their case.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RunKind {
+    Full,
+    /// A small task: the agent of role `small` alone, without review.
+    Small,
+    /// The doer hit its limit: the agent of role `fallback` works in its place.
+    Fallback,
+}
+
+fn has_role(member: &Member, role: &str) -> bool {
+    member.roles.iter().any(|r| r == role)
+}
+
+fn is_spare(member: &Member) -> bool {
+    has_role(member, "small") || has_role(member, "fallback")
+}
+
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 24
@@ -158,37 +177,42 @@ impl Department {
         if limits.max_loops > 10 {
             bail!("limits.max_loops must be 0..=10");
         }
-        if !(1..=3).contains(&raw.agents.len()) {
-            bail!("a department has 1..=3 agents");
+        if !(1..=4).contains(&raw.agents.len()) {
+            bail!("a department has 1..=4 agents");
         }
         let mut members = raw.agents;
         for member in &mut members {
             if member.mode.is_none() {
                 member.mode = Some(AccessMode::Smart);
             }
-            if member.kind == AgentKind::Codex
-                && member.sandbox.is_none()
-                && member.mode != Some(AccessMode::Bypass)
-            {
+            if member.sandbox.is_none() && member.mode != Some(AccessMode::Bypass) {
                 // A pure reviewer only reads: given write access it follows the
                 // department rule "put the result into result.md" and overwrites
                 // the doer's result with its review.
-                let reviewer_only = member.roles.iter().any(|r| r == "reviewer")
-                    && !member.roles.iter().any(|r| r == "doer");
-                member.sandbox = Some(if reviewer_only {
-                    MemberSandbox::ReadOnly
-                } else {
-                    MemberSandbox::WorkspaceWrite
-                });
+                let reviewer_only = has_role(member, "reviewer") && !has_role(member, "doer");
+                if reviewer_only {
+                    member.sandbox = Some(MemberSandbox::ReadOnly);
+                } else if member.kind == AgentKind::Codex {
+                    member.sandbox = Some(MemberSandbox::WorkspaceWrite);
+                }
             }
         }
-        if !members.iter().any(|m| m.roles.iter().any(|r| r == "doer")) {
+        if members.iter().any(|m| is_spare(m) && m.lead) {
+            bail!("agents of roles small and fallback cannot lead");
+        }
+        if members
+            .iter()
+            .any(|m| is_spare(m) && (has_role(m, "doer") || has_role(m, "reviewer")))
+        {
+            bail!("roles small and fallback do not mix with doer and reviewer");
+        }
+        if !members.iter().any(|m| has_role(m, "doer")) {
             bail!("no agent has role doer");
         }
         if !members.iter().any(|m| m.lead) {
             let doer = members
                 .iter_mut()
-                .find(|m| m.roles.iter().any(|r| r == "doer"))
+                .find(|m| has_role(m, "doer"))
                 .expect("checked above");
             doer.lead = true;
         }
@@ -220,7 +244,15 @@ impl Department {
             toml::Value::Array(steps.into_iter().map(toml::Value::Table).collect()),
         );
         let workflow = Spec::parse(&toml::to_string(&table)?).context("workflow")?;
-        workflow.resolve_team(&team).context("workflow")?;
+        let working = Team {
+            members: team
+                .members
+                .iter()
+                .filter(|m| !is_spare(m))
+                .cloned()
+                .collect(),
+        };
+        workflow.resolve_team(&working).context("workflow")?;
         Ok(Self {
             id: raw.id,
             title: raw.title.trim().into(),
@@ -302,15 +334,87 @@ impl Department {
         warnings
     }
 
+    fn with_role(&self, role: &str) -> Option<&Member> {
+        self.team.members.iter().find(|m| has_role(m, role))
+    }
+
+    /// The kind of run for a task; a department without the spare agent runs
+    /// as usual, and the fallback replaces only a Codex doer.
+    pub fn run_kind(&self, small: bool, fallback: bool) -> RunKind {
+        if small && self.with_role("small").is_some() {
+            RunKind::Small
+        } else if fallback && self.can_fall_back() {
+            RunKind::Fallback
+        } else {
+            RunKind::Full
+        }
+    }
+
+    pub fn can_fall_back(&self) -> bool {
+        self.with_role("fallback").is_some()
+            && self
+                .team
+                .members
+                .iter()
+                .any(|m| has_role(m, "doer") && m.kind == AgentKind::Codex)
+    }
+
+    /// Short name of the fallback agent for the owner's notice.
+    pub fn fallback_name(&self) -> String {
+        self.with_role("fallback")
+            .map(|m| m.model.clone().unwrap_or_else(|| m.id.to_string()))
+            .unwrap_or_default()
+    }
+
+    /// Only the agents this run needs, so the others never start.
+    fn run_team(&self, kind: RunKind) -> Team {
+        let mut members: Vec<Member> = match kind {
+            RunKind::Small => {
+                let mut small = self.with_role("small").expect("run_kind checked").clone();
+                small.roles = vec!["doer".into()];
+                small.lead = true;
+                vec![small]
+            }
+            RunKind::Full | RunKind::Fallback => self
+                .team
+                .members
+                .iter()
+                .filter(|m| !is_spare(m))
+                .cloned()
+                .collect(),
+        };
+        if kind == RunKind::Fallback {
+            let spare = self.with_role("fallback").expect("run_kind checked");
+            for member in &mut members {
+                // Keeps the id and roles: steps may name the doer literally.
+                if has_role(member, "doer") && member.kind == AgentKind::Codex {
+                    member.kind = spare.kind;
+                    member.model = spare.model.clone();
+                    member.effort = spare.effort.clone();
+                    member.mode = spare.mode;
+                    member.sandbox = spare.sandbox;
+                }
+            }
+        }
+        Team { members }
+    }
+
     /// Roster and workflow for one task. Literal member ids in steps are
     /// rewritten to the run ids; `@role` addresses resolve as before.
-    pub fn run_plan(&self, task: &str) -> Result<RunPlan> {
+    pub fn run_plan(&self, task: &str, kind: RunKind) -> Result<RunPlan> {
         let rename = |member: &str| agent_id(&self.id, member, task).to_string();
-        let mut team = self.team.clone();
+        let mut team = self.run_team(kind);
         for member in &mut team.members {
             member.id = AgentId::from(rename(member.id.as_str()));
         }
-        let mut spec = self.workflow.clone();
+        let mut spec = if kind == RunKind::Small {
+            Spec::parse(&format!(
+                "name = \"{}\"\n[[step]]\nid = \"do\"\nagent = \"@doer\"\nprompt = \"{{brief}}\"\n",
+                self.id
+            ))?
+        } else {
+            self.workflow.clone()
+        };
         for step in &mut spec.step {
             if !step.agent.starts_with('@') {
                 step.agent = rename(&step.agent);
@@ -394,7 +498,7 @@ next = "review"
     #[test]
     fn run_plan_uses_unique_ids() {
         let dept = Department::parse(SAMPLE, Path::new("pr")).unwrap();
-        let plan = dept.run_plan("t1").unwrap();
+        let plan = dept.run_plan("t1", RunKind::Full).unwrap();
         assert_eq!(plan.spec.step[0].agent, "pr:writer:t1");
         assert_eq!(plan.spec.step[1].agent, "pr:critic:t1");
         assert!(plan.team.get(&AgentId::from("pr:critic:t1")).is_some());
@@ -435,6 +539,89 @@ next = "review"
             );
             assert!(error_text.contains(error), "{error}: {error_text}");
         }
+    }
+
+    const SPARES: &str = r#"
+[[agent]]
+id = "fast"
+kind = "claude"
+model = "claude-haiku-5-5"
+effort = "high"
+roles = ["small"]
+
+[[agent]]
+id = "spare"
+kind = "claude"
+model = "claude-sonnet-5-5"
+effort = "medium"
+roles = ["fallback"]
+"#;
+
+    /// Codex writes, Claude reviews, Haiku takes small tasks, Sonnet the spare.
+    pub fn sample_with_spares() -> String {
+        SAMPLE
+            .replace(
+                "id = \"writer\"\nkind = \"claude\"",
+                "id = \"writer\"\nkind = \"codex\"",
+            )
+            .replace(
+                "id = \"critic\"\nkind = \"codex\"",
+                "id = \"critic\"\nkind = \"claude\"",
+            )
+            .replace(
+                "[[step]]\nid = \"do\"",
+                &format!("{SPARES}\n[[step]]\nid = \"do\""),
+            )
+    }
+
+    fn with_spares() -> Department {
+        Department::parse(&sample_with_spares(), Path::new("pr")).unwrap()
+    }
+
+    #[test]
+    fn claude_reviewer_only_reads() {
+        let dept = with_spares();
+        assert_eq!(dept.team.members[1].sandbox, Some(MemberSandbox::ReadOnly));
+        assert_eq!(
+            dept.team.members[0].sandbox,
+            Some(MemberSandbox::WorkspaceWrite)
+        );
+        // Spare agents write as any Claude does.
+        assert_eq!(dept.team.members[2].sandbox, None);
+    }
+
+    #[test]
+    fn spare_agents_start_only_for_their_case() {
+        let dept = with_spares();
+        assert_eq!(dept.run_kind(false, false), RunKind::Full);
+        let full = dept.run_plan("t1", RunKind::Full).unwrap();
+        assert_eq!(full.team.members.len(), 2);
+        assert_eq!(full.spec.step.len(), 3);
+
+        assert_eq!(dept.run_kind(true, false), RunKind::Small);
+        let small = dept.run_plan("t1", RunKind::Small).unwrap();
+        assert_eq!(small.team.members.len(), 1);
+        let agent = &small.team.members[0];
+        assert_eq!(agent.model.as_deref(), Some("claude-haiku-5-5"));
+        assert_eq!(agent.effort.as_deref(), Some("high"));
+        assert!(agent.lead);
+        assert_eq!(small.spec.step.len(), 1);
+        assert_eq!(small.spec.step[0].agent, "pr:fast:t1");
+
+        assert_eq!(dept.run_kind(false, true), RunKind::Fallback);
+        let fallback = dept.run_plan("t1", RunKind::Fallback).unwrap();
+        let doer = fallback.team.get(&AgentId::from("pr:writer:t1")).unwrap();
+        assert_eq!(doer.kind, AgentKind::Claude);
+        assert_eq!(doer.model.as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(doer.sandbox, None);
+        assert!(doer.lead);
+        assert_eq!(fallback.team.members.len(), 2);
+
+        // Without spares everything is a normal run.
+        let plain = Department::parse(SAMPLE, Path::new("pr")).unwrap();
+        assert_eq!(plain.run_kind(true, true), RunKind::Full);
+        assert!(!plain.can_fall_back());
+        assert!(dept.can_fall_back());
     }
 
     #[test]

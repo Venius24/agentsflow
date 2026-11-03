@@ -4,7 +4,7 @@
 
 use crate::{
     brief,
-    department::Department,
+    department::{Department, RunKind},
     home::Home,
     hub::{Hub, TaskError},
     ledger::{self, Ledger},
@@ -109,6 +109,7 @@ pub struct NewWork {
     pub source: String,
     pub questions: Vec<agentsflow_events::Question>,
     pub proposal: Option<agentsflow_events::DepartmentProposal>,
+    pub small: bool,
 }
 
 #[derive(Clone)]
@@ -324,9 +325,12 @@ impl Runs {
         {
             return Err("бюджет задачи должен быть больше 0 и не больше 1000".into());
         }
+        let risk = new.risk.unwrap_or(default_risk);
         let mut work = WorkInfo {
             department,
-            risk: new.risk.unwrap_or(default_risk),
+            risk,
+            // What goes outside always gets the full department.
+            small: new.small && risk != Risk::External,
             parent: new.parent,
             depends_on: new.depends_on,
             budget_usd: new.budget_usd,
@@ -471,6 +475,8 @@ impl Runs {
                 } else {
                     work.returns += 1;
                     work.state = WorkState::Queued;
+                    // Not good enough alone: the full department takes it.
+                    work.small = false;
                 }
                 Ok(())
             })
@@ -921,6 +927,7 @@ struct Active {
     department: String,
     run_dir: PathBuf,
     doers: Vec<AgentId>,
+    can_fall_back: bool,
 }
 
 struct Engine {
@@ -1186,9 +1193,11 @@ impl Engine {
         let run_dir = dept.run_dir(&task.id);
         std::fs::create_dir_all(run_dir.join("artifacts"))?;
         let inputs = copy_inputs(inputs, &run_dir)?;
+        let work = task.work.clone().unwrap_or_default();
+        let kind = dept.run_kind(work.small, work.fallback);
         crate::diag::diag(
             "INFO",
-            &format!("запуск {run_id}: задача {} [{}]", task.id, dept.id),
+            &format!("запуск {run_id}: задача {} [{}] {kind:?}", task.id, dept.id),
         );
         let requests = request_catalog(home, &self.hub, task);
         let text = brief::build(
@@ -1200,7 +1209,7 @@ impl Engine {
             requests.as_deref(),
         );
         std::fs::write(run_dir.join("brief.md"), &text)?;
-        let mut plan = dept.run_plan(&task.id)?;
+        let mut plan = dept.run_plan(&task.id, kind)?;
         plan.spec.bind("brief", text);
         for file in [REQUEST_FILE, QUESTIONS_FILE] {
             let _ = std::fs::remove_file(run_dir.join(file));
@@ -1248,6 +1257,7 @@ impl Engine {
                 department: dept.id.clone(),
                 run_dir: run_dir.clone(),
                 doers,
+                can_fall_back: kind == RunKind::Full && dept.can_fall_back(),
             },
         );
         self.shared.lock().unwrap().running.insert(
@@ -1431,6 +1441,37 @@ impl Engine {
                     Ok(())
                 });
             }
+            Err(error)
+                if active.can_fall_back
+                    && active.reason.get().is_none()
+                    && error.contains(agentsflow_adapters::codex::USAGE_LIMIT) =>
+            {
+                let name = home
+                    .departments
+                    .get(&active.department)
+                    .map(|dept| dept.fallback_name())
+                    .unwrap_or_default();
+                crate::diag::diag(
+                    "WARN",
+                    &format!("задача {task}: кончился лимит Codex, дальше {name}"),
+                );
+                let updated = self.hub.update_work(Self::by(), &task, |_, work| {
+                    work.state = WorkState::Queued;
+                    work.fallback = true;
+                    work.stuck_reason = None;
+                    if let Some(run) = work.runs.last_mut() {
+                        run.finished_ms = Some(now);
+                        run.outcome = "usage_limit".into();
+                    }
+                    Ok(())
+                });
+                if let Ok(updated) = updated {
+                    self.notify(
+                        "Кончился лимит Codex",
+                        format!("Задача «{}» продолжается на {name}.", updated.title),
+                    );
+                }
+            }
             Err(error) => {
                 let dept = home.departments.get(&active.department);
                 let snapshot = self.hub.task(&task);
@@ -1550,8 +1591,17 @@ mod tests {
     }
 
     fn run_case(env: RunEnv, check: impl AsyncFnOnce(Runs, Hub, TaskSnapshot, PathBuf)) {
+        run_department(crate::department::tests::SAMPLE, false, env, check);
+    }
+
+    fn run_department(
+        department: &str,
+        small: bool,
+        env: RunEnv,
+        check: impl AsyncFnOnce(Runs, Hub, TaskSnapshot, PathBuf),
+    ) {
         let dir = temp();
-        let home = home_with(&dir, crate::department::tests::SAMPLE);
+        let home = home_with(&dir, department);
         let hub = Hub::new();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1566,6 +1616,8 @@ mod tests {
                             title: "Пост".into(),
                             text: "Анонс".into(),
                             department: "pr".into(),
+                            risk: small.then_some(Risk::Internal),
+                            small,
                             ..Default::default()
                         },
                     )
@@ -1670,6 +1722,149 @@ mod tests {
                 assert_eq!(again.work.unwrap().runs.len(), 2);
             },
         );
+    }
+
+    /// Every agent answers by its kind and role, whichever ones get started.
+    fn by_member() -> RunEnv {
+        RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(|hub, member, dir| {
+                let dir = dir.to_path_buf();
+                let replies: &'static [&'static str] =
+                    if member.roles.iter().any(|r| r == "reviewer") {
+                        &["VERDICT: APPROVED"]
+                    } else if member.kind == AgentKind::Codex {
+                        &["failed:usage_limit_exceeded: You've hit your usage limit."]
+                    } else if member.model.as_deref() == Some("claude-haiku-5-5") {
+                        &["write:Сделал Haiku"]
+                    } else {
+                        &["write:Сделал Sonnet"]
+                    };
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(replies, Some(0.01), &dir)) }
+                })
+            })),
+        }
+    }
+
+    #[test]
+    fn usage_limit_moves_the_task_to_the_fallback() {
+        let department = crate::department::tests::sample_with_spares();
+        run_department(
+            &department,
+            false,
+            by_member(),
+            async |_, hub, task, dir| {
+                let done = wait_state(&hub, &task.id, WorkState::Review).await;
+                let work = done.work.unwrap();
+                assert_eq!(work.result_summary, "Сделал Sonnet");
+                assert!(work.fallback);
+                assert_eq!(work.runs.len(), 2);
+                assert_eq!(work.runs[0].outcome, "usage_limit");
+                assert_eq!(work.runs[1].outcome, "finished");
+                let brief = std::fs::read_to_string(
+                    dir.join("departments/pr/runs")
+                        .join(&task.id)
+                        .join("brief.md"),
+                )
+                .unwrap();
+                assert!(brief.contains("кончился его лимит"));
+                assert!(
+                    hub.mail_all()
+                        .iter()
+                        .any(|mail| mail.subject == "Кончился лимит Codex"
+                            && mail.body.contains("claude-sonnet-5-5"))
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn other_codex_failures_get_stuck() {
+        let department = crate::department::tests::sample_with_spares();
+        let env = RunEnv {
+            codex_bin: None,
+            spawner: Some(Rc::new(|hub, member, dir| {
+                let dir = dir.to_path_buf();
+                crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
+                    let dir = dir.clone();
+                    async move { Ok(Scripted::new(&["failed:сеть упала"], None, &dir)) }
+                })
+            })),
+        };
+        run_department(&department, false, env, async |_, hub, task, _| {
+            let stuck = wait_state(&hub, &task.id, WorkState::Stuck).await;
+            let work = stuck.work.unwrap();
+            assert!(!work.fallback);
+            assert!(work.stuck_reason.unwrap().contains("сеть упала"));
+        });
+    }
+
+    #[test]
+    fn small_task_runs_alone_and_a_return_gets_the_full_department() {
+        let department = crate::department::tests::sample_with_spares();
+        run_department(
+            &department,
+            true,
+            by_member(),
+            async |runs, hub, task, _| {
+                let done = wait_state(&hub, &task.id, WorkState::Review).await;
+                let work = done.work.unwrap();
+                assert!(work.small);
+                assert_eq!(work.result_summary, "Сделал Haiku");
+                assert_eq!(work.runs.len(), 1);
+                // Haiku worked alone: no reviewer ever spoke in this run.
+                assert!(
+                    hub.mail_all()
+                        .iter()
+                        .all(|mail| mail.subject != "Кончился лимит Codex")
+                );
+                runs.return_task(AgentId::from("owner"), &task.id, "мало")
+                    .unwrap();
+                for _ in 0..500 {
+                    let work = hub.task(&task.id).unwrap().work.unwrap();
+                    if work.state == WorkState::Review && work.runs.len() >= 3 {
+                        // The full department: Codex hit the limit, Sonnet finished.
+                        assert!(!work.small);
+                        assert!(work.fallback);
+                        assert_eq!(work.result_summary, "Сделал Sonnet");
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                panic!("no full run: {:?}", hub.task(&task.id));
+            },
+        );
+    }
+
+    #[test]
+    fn external_tasks_are_never_small() {
+        let department = crate::department::tests::sample_with_spares();
+        let dir = temp();
+        let home = home_with(&dir, &department);
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(tokio::task::LocalSet::new().run_until(async {
+                let runs = Runs::start(Hub::new(), home, Ledger::memory(), by_member());
+                let task = runs
+                    .create(
+                        AgentId::from("owner"),
+                        NewWork {
+                            title: "Пост".into(),
+                            text: "Анонс".into(),
+                            department: "pr".into(),
+                            risk: Some(Risk::External),
+                            small: true,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                assert!(!task.work.unwrap().small);
+            }));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn home_with(dir: &std::path::Path, department: &str) -> Home {

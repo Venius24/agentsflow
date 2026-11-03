@@ -4,9 +4,10 @@ use agentsflow_events::{Event, Role};
 use anyhow::{Context, Result, bail};
 pub use codex_codes::SandboxMode;
 use codex_codes::{
-    AppServerBuilder, AskForApproval, AsyncClient, CommandExecutionStatus, McpToolCallStatus,
-    Notification, PatchApplyStatus, RequestId, ServerMessage, ServerRequest, ThreadItemPayload,
-    ThreadStartParams, TurnInterruptParams, TurnStartParams, TurnStatus, UserInput,
+    AppServerBuilder, AskForApproval, AsyncClient, CodexErrorInfo, CommandExecutionStatus,
+    McpToolCallStatus, Notification, PatchApplyStatus, RequestId, ServerMessage, ServerRequest,
+    ThreadItemPayload, ThreadStartParams, TurnError, TurnInterruptParams, TurnStartParams,
+    TurnStatus, UserInput,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -126,7 +127,7 @@ pub fn map_message(message: &ServerMessage) -> Vec<Event> {
             let mut events = Vec::new();
             if let Some(error) = &notification.turn.error {
                 events.push(Event::Error {
-                    message: error.message.clone(),
+                    message: error_message(error),
                 });
             }
             let reason = match notification.turn.status {
@@ -144,10 +145,25 @@ pub fn map_message(message: &ServerMessage) -> Vec<Event> {
             if !notification.will_retry =>
         {
             vec![Event::Error {
-                message: notification.error.message.clone(),
+                message: error_message(&notification.error),
             }]
         }
         _ => vec![],
+    }
+}
+
+/// Starts the message of an error caused by the subscription's usage limit.
+pub const USAGE_LIMIT: &str = "usage_limit_exceeded";
+
+fn error_message(error: &TurnError) -> String {
+    let limit = matches!(
+        error.codex_error_info,
+        Some(CodexErrorInfo::UsageLimitExceeded)
+    ) || error.message.contains("hit your usage limit");
+    if limit {
+        format!("{USAGE_LIMIT}: {}", error.message)
+    } else {
+        error.message.clone()
     }
 }
 
@@ -592,6 +608,31 @@ mod tests {
             }]
         );
     }
+    #[test]
+    fn usage_limit_is_marked() {
+        let failed = |error: serde_json::Value| {
+            map(
+                json!({"method":"turn/completed", "params":{"turn":{"id":"v","status":"failed","items":[],"error":error}}}),
+            )
+        };
+        let limit = failed(json!({"message":"bad","codexErrorInfo":"usageLimitExceeded"}));
+        assert_eq!(
+            limit[0],
+            Event::Error {
+                message: format!("{USAGE_LIMIT}: bad")
+            }
+        );
+        let text = failed(json!({"message":"You\u{2019}ve hit your usage limit. Upgrade"}));
+        assert!(matches!(&text[0], Event::Error { message } if message.starts_with(USAGE_LIMIT)));
+        let other = failed(json!({"message":"bad","codexErrorInfo":"rateLimitExceeded"}));
+        assert_eq!(
+            other[0],
+            Event::Error {
+                message: "bad".into()
+            }
+        );
+    }
+
     #[test]
     fn turn_results_and_noise() {
         assert_eq!(

@@ -135,6 +135,16 @@ impl Agent for Scripted {
     }
     async fn next_events(&mut self) -> Result<Vec<Event>> {
         let mut text = self.pending.take().unwrap_or_default();
+        if let Some(message) = text.strip_prefix("failed:") {
+            return Ok(vec![
+                Event::Error {
+                    message: message.to_owned(),
+                },
+                Event::Done {
+                    reason: "failed".into(),
+                },
+            ]);
+        }
         if let Some(result) = text.strip_prefix("write:") {
             std::fs::write(self.dir.join("result.md"), result)?;
             text = "записал result.md".into();

@@ -480,6 +480,103 @@ pub fn check(command: &str, cwd: &Path) -> Option<Violation> {
     })
 }
 
+/// The rule of [`read_only`]: always denied, never asked.
+pub const READ_ONLY: &str = "read-only";
+
+/// A read-only agent (a reviewer) may look at everything it is allowed to, but
+/// must not change files. `command` is the command of a shell tool. Shell
+/// commands are judged by what they look like: a script can still write.
+pub fn read_only(tool: &str, command: Option<&str>) -> Option<Violation> {
+    let denied = match command {
+        Some(command) => writes_files(command, 0),
+        None => matches!(
+            tool.to_ascii_lowercase().as_str(),
+            "write" | "edit" | "multiedit" | "notebookedit" | "task" | "agent"
+        ),
+    };
+    if denied {
+        violation(READ_ONLY, "this agent only reads: do not change files")
+    } else {
+        None
+    }
+}
+
+fn writes_files(command: &str, depth: usize) -> bool {
+    if depth > 3 {
+        return true;
+    }
+    let Some(segments) = lex(command) else {
+        return true;
+    };
+    segments.iter().any(|words| {
+        let redirect = words.windows(2).any(|pair| {
+            pair[0].text == ">"
+                && !pair[0].quoted
+                && !matches!(
+                    pair[1].text.to_ascii_lowercase().as_str(),
+                    "/dev/null" | "nul" | ">"
+                )
+        });
+        let Some(first) = words.iter().find(|word| !word.text.contains('=')) else {
+            return redirect;
+        };
+        let name = first.text.replace('\\', "/");
+        let name = name
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        let args = || words.iter().map(|word| word.text.to_ascii_lowercase());
+        redirect
+            || match name {
+                "rm" | "rmdir" | "del" | "mv" | "move" | "cp" | "copy" | "touch" | "mkdir"
+                | "md" | "tee" | "ln" | "dd" | "truncate" | "chmod" | "chown" | "install"
+                | "set-content" | "add-content" | "out-file" | "new-item" | "remove-item"
+                | "move-item" | "copy-item" | "rename-item" => true,
+                "sed" | "perl" => args().any(|arg| arg.starts_with("-i")),
+                "git" => args()
+                    .skip(1)
+                    .find(|arg| !arg.starts_with('-'))
+                    .is_some_and(|sub| {
+                        matches!(
+                            sub.as_str(),
+                            "add"
+                                | "am"
+                                | "apply"
+                                | "checkout"
+                                | "cherry-pick"
+                                | "clean"
+                                | "commit"
+                                | "merge"
+                                | "mv"
+                                | "pull"
+                                | "push"
+                                | "rebase"
+                                | "reset"
+                                | "restore"
+                                | "revert"
+                                | "rm"
+                                | "stash"
+                                | "switch"
+                        )
+                    }),
+                "bash" | "sh" | "zsh" | "cmd" | "powershell" | "pwsh" => words
+                    .iter()
+                    .skip(1)
+                    .skip_while(|word| {
+                        !matches!(
+                            word.text.to_ascii_lowercase().as_str(),
+                            "-c" | "/c" | "-command"
+                        )
+                    })
+                    .nth(1)
+                    .is_some_and(|inner| writes_files(&inner.text, depth + 1)),
+                _ => false,
+            }
+    })
+}
+
 /// The rule of [`foreign_path`]: always denied, never asked.
 pub const FOREIGN: &str = "foreign-department";
 
@@ -708,6 +805,45 @@ mod tests {
         let home = run.join("../../../..");
         let rules = format!("rm -rf {}", normalized(&home).join("departments").display());
         assert_eq!(check(&rules, &run).map(|v| v.rule), Some("rm-recursive"));
+    }
+
+    #[test]
+    fn read_only_agents_do_not_change_files() {
+        for tool in ["Write", "Edit", "MultiEdit", "NotebookEdit", "Task"] {
+            assert_eq!(read_only(tool, None).unwrap().rule, READ_ONLY, "{tool}");
+        }
+        for tool in ["Read", "Glob", "Grep", "WebSearch"] {
+            assert!(read_only(tool, None).is_none(), "{tool}");
+        }
+        for command in [
+            "echo hi > result.md",
+            "cat a >> b",
+            "rm result.md",
+            "/usr/bin/mv a b",
+            "tee out.txt",
+            "sed -i s/a/b/ f",
+            "git commit -m x",
+            "ls && touch f",
+            "FOO=1 cp a b",
+            "bash -c 'echo x > f'",
+            "powershell -Command \"Set-Content f x\"",
+            "echo 'broken",
+        ] {
+            assert!(read_only("Bash", Some(command)).is_some(), "{command}");
+        }
+        for command in [
+            "cat result.md",
+            "ls -la",
+            "grep -n '>' f",
+            "git status",
+            "git diff HEAD",
+            "cargo test 2>&1 | tail",
+            "ls 2>/dev/null",
+            "sed -n 1,5p f",
+            "bash -c 'cat f'",
+        ] {
+            assert!(read_only("Bash", Some(command)).is_none(), "{command}");
+        }
     }
 
     #[test]

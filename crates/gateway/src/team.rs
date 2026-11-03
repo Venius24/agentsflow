@@ -105,9 +105,12 @@ impl Team {
             if !ids.insert(&member.id) {
                 bail!("agent {}: duplicate id", member.id);
             }
-            if member.kind == AgentKind::Claude && member.sandbox.is_some() {
+            // Claude has no sandbox: read-only is enforced by the guard.
+            if member.kind == AgentKind::Claude
+                && member.sandbox == Some(MemberSandbox::WorkspaceWrite)
+            {
                 bail!(
-                    "agent {}: sandbox applies to codex only (claude has no sandbox)",
+                    "agent {}: workspace-write applies to codex only (claude has no sandbox)",
                     member.id
                 );
             }
@@ -357,8 +360,8 @@ mod tests {
         assert!(!unguarded.members[0].guard);
         for (text, error) in [
             (
-                "[[agent]]\nid='a'\nkind='claude'\nlead=true\nsandbox='read-only'",
-                "sandbox applies to codex only",
+                "[[agent]]\nid='a'\nkind='claude'\nlead=true\nsandbox='workspace-write'",
+                "workspace-write applies to codex only",
             ),
             (
                 "[[agent]]\nid='a'\nkind='codex'\nlead=true\nmode='bypass'\nsandbox='read-only'",

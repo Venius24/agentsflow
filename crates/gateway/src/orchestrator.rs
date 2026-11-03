@@ -236,14 +236,21 @@ impl Engine {
             Trigger::Request { parent, .. } => format!("заказ от {parent}"),
         };
         if let Err(error) = &outcome {
-            crate::diag::diag("WARN", &format!("оркестратор {}, {kind}: {error}", self.session));
+            crate::diag::diag(
+                "WARN",
+                &format!("оркестратор {}, {kind}: {error}", self.session),
+            );
         }
         match (outcome, &trigger) {
             (Ok(plan), _) => {
                 let report = apply(&self.runs, &trigger, plan.actions);
                 crate::diag::diag(
                     "INFO",
-                    &format!("оркестратор {}, {kind}: {}", self.session, report.join("; ")),
+                    &format!(
+                        "оркестратор {}, {kind}: {}",
+                        self.session,
+                        report.join("; ")
+                    ),
                 );
                 let mut body = plan.message.trim().to_owned();
                 if !report.is_empty() {
@@ -389,7 +396,8 @@ const FORMAT: &str = r#"# Как ответить
 
 Действия (поле "type"):
 - {"type":"create_task","key":"a","title":"...","text":"полная постановка: что сделать, откуда данные, какой результат, твои предположения","department":"id отдела","risk":"internal|external","depends_on":["ключ или id задачи"],"questions":["вопрос хозяину"],"budget_usd":2.0}
-  key — метка для depends_on внутри этого ответа; questions — только если без ответа будет угадывание (задача подождёт ответа); risk, depends_on, questions, budget_usd необязательны.
+  key — метка для depends_on внутри этого ответа; questions — только если без ответа будет угадывание (задача подождёт ответа); risk, depends_on, questions, budget_usd, size необязательны.
+  "size":"small" — мелкая задача: короткая справка, правка пары строк, одно простое действие. Её сделает один быстрый агент без ревью. Сомневаешься — не ставь; external мелким не бывает.
 - {"type":"propose_department","id":"латиница-через-дефис","title":"...","description":"за что отвечает","rules":"правила отдела в markdown","default_risk":"internal|external","tasks":[ ...create_task без department... ]}
   Новый отдел создаётся только после «да» хозяина; его задачи подождут.
 - {"type":"ask_owner","task":"id","questions":["..."]} — вопросы по уже существующей задаче. Не повторяй вопросы, на которые хозяин уже ответил, даже другими словами. Ответ «на свой вкус» значит, что решает отдел: верни ему задачу (return_task) с указанием выбрать самому, а не спрашивай снова.
@@ -551,6 +559,8 @@ struct NewTask {
     questions: Vec<String>,
     #[serde(default)]
     budget_usd: Option<f64>,
+    #[serde(default)]
+    size: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -711,6 +721,7 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 source: source.into(),
                 questions,
                 proposal,
+                small: task.size.as_deref() == Some("small"),
             };
             if new.title.is_empty() {
                 report.push("⚠ задача без названия пропущена".into());

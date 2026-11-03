@@ -234,7 +234,10 @@ fn log_transition(task: &TaskSnapshot, work: &WorkInfo, was: WorkState) {
         state(work.state),
         task.title
     );
-    if matches!(work.state, WorkState::Review | WorkState::Done | WorkState::Stuck) {
+    if matches!(
+        work.state,
+        WorkState::Review | WorkState::Done | WorkState::Stuck
+    ) {
         let spent = crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens);
         line.push_str(&format!(", {spent}"));
     }
@@ -1343,8 +1346,7 @@ pub fn spawn_guarded<A, F, Fut>(
     hub: Hub,
     agent: AgentId,
     yes: bool,
-    cwd: std::path::PathBuf,
-    enabled: bool,
+    guard: Guard,
     smart: bool,
     factory: F,
 ) -> (Actor, JoinHandle<()>)
@@ -1359,7 +1361,7 @@ where
         yes,
         factory,
         INTERRUPT_GRACE,
-        Some((cwd, enabled)),
+        Some(guard),
         smart,
     )
 }
@@ -1380,13 +1382,21 @@ where
     spawn_configured(hub, agent, yes, factory, grace, None, false)
 }
 
+/// What the guard checks for one agent.
+pub struct Guard {
+    pub cwd: std::path::PathBuf,
+    pub enabled: bool,
+    /// The agent only reads: file changes are refused without asking.
+    pub read_only: bool,
+}
+
 fn spawn_configured<A, F, Fut>(
     hub: Hub,
     agent: AgentId,
     yes: bool,
     factory: F,
     grace: Duration,
-    guard: Option<(std::path::PathBuf, bool)>,
+    guard: Option<Guard>,
     smart: bool,
 ) -> (Actor, JoinHandle<()>)
 where
@@ -1464,7 +1474,7 @@ async fn run_actor<A, F, Fut>(
     state: Arc<Mutex<AgentState>>,
     mut rx: mpsc::UnboundedReceiver<Command>,
     mut stop: watch::Receiver<bool>,
-    guard: Option<(std::path::PathBuf, bool)>,
+    guard: Option<Guard>,
     smart: bool,
 ) where
     A: Agent,
@@ -1554,20 +1564,27 @@ async fn run_actor<A, F, Fut>(
                                 Event::Done { reason } if !reason.starts_with("interrupted") => state.lock().unwrap().last_error = None,
                                 _ => {}
                             }
-                            if let (Some((cwd, true)), Event::PermissionRequest { tool, input, guard: note, .. }) = (&guard, &mut event) {
-                                if matches!(tool.to_ascii_lowercase().as_str(), "bash" | "powershell" | "shell") {
-                                    if let Some(command) = input.get("command").and_then(serde_json::Value::as_str) {
-                                        *note = crate::guard::check(command, cwd).map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
+                            if let (Some(Guard { cwd, enabled, read_only }), Event::PermissionRequest { tool, input, guard: note, .. }) = (&guard, &mut event) {
+                                let shell = matches!(tool.to_ascii_lowercase().as_str(), "bash" | "powershell" | "shell");
+                                let command = input.get("command").and_then(serde_json::Value::as_str).filter(|_| shell);
+                                if *enabled {
+                                    if shell {
+                                        if let Some(command) = command {
+                                            *note = crate::guard::check(command, cwd).map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
+                                        }
+                                    } else {
+                                        // File tools (Read, Edit, Glob, Grep…): only department isolation applies.
+                                        *note = ["file_path", "path", "notebook_path"].iter()
+                                            .filter_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
+                                            .find_map(|path| crate::guard::foreign_path(path, cwd))
+                                            .map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
                                     }
-                                } else {
-                                    // File tools (Read, Edit, Glob, Grep…): only department isolation applies.
-                                    *note = ["file_path", "path", "notebook_path"].iter()
-                                        .filter_map(|key| input.get(*key).and_then(serde_json::Value::as_str))
-                                        .find_map(|path| crate::guard::foreign_path(path, cwd))
-                                        .map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
+                                }
+                                if *read_only && let Some(violation) = crate::guard::read_only(tool, command) {
+                                    *note = Some(agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
                                 }
                             }
-                            let foreign = matches!(&event, Event::PermissionRequest { guard: Some(note), .. } if note.rule == crate::guard::FOREIGN);
+                            let foreign = matches!(&event, Event::PermissionRequest { guard: Some(note), .. } if note.rule == crate::guard::FOREIGN || note.rule == crate::guard::READ_ONLY);
                             let flagged = matches!(&event, Event::PermissionRequest { guard: Some(_), .. });
                             // Smart mode answers safe requests itself and hands guard-flagged ones to the owner;
                             // another department's files are refused without asking.
@@ -2232,6 +2249,42 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn read_only_agent_is_refused_without_asking() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                for (tool, input, allowed) in [
+                    ("Write", serde_json::json!({"file_path": "result.md"}), false),
+                    ("Bash", serde_json::json!({"command": "rm result.md"}), false),
+                    ("Read", serde_json::json!({"file_path": "result.md"}), true),
+                    ("Bash", serde_json::json!({"command": "cat result.md"}), true),
+                ] {
+                    let hub = Hub::new();
+                    let (_, mut rx) = hub.subscribe();
+                    let answers = Arc::new(Mutex::new(Vec::new()));
+                    let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), true, Guard { cwd: std::env::current_dir().unwrap(), enabled: false, read_only: true }, true, {
+                        let answers = answers.clone();
+                        move || {
+                            let answers = answers.clone();
+                            let event = Event::PermissionRequest { id: "p".into(), tool: tool.into(), input: input.clone(), guard: None };
+                            async move { Ok(GuardFake { answers, event: Some(event) }) }
+                        }
+                    });
+                    actor.prompt("go".into()).await.unwrap();
+                    let resolved = loop {
+                        let envelope = rx.recv().await.unwrap();
+                        if matches!(envelope.event, Event::PermissionResolved { .. }) {
+                            break envelope.event;
+                        }
+                    };
+                    assert!(matches!(resolved, Event::PermissionResolved { allow, blocked_by_guard, .. } if allow == allowed && blocked_by_guard != allowed), "{tool}");
+                    actor.shutdown().await;
+                    task.await.unwrap();
+                }
+            })
+            .await;
+    }
+
+    #[tokio::test]
     async fn guard_checks_permissions_and_auto_denies() {
         LocalSet::new().run_until(async {
             for (yes, smart, enabled, command, warned, expected) in [
@@ -2248,7 +2301,7 @@ mod tests {
                 let hub = Hub::new();
                 let (_, mut rx) = hub.subscribe();
                 let answers = Arc::new(Mutex::new(Vec::new()));
-                let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), yes, std::env::current_dir().unwrap(), enabled, smart, {
+                let (actor, task) = spawn_guarded(hub, AgentId::from("agent"), yes, Guard { cwd: std::env::current_dir().unwrap(), enabled, read_only: false }, smart, {
                     let answers = answers.clone();
                     move || {
                         let answers = answers.clone();

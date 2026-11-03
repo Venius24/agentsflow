@@ -196,6 +196,12 @@ pub struct WorkInfo {
     /// A new department the orchestrator proposes for this task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<DepartmentProposal>,
+    /// The orchestrator judged it small: one agent of role `small`, no review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub small: bool,
+    /// The doer hit its usage limit: the agent of role `fallback` takes over.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fallback: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

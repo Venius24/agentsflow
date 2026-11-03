@@ -608,7 +608,7 @@ async fn wait_turn(
                 if reason == "interrupted" {
                     bail!("interrupted");
                 }
-                if reason == "error" {
+                if reason == "error" || reason == "failed" {
                     bail!("{}", last_error.unwrap_or(reason));
                 }
                 return Ok(output);

@@ -546,15 +546,37 @@ max_loops = 2
 
 [[agent]]
 id = "doer"
-kind = "claude"
+kind = "codex"
+model = "gpt-6.1-terra"
+effort = "medium"
 title = "исполнитель"
 roles = ["doer"]
 
 [[agent]]
 id = "reviewer"
-kind = "codex"
+kind = "claude"
+model = "claude-sonnet-5-5"
+effort = "medium"
 title = "ревьюер"
 roles = ["reviewer"]
+
+# Мелкие задачи: один агент без ревью, размер определяет оркестратор.
+[[agent]]
+id = "small"
+kind = "claude"
+model = "claude-haiku-5-5"
+effort = "high"
+title = "мелкие задачи"
+roles = ["small"]
+
+# Кончился лимит Codex: задача продолжается на этом агенте.
+[[agent]]
+id = "fallback"
+kind = "claude"
+model = "claude-sonnet-5-5"
+effort = "medium"
+title = "запасной исполнитель"
+roles = ["fallback"]
 
 [[step]]
 id = "do"

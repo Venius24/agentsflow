@@ -1,5 +1,5 @@
 use crate::{
-    hub::{Actor, Hub},
+    hub::{Actor, Guard, Hub},
     team::{AccessMode, Member, MemberSandbox, Team},
 };
 use agentsflow_adapters::{
@@ -110,8 +110,11 @@ pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHa
             hub.clone(),
             member.id.clone(),
             yes,
-            cwd.clone(),
-            member.guard && !bypass,
+            Guard {
+                cwd: cwd.clone(),
+                enabled: member.guard && !bypass,
+                read_only: member.sandbox == Some(MemberSandbox::ReadOnly) && !bypass,
+            },
             smart,
             move || {
                 ClaudeSession::start(ClaudeOptions {
@@ -132,8 +135,12 @@ pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHa
                 hub.clone(),
                 member.id.clone(),
                 yes,
-                cwd.clone(),
-                member.guard && !bypass,
+                Guard {
+                    cwd: cwd.clone(),
+                    enabled: member.guard && !bypass,
+                    // Codex enforces it itself with its sandbox.
+                    read_only: false,
+                },
                 smart,
                 move || {
                     CodexSession::start(CodexOptions {
