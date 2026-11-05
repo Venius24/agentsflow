@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+mod files;
+mod reader;
 mod screens;
 
 #[derive(Clone)]
@@ -72,6 +74,11 @@ impl Config {
             api,
             prompts: true,
         })
+    }
+
+    /// Base of file downloads; holds the token, so it never goes to a message or log.
+    fn file_url(&self) -> String {
+        format!("{}/file/bot{}", self.api.trim_end_matches('/'), self.token)
     }
 
     fn bot(&self) -> Bot {
@@ -139,6 +146,7 @@ fn bot_commands() -> Value {
         {"command":"requests","description":"Запросы на разрешение"},
         {"command":"board","description":"Доска задач"},
         {"command":"task","description":"Новая задача"},
+        {"command":"files","description":"Результаты и файлы задач"},
         {"command":"mail","description":"Почта"},
         {"command":"ask","description":"Написать агенту"},
         {"command":"agent","description":"Карточка агента"},
@@ -276,6 +284,10 @@ struct Bridge {
     task_seen: HashMap<String, agentsflow_events::TaskStatus>,
     /// Last notified state of department tasks.
     work_seen: HashMap<String, String>,
+    /// Files of the owner that have not gone to a task yet.
+    inbox: HashMap<i64, files::Inbox>,
+    fetched_tx: mpsc::UnboundedSender<files::Fetched>,
+    fetched_rx: Option<mpsc::UnboundedReceiver<files::Fetched>>,
 }
 
 impl Bridge {
@@ -299,6 +311,7 @@ impl Bridge {
                     .map(|work| (task.id.clone(), work_signature(work)))
             })
             .collect();
+        let (fetched_tx, fetched_rx) = mpsc::unbounded_channel();
         Self {
             pending_switch: None,
             project_lists: HashMap::new(),
@@ -330,6 +343,9 @@ impl Bridge {
             exported: false,
             task_seen,
             work_seen,
+            inbox: HashMap::new(),
+            fetched_tx,
+            fetched_rx: Some(fetched_rx),
         }
     }
     fn queue(&mut self, chat: i64, text: &str, key: Option<u64>) {
@@ -620,13 +636,46 @@ impl Bridge {
                             } else {
                                 "на приёмке"
                             };
+                            let mut rows = vec![
+                                vec![
+                                    json!({"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")}),
+                                    again,
+                                ],
+                                vec![note, open],
+                            ];
+                            rows.extend(self.file_row(id));
                             self.broadcast_buttons(
                                 &format!(
                                     "👀 <b>{dept}</b>: «{title}» готово, {who} · {}\n\n{summary}",
-                                    crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens)
+                                    crate::ledger::spent(
+                                        work.cost_usd,
+                                        work.input_tokens,
+                                        work.output_tokens
+                                    )
                                 ),
-                                json!({"inline_keyboard":[[{"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")},again],[note,open]]}),
+                                json!({"inline_keyboard":rows}),
                             );
+                        }
+                        // The owner has already seen what they accepted,
+                        // and an order only feeds the task that placed it.
+                        agentsflow_events::WorkState::Done
+                            if work.risk == agentsflow_events::Risk::Internal
+                                && !work.owner_review
+                                && work.parent.is_none() =>
+                        {
+                            if let Some(row) = self.file_row(id) {
+                                self.broadcast_buttons(
+                                    &format!(
+                                        "✅ <b>{dept}</b>: «{title}» готово · {}\n\n{summary}",
+                                        crate::ledger::spent(
+                                            work.cost_usd,
+                                            work.input_tokens,
+                                            work.output_tokens
+                                        )
+                                    ),
+                                    json!({"inline_keyboard":[row,[open]]}),
+                                );
+                            }
                         }
                         agentsflow_events::WorkState::Stuck => {
                             let reason = message_text(
@@ -1633,12 +1682,19 @@ impl Bridge {
                 return;
             }
             let chat = user.unwrap_or_default();
+            if self.take_file(chat, message) {
+                return;
+            }
             let raw = message.get("text").and_then(Value::as_str).unwrap_or("");
             let is_menu = raw.starts_with('/')
                 || matches!(
                     raw,
                     "👥 Команда" | "🔐 Запросы" | "📋 Доска" | "✉ Почта" | "⚙ Ещё"
                 );
+            // An answer must not overtake the files sent for it.
+            if !is_menu && self.hold_text(chat, raw, true) {
+                return;
+            }
             if !is_menu && self.inputs.contains_key(&chat) {
                 self.process_input(chat, raw).await;
                 return;
@@ -1660,6 +1716,10 @@ impl Bridge {
                 self.inputs.remove(&chat);
             }
             if self.handle_command(chat, raw).await {
+                return;
+            }
+            // Text after files is what to do with them.
+            if !is_menu && self.hold_text(chat, raw, false) {
                 return;
             }
             // Home mode: free text is a message for the orchestrator.
@@ -1965,6 +2025,7 @@ pub async fn run(
             bridge.handle_event(event);
         }
     }
+    let mut fetched = bridge.fetched_rx.take().expect("taken once");
     let (tx, mut updates) = mpsc::unbounded_channel();
     let polling = tokio::task::spawn_local(poll(config, tx, stop.clone()));
     let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -1990,8 +2051,9 @@ pub async fn run(
                        }
                        Err(_) => break,
                    },
+                   Some(file) = fetched.recv() => bridge.fetched(file),
                    Some(update) = updates.recv() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.update(&update) => {} },
-                   _ = tick.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = bridge.flush() => {} },
+                   _ = tick.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.settle_inbox().await; bridge.flush().await; } => {} },
                    _ = stats.tick() => if bridge.rejected > 0 { crate::server_diag!("telegram: ignored {} unauthorized updates", bridge.rejected); bridge.rejected = 0; },
                    _ = screens.tick() => tokio::select! { biased; _ = operation_stop.wait_for(|v| *v) => break, _ = async { bridge.refresh_screens().await; bridge.refresh_workflow().await; } => {} },
                }

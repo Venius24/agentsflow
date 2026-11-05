@@ -110,6 +110,8 @@ pub struct NewWork {
     pub questions: Vec<agentsflow_events::Question>,
     pub proposal: Option<agentsflow_events::DepartmentProposal>,
     pub small: bool,
+    /// Files of the owner, relative to the home folder.
+    pub attachments: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -217,10 +219,30 @@ impl Runs {
 
     /// A free-form owner message for the orchestrator.
     pub fn message(&self, text: &str) -> Result<(), String> {
+        self.message_with_files(text, Vec::new())
+    }
+
+    /// A message of the owner with files: they go to every task made from it.
+    pub fn message_with_files(&self, text: &str, files: Vec<String>) -> Result<(), String> {
         let orchestrator = self.shared.lock().unwrap().orchestrator.clone();
         orchestrator
             .ok_or_else(|| "оркестратор не запущен".to_owned())?
-            .message(text)
+            .message_with_files(text, files)
+    }
+
+    /// Where files of the owner wait, one folder per batch.
+    pub fn inbox_dir(&self) -> PathBuf {
+        self.home().state_dir().join("inbox")
+    }
+
+    /// Adds files of the owner to a task; its next run gets them.
+    pub fn attach(&self, task: &str, files: Vec<String>) -> Result<TaskSnapshot, String> {
+        self.hub
+            .update_work(AgentId::from(crate::orchestrator::FROM), task, |_, work| {
+                work.attachments.extend(files);
+                Ok(())
+            })
+            .map_err(|error| error.to_string())
     }
 
     pub fn hub(&self) -> &Hub {
@@ -337,6 +359,7 @@ impl Runs {
             source: new.source,
             questions: new.questions,
             proposal: new.proposal,
+            attachments: new.attachments,
             ..Default::default()
         };
         work.state = if ready(&work) {
@@ -832,6 +855,36 @@ fn copy_inputs(inputs: &[brief::Input], run_dir: &Path) -> anyhow::Result<Vec<br
     Ok(local)
 }
 
+/// Files of the owner, copied into `inputs/owner/<batch>/` of the run folder:
+/// the run may not read the state folder. What the run changed stays.
+fn copy_attachments(
+    root: &Path,
+    attachments: &[String],
+    run_dir: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut local = Vec::new();
+    for attachment in attachments {
+        let from = root.join(attachment);
+        let mut parts = attachment.rsplit('/');
+        let (Some(name), Some(batch)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let to = run_dir.join("inputs").join("owner").join(batch).join(name);
+        if !to.exists() {
+            if !from.is_file() {
+                crate::diag::diag("WARN", &format!("файла хозяина нет: {attachment}"));
+                continue;
+            }
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&from, &to)?;
+        }
+        local.push(to);
+    }
+    Ok(local)
+}
+
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     let Ok(entries) = std::fs::read_dir(from) else {
         return Ok(());
@@ -1194,6 +1247,7 @@ impl Engine {
         std::fs::create_dir_all(run_dir.join("artifacts"))?;
         let inputs = copy_inputs(inputs, &run_dir)?;
         let work = task.work.clone().unwrap_or_default();
+        let attachments = copy_attachments(&home.root, &work.attachments, &run_dir)?;
         let kind = dept.run_kind(work.small, work.fallback);
         crate::diag::diag(
             "INFO",
@@ -1204,6 +1258,7 @@ impl Engine {
             dept,
             task,
             &inputs,
+            &attachments,
             home.config.memory_digest_kb,
             &run_dir,
             requests.as_deref(),
@@ -2146,6 +2201,27 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&local[0].result).unwrap(), "цены");
         let table = run.join("inputs/t1/artifacts/raw/prices.md");
         assert_eq!(std::fs::read_to_string(table).unwrap(), "таблица");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn owner_files_are_copied_once_into_the_run_folder() {
+        let dir = std::env::temp_dir().join(format!("agentsflow-owner-{}", Uuid::new_v4()));
+        let inbox = dir.join(".agentsflow/inbox/ab12");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::write(inbox.join("счёт.txt"), "исходный").unwrap();
+        let run = dir.join("departments/general/runs/t1");
+        let files = vec![
+            ".agentsflow/inbox/ab12/счёт.txt".to_owned(),
+            ".agentsflow/inbox/ab12/пропал.txt".to_owned(),
+        ];
+        let local = copy_attachments(&dir, &files, &run).unwrap();
+        assert_eq!(local, vec![run.join("inputs/owner/ab12/счёт.txt")]);
+        assert_eq!(std::fs::read_to_string(&local[0]).unwrap(), "исходный");
+        // The next run keeps what this one changed.
+        std::fs::write(&local[0], "правка").unwrap();
+        copy_attachments(&dir, &files, &run).unwrap();
+        assert_eq!(std::fs::read_to_string(&local[0]).unwrap(), "правка");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

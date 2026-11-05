@@ -202,6 +202,9 @@ pub struct WorkInfo {
     /// The doer hit its usage limit: the agent of role `fallback` takes over.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fallback: bool,
+    /// Files the owner sent for this task, relative to the home folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

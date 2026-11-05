@@ -5,7 +5,7 @@ use super::*;
 use crate::hub::{MailError, MailMsg, TaskError, TaskPatch};
 use agentsflow_events::{TaskSnapshot, TaskStatus};
 
-pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. /rules — правила отделов, /spend — расходы, /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
+pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. Файлы присылайте с подписью или следующим сообщением, до 20 МБ. 📂 /files — результаты и файлы задач. /rules — правила отделов, /spend — расходы, /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
 
 pub(super) fn help_text() -> String {
     format!("{HELP}\nВерсия: {}", env!("CARGO_PKG_VERSION"))
@@ -399,6 +399,17 @@ impl Bridge {
         if !task.description.is_empty() {
             text.push_str(&format!("\n\n{}", self.safe(&task.description, 500)));
         }
+        if !work.attachments.is_empty() {
+            let names: Vec<&str> = work
+                .attachments
+                .iter()
+                .map(|file| file.rsplit('/').next().unwrap_or(file))
+                .collect();
+            text.push_str(&format!(
+                "\n📎 От вас: {}",
+                self.safe(&names.join(", "), 300)
+            ));
+        }
         if !work.result_summary.is_empty() {
             text.push_str(&format!(
                 "\n\n<b>Итог</b>\n{}",
@@ -414,6 +425,7 @@ impl Bridge {
         ));
         let id = &task.id;
         let mut rows = Vec::new();
+        rows.extend(self.file_row(id));
         match work.state {
             WorkState::Running => rows.push(vec![button("⏹ Стоп", format!("s:ta:{id}:stop"))]),
             WorkState::Review => {
@@ -1710,6 +1722,7 @@ impl Bridge {
         let command = command.split('@').next().unwrap_or("");
         match command {
             "/board" => self.open_board(chat, None, 9, 0).await,
+            "/files" => self.open_results(chat, None, 0).await,
             "/task" => {
                 if rest.is_empty() {
                     self.prompt_input(
@@ -1840,6 +1853,31 @@ impl Bridge {
                 .await
             }
             "ta" => flash = self.task_action(chat, message, arg(2), arg(3)).await,
+            "fo" => {
+                flash = self
+                    .open_reader(
+                        chat,
+                        message,
+                        arg(2),
+                        number(3).unwrap_or(0),
+                        number(4).unwrap_or(0),
+                    )
+                    .await
+            }
+            "fl" => {
+                flash = self
+                    .open_files(chat, message, arg(2), number(3).unwrap_or(0))
+                    .await
+            }
+            "fd" => flash = self.send_file(chat, arg(2), number(3).unwrap_or(0)),
+            "fr" => self.open_results(chat, message, number(2).unwrap_or(0)).await,
+            "fx" => {
+                flash = self.cancel_files(chat);
+                if let Some(message) = message {
+                    self.show(chat, Some(message), "📎 Файлы убраны".into(), Vec::new())
+                        .await;
+                }
+            }
             "rules" => self.open_rules(chat, message, "").await,
             "sp" => self.open_spend(chat, message, "").await,
             "sch" => self.open_schedules(chat, message, "").await,

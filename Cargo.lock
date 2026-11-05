@@ -32,6 +32,7 @@ dependencies = [
  "axum",
  "frankenstein",
  "futures-util",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

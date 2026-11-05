@@ -33,7 +33,8 @@ pub struct Orchestrator {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Trigger {
-    Owner(String),
+    /// Text of the owner and the files sent with it.
+    Owner(String, Vec<String>),
     Review(String),
     /// A department run ordered work from another department.
     Request {
@@ -67,13 +68,19 @@ impl Orchestrator {
             .map_err(|_| "оркестратор остановлен".to_owned())
     }
 
+    #[cfg(test)]
     pub fn message(&self, text: &str) -> Result<(), String> {
+        self.message_with_files(text, Vec::new())
+    }
+
+    /// The files go to every task made from this message.
+    pub fn message_with_files(&self, text: &str, files: Vec<String>) -> Result<(), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("пустое сообщение".into());
         }
         self.tx
-            .send(Trigger::Owner(text.to_owned()))
+            .send(Trigger::Owner(text.to_owned(), files))
             .map_err(|_| "оркестратор остановлен".to_owned())
     }
 }
@@ -119,15 +126,16 @@ impl Engine {
     /// Consecutive owner messages go to one session.
     fn next_trigger(&mut self) -> Option<Trigger> {
         let first = self.queue.pop_front()?;
-        let Trigger::Owner(mut text) = first else {
+        let Trigger::Owner(mut text, mut files) = first else {
             return Some(first);
         };
-        while let Some(Trigger::Owner(more)) = self.queue.front() {
+        while let Some(Trigger::Owner(more, more_files)) = self.queue.front() {
             text.push_str("\n\n");
             text.push_str(more);
+            files.extend(more_files.iter().cloned());
             self.queue.pop_front();
         }
-        Some(Trigger::Owner(text))
+        Some(Trigger::Owner(text, files))
     }
 
     fn on_event(&mut self, agent: AgentId, event: Event) {
@@ -195,7 +203,7 @@ impl Engine {
     ) {
         let home = self.runs.home();
         if !home.config.orchestrator.enabled {
-            if let Trigger::Owner(_) = trigger {
+            if let Trigger::Owner(..) = trigger {
                 self.tell(
                     "Оркестратор выключен",
                     "Сообщение не разобрано: в agentsflow.toml [orchestrator] enabled = false. Создайте задачу вручную.".into(),
@@ -231,7 +239,7 @@ impl Engine {
         }
         let outcome = reply.and_then(|text| parse_plan(&text));
         let kind = match &trigger {
-            Trigger::Owner(_) => "сообщение".to_owned(),
+            Trigger::Owner(..) => "сообщение".to_owned(),
             Trigger::Review(id) => format!("приёмка {id}"),
             Trigger::Request { parent, .. } => format!("заказ от {parent}"),
         };
@@ -261,14 +269,14 @@ impl Engine {
                 }
                 if !body.is_empty() {
                     let subject = match &trigger {
-                        Trigger::Owner(_) => "Разобрал сообщение",
+                        Trigger::Owner(..) => "Разобрал сообщение",
                         Trigger::Review(_) => "Приёмка",
                         Trigger::Request { .. } => "Заказ отдела",
                     };
                     self.tell(subject, body);
                 }
             }
-            (Err(error), Trigger::Owner(text)) => self.tell(
+            (Err(error), Trigger::Owner(text, _)) => self.tell(
                 "Не смог разобрать сообщение",
                 format!(
                     "{error}\n\nСообщение: {}\nПовторите его или создайте задачу вручную.",
@@ -445,9 +453,18 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
         }
     }
     match trigger {
-        Trigger::Owner(text) => {
+        Trigger::Owner(text, files) => {
             out.push_str("\n# Сообщение хозяина\n\n");
             out.push_str(text.trim());
+            if !files.is_empty() {
+                out.push_str("\n\nК сообщению приложены файлы:\n");
+                for file in files {
+                    out.push_str(&format!("- {}\n", file.rsplit('/').next().unwrap_or(file)));
+                }
+                out.push_str(
+                    "Шлюз сам положит их в папку каждой задачи из этого сообщения и назовёт в брифе. Ты их не открываешь: упомяни в постановке, что с ними сделать.",
+                );
+            }
             out.push_str(
                 "\n\nРазложи его на задачи по отделам. Если это ответ на открытый вопрос — \
                  вопросы задаются карточками, ответ хозяин даёт кнопкой; просто скажи ему об этом.\n",
@@ -639,7 +656,7 @@ fn parse_plan(text: &str) -> Result<Plan, String> {
 fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
     let by = AgentId::from(FROM);
     let source = match trigger {
-        Trigger::Owner(_) => "owner",
+        Trigger::Owner(..) => "owner",
         Trigger::Review(_) => "orchestrator",
         Trigger::Request { .. } => "request",
     };
@@ -664,6 +681,11 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
         }),
         _ => None,
     };
+    let attachments = match trigger {
+        Trigger::Owner(_, files) => files.clone(),
+        _ => Vec::new(),
+    };
+    let mut attached = false;
     let mut ordered: Vec<String> = Vec::new();
     let mut keys: HashMap<String, String> = HashMap::new();
     let mut report = Vec::new();
@@ -722,6 +744,7 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                 questions,
                 proposal,
                 small: task.size.as_deref() == Some("small"),
+                attachments: attachments.clone(),
             };
             if new.title.is_empty() {
                 report.push("⚠ задача без названия пропущена".into());
@@ -729,6 +752,7 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
             }
             match runs.create(by.clone(), new) {
                 Ok(created) => {
+                    attached = true;
                     let work = created.work.as_ref().expect("work task");
                     report.push(format!(
                         "• {} → {} ({}){}",
@@ -795,6 +819,11 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
             });
             runs.kick();
         }
+    }
+    if !attachments.is_empty() && !attached {
+        report.push(
+            "📎 Задач из сообщения не вышло, файлы никуда не ушли: пришлите их с задачей".into(),
+        );
     }
     for action in decisions {
         let line = match action {
@@ -919,6 +948,50 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("no mail {subject:?}: {:?}", hub.mail_all());
+    }
+
+    #[test]
+    fn files_go_to_every_task_of_the_message_and_are_named_to_the_model() {
+        let reply = r#"{"message":"","actions":[
+ {"type":"create_task","title":"Первая","text":"x","department":"general","questions":["?"]},
+ {"type":"create_task","title":"Вторая","text":"y","department":"general","questions":["?"]}
+]}"#;
+        with_orchestrator(reply, async |orchestrator, _, hub, _| {
+            let file = ".agentsflow/inbox/ab12/цены.xlsx".to_owned();
+            orchestrator
+                .message_with_files("сравни цены", vec![file.clone()])
+                .unwrap();
+            wait_mail(&hub, "Разобрал сообщение").await;
+            for task in hub.tasks(false) {
+                assert_eq!(task.work.unwrap().attachments, vec![file.clone()]);
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("agentsflow-prompt-{}", uuid::Uuid::new_v4()));
+        crate::home::init(&dir).unwrap();
+        let home = Home::load(&dir).unwrap();
+        let text = prompt(
+            &home,
+            &[],
+            &Trigger::Owner(
+                "сравни".into(),
+                vec![".agentsflow/inbox/ab12/цены.xlsx".into()],
+            ),
+        );
+        assert!(text.contains("- цены.xlsx"));
+        assert!(!text.contains(".agentsflow/inbox"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn files_without_a_task_are_reported() {
+        let reply = r#"{"message":"Просто отвечаю.","actions":[]}"#;
+        with_orchestrator(reply, async |orchestrator, _, hub, _| {
+            orchestrator
+                .message_with_files("что это?", vec![".agentsflow/inbox/a/b.txt".into()])
+                .unwrap();
+            let body = wait_mail(&hub, "Разобрал сообщение").await;
+            assert!(body.contains("файлы никуда не ушли"), "{body}");
+        });
     }
 
     #[test]
