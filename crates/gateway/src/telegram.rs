@@ -90,6 +90,10 @@ impl Config {
     }
 }
 
+/// How much of a mail fits into the chat: Telegram allows 4096 characters.
+const MAIL_DIRECT_LIMIT: usize = 3500;
+const MAIL_PREVIEW_LIMIT: usize = 400;
+
 fn message_text(text: &str, token: &str, limit: usize) -> String {
     let source = redact(text, token);
     let mut result = String::new();
@@ -163,11 +167,27 @@ fn bot_commands() -> Value {
     ]})
 }
 
+/// Minutes east of UTC for the times the bot shows, from `utc_offset` of the home.
+static DISPLAY_OFFSET_MINUTES: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+
+pub fn set_display_offset(minutes: i32) {
+    let _ = DISPLAY_OFFSET_MINUTES.set(minutes);
+}
+
 fn format_time(timestamp_ms: u64, now_ms: u64) -> String {
-    let seconds = timestamp_ms / 1000;
+    format_time_at(
+        timestamp_ms,
+        now_ms,
+        DISPLAY_OFFSET_MINUTES.get().copied().unwrap_or(0),
+    )
+}
+
+fn format_time_at(timestamp_ms: u64, now_ms: u64, offset_minutes: i32) -> String {
+    let shift = |ms: u64| ms.saturating_add_signed(i64::from(offset_minutes) * 60_000);
+    let seconds = shift(timestamp_ms) / 1000;
     let days = seconds / 86_400;
     let time = format!("{:02}:{:02}", seconds % 86_400 / 3600, seconds % 3600 / 60);
-    let today = now_ms / 86_400_000;
+    let today = shift(now_ms) / 86_400_000;
     if days == today {
         return time;
     }
@@ -383,6 +403,16 @@ impl Bridge {
             }
         }
     }
+    /// The workflow of a department or of the orchestrator.
+    fn reports_itself(&self, name: &str) -> bool {
+        name == "orchestrator"
+            || self
+                .control
+                .as_ref()
+                .and_then(|control| control.runs.as_ref())
+                .is_some_and(|runs| runs.home().departments.contains_key(name))
+    }
+
     fn broadcast_buttons(&mut self, text: &str, buttons: Value) {
         for chat in self.config.users.clone() {
             if !self.muted.contains(&chat) {
@@ -551,19 +581,47 @@ impl Bridge {
                 ..
             } if to == AgentId::orchestrator() => {
                 let limit = from.as_str() == crate::runs::NOTICE_FROM && subject.contains("лимит");
-                let from = message_text(from.as_str(), &self.config.token, 100);
-                let subject = message_text(&subject, &self.config.token, 200);
-                let body = message_text(&body, &self.config.token, 400);
-                let mut row = vec![
-                    json!({"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}),
-                ];
-                if limit {
-                    row.push(json!({"text":"💰 Расходы","callback_data":"s:sp"}));
+                // The orchestrator talks to the owner: its words are the
+                // message itself, not a preview of a letter to open.
+                let direct = from.as_str() == crate::orchestrator::FROM;
+                let size = if direct {
+                    MAIL_DIRECT_LIMIT
+                } else {
+                    MAIL_PREVIEW_LIMIT
+                };
+                let mut text = message_text(&body, &self.config.token, size);
+                let cut = text.chars().count() + 8 >= size;
+                if cut {
+                    text.push_str("\n…");
                 }
-                self.broadcast_buttons(
-                    &format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{body}"),
-                    json!({ "inline_keyboard": [row] }),
-                );
+                let mut rows = Vec::new();
+                let result_of = subject
+                    .strip_prefix(crate::orchestrator::RESULT_SUBJECT)
+                    .and_then(|rest| rest.split(':').next());
+                if let Some(row) = result_of.and_then(|id| self.file_row(id)) {
+                    rows.push(row);
+                }
+                if !direct || (cut && rows.is_empty()) {
+                    let mut row = vec![
+                        json!({"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}),
+                    ];
+                    if limit {
+                        row.push(json!({"text":"💰 Расходы","callback_data":"s:sp"}));
+                    }
+                    rows.push(row);
+                }
+                let subject = message_text(&subject, &self.config.token, 200);
+                let message = if direct {
+                    format!("🧭 <i>{subject}</i>\n{text}")
+                } else {
+                    let from = message_text(from.as_str(), &self.config.token, 100);
+                    format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{text}")
+                };
+                if rows.is_empty() {
+                    self.broadcast(&message, None);
+                } else {
+                    self.broadcast_buttons(&message, json!({ "inline_keyboard": rows }));
+                }
             }
             Event::Rule {
                 target,
@@ -573,11 +631,16 @@ impl Bridge {
             } => {
                 let who = message_text(&target, &self.config.token, 40);
                 let rule = message_text(&text, &self.config.token, 800);
+                let (head, yes) = if crate::rules::is_share(&id) {
+                    ("предлагает факт в вашу память проекта", "✅ В память")
+                } else {
+                    ("предлагает правило", "✅ Добавить")
+                };
                 self.broadcast_buttons(
-                    &format!("📜 <b>{who}</b> предлагает правило:
+                    &format!("📜 <b>{who}</b> {head}:
 
 {rule}"),
-                    json!({"inline_keyboard":[[{"text":"✅ Добавить","callback_data":format!("s:rl:{target}:{id}:a")},{"text":"✖ Отклонить","callback_data":format!("s:rl:{target}:{id}:r")}]]}),
+                    json!({"inline_keyboard":[[{"text":yes,"callback_data":format!("s:rl:{target}:{id}:a")},{"text":"✖ Отклонить","callback_data":format!("s:rl:{target}:{id}:r")}]]}),
                 );
             }
             Event::Task { task } if task.work.is_some() => {
@@ -724,7 +787,11 @@ impl Bridge {
                 status,
                 detail,
                 ..
-            } if matches!(status, WorkflowStatus::Finished | WorkflowStatus::Failed) => {
+            } if matches!(status, WorkflowStatus::Finished | WorkflowStatus::Failed)
+                // A task run reports through its card, the orchestrator through
+                // its message: a separate line about the workflow is only noise.
+                && !self.reports_itself(&name) =>
+            {
                 let text = match status {
                     WorkflowStatus::Finished => format!("🔁 Workflow «{name}»: завершён"),
                     _ if detail == "stopped" => format!("⏹ Workflow «{name}»: остановлен"),
@@ -2135,6 +2202,18 @@ mod tests {
             "вчера 22:13"
         );
         assert_eq!(format_time(0, 3 * 86_400_000), "01.01 00:00");
+        // 19:47 UTC is 00:47 of the next day at +05:00, and that day is today there.
+        let evening = 1_793_821_620_000;
+        assert_eq!(format_time_at(evening, evening, 0), "19:47");
+        assert_eq!(format_time_at(evening, evening, 300), "00:47");
+        assert_eq!(
+            format_time_at(evening, evening + 6 * 3_600_000, 300),
+            "00:47"
+        );
+        assert_eq!(
+            format_time_at(evening - 3_600_000, evening, 300),
+            "вчера 23:47"
+        );
         assert_eq!(menu_keyboard()["is_persistent"], true);
         assert!(
             bot_commands()["commands"]

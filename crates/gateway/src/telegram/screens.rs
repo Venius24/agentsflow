@@ -927,6 +927,39 @@ impl Bridge {
         rows.push(vec![button("← Назад", "s:m:0")]);
         self.show(chat, existing, text, rows).await;
     }
+    /// A reply to a letter of the orchestrator: an answer to the one question
+    /// the letter is about, or else a message for the orchestrator.
+    async fn reply_to_orchestrator(&mut self, chat: i64, subject: &str, letter: &str, text: &str) {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            self.queue(
+                chat,
+                "Оркестратор работает только в режиме serve --home",
+                None,
+            );
+            return;
+        };
+        if let Some(id) = asked_in(letter, &self.hub.tasks(false)) {
+            let flash = match runs.answer(&id, text) {
+                Ok(_) => "✔ Ответ записан".to_owned(),
+                Err(error) => error,
+            };
+            self.open_task(chat, None, &id, &flash).await;
+            return;
+        }
+        let quoted: String = letter.chars().take(1000).collect();
+        let message =
+            format!("Ответ на твоё письмо «{subject}»:\n{quoted}\n\nХозяин отвечает: {text}");
+        let answer = if !self.config.prompts {
+            "Отправка заданий из Telegram выключена владельцем".to_owned()
+        } else {
+            match runs.message(&message) {
+                Ok(()) => "🧭 Принял, разбираю…".to_owned(),
+                Err(error) => format!("Не получилось: {error}"),
+            }
+        };
+        self.queue(chat, &answer, None);
+    }
+
     async fn send_mail_text(
         &mut self,
         chat: i64,
@@ -1672,6 +1705,19 @@ impl Bridge {
                     return;
                 };
                 let last = found.messages.last().expect("thread has mail");
+                // The orchestrator's letters come from a name nobody reads mail
+                // under: the reply must reach the task or the orchestrator itself.
+                let letter = found
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|mail| mail.from.as_str() == crate::orchestrator::FROM)
+                    .map(|mail| mail.body.clone());
+                if let Some(letter) = letter {
+                    self.reply_to_orchestrator(chat, &found.subject, &letter, text)
+                        .await;
+                    return;
+                }
                 let to = if last.from == AgentId::orchestrator() {
                     last.to.clone()
                 } else {
@@ -2044,6 +2090,19 @@ impl Bridge {
         }
         flash
     }
+}
+
+/// The only task with an open question that a letter names, by id or title.
+fn asked_in(letter: &str, tasks: &[TaskSnapshot]) -> Option<String> {
+    let mut named = tasks.iter().filter(|task| {
+        let open = task
+            .work
+            .as_ref()
+            .is_some_and(|work| work.questions.iter().any(|q| q.answer.is_none()));
+        open && (letter.contains(&task.id) || letter.contains(&task.title))
+    });
+    let first = named.next()?;
+    named.next().is_none().then(|| first.id.clone())
 }
 
 #[cfg(test)]

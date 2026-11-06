@@ -205,6 +205,10 @@ pub struct WorkInfo {
     /// Files the owner sent for this task, relative to the home folder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
+    /// The repository of the department this task works in, chosen by the
+    /// orchestrator; none means the department's first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

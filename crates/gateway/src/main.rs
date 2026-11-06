@@ -1,4 +1,5 @@
 mod brief;
+mod cdp;
 mod cli;
 mod department;
 mod diag;
@@ -11,12 +12,14 @@ mod ledger;
 mod mail;
 mod mail_mcp;
 mod orchestrator;
+mod projectmem;
 mod projects;
 mod rules;
 mod runs;
 mod runtime;
 mod schedule;
 mod server;
+mod sites;
 mod team;
 mod telegram;
 #[cfg(test)]
@@ -73,6 +76,15 @@ async fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("mail-mcp: {error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().is_some_and(|arg| arg == "site-mcp") {
+        return match sites::run(&args[1..]).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("site-mcp: {error:#}");
                 ExitCode::FAILURE
             }
         };

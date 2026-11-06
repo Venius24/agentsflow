@@ -74,6 +74,10 @@ impl RunEnv {
         if let Some(spawner) = &self.spawner {
             return spawner(hub, member, dir);
         }
+        // A department with repositories: Claude starts in the first one and
+        // loads its CLAUDE.md and skills; the guard still judges by the run
+        // folder. Codex keeps the run folder (its sandbox writes only there).
+        let in_repo = member.kind == agentsflow_events::AgentKind::Claude && !member.repos.is_empty();
         spawn_member(
             hub,
             member,
@@ -83,8 +87,42 @@ impl RunEnv {
                 effort: member.effort.clone(),
                 codex_bin: self.codex_bin.clone(),
                 mail: None,
+                mcp: site_tools(member, dir),
+                workdir: in_repo
+                    .then(|| member.workdir.clone().unwrap_or_else(|| member.repos[0].clone())),
+                add_dirs: if in_repo {
+                    crate::projectmem::add_dirs(&member.repos, dir)
+                } else {
+                    Vec::new()
+                },
+                env: if in_repo {
+                    let (key, value) = crate::projectmem::NO_AUTO_MEMORY;
+                    vec![(key.to_owned(), value.to_owned())]
+                } else {
+                    Vec::new()
+                },
             },
         )
+    }
+}
+
+/// A run folder is `<home>/departments/<id>/runs/<task>`.
+fn site_tools(
+    member: &crate::team::Member,
+    run_dir: &Path,
+) -> Option<agentsflow_adapters::ExtraMcp> {
+    if member.sites.is_empty() {
+        return None;
+    }
+    let department = run_dir.parent()?.parent()?;
+    let home = department.parent()?.parent()?;
+    let id = department.file_name()?.to_str()?;
+    match crate::sites::access(home, id, &member.sites, run_dir) {
+        Ok(tools) => Some(tools),
+        Err(error) => {
+            crate::diag::diag("WARN", &format!("инструменты входа {id}: {error:#}"));
+            None
+        }
     }
 }
 
@@ -224,10 +262,50 @@ impl Runs {
 
     /// A message of the owner with files: they go to every task made from it.
     pub fn message_with_files(&self, text: &str, files: Vec<String>) -> Result<(), String> {
+        // A login code dies in minutes: it goes straight to the one task that
+        // asked for it, without waiting for an orchestrator session.
+        if files.is_empty()
+            && let Some(id) = self.task_awaiting_code(text.trim())
+        {
+            let task = self.answer(&id, text.trim())?;
+            let _ = self.hub.send_mail(
+                AgentId::from(crate::orchestrator::FROM),
+                AgentId::orchestrator(),
+                "Передал код".into(),
+                format!("Код ушёл в задачу «{}».", task.title),
+                None,
+            );
+            return Ok(());
+        }
         let orchestrator = self.shared.lock().unwrap().orchestrator.clone();
         orchestrator
             .ok_or_else(|| "оркестратор не запущен".to_owned())?
             .message_with_files(text, files)
+    }
+
+    /// The task a bare number answers: the only one asking for a code.
+    fn task_awaiting_code(&self, text: &str) -> Option<String> {
+        if !(4..=8).contains(&text.chars().count()) || !text.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        let asks_code = |question: &agentsflow_events::Question| {
+            question
+                .text
+                .to_lowercase()
+                .split(|c: char| !c.is_alphabetic())
+                .any(|word| matches!(word, "код" | "кода" | "коду" | "кодом" | "коды"))
+        };
+        let mut asking = self.hub.tasks(false).into_iter().filter(|task| {
+            task.work.as_ref().is_some_and(|work| {
+                work.state == WorkState::Waiting
+                    && work
+                        .questions
+                        .iter()
+                        .any(|q| q.answer.is_none() && asks_code(q))
+            })
+        });
+        let first = asking.next()?;
+        asking.next().is_none().then_some(first.id)
     }
 
     /// Where files of the owner wait, one folder per batch.
@@ -811,6 +889,45 @@ fn take_request(run_dir: &std::path::Path) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Files an order hands to the other department: the agent puts them here,
+/// the gateway moves them to the inbox and attaches them to the new task.
+pub const REQUEST_DIR: &str = "request";
+
+/// Moves the files of an order out of the run folder into a new inbox batch
+/// and returns them as attachments (paths relative to the home).
+fn take_request_files(root: &Path, inbox: &Path, run_dir: &Path) -> Vec<String> {
+    let dir = run_dir.join(REQUEST_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let batch = Uuid::new_v4().simple().to_string()[..8].to_owned();
+    let to_dir = inbox.join(&batch);
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let from = entry.path();
+        if !from.is_file() {
+            continue;
+        }
+        let Some(name) = from.file_name() else {
+            continue;
+        };
+        let to = to_dir.join(name);
+        let moved = std::fs::create_dir_all(&to_dir)
+            .and_then(|()| std::fs::copy(&from, &to))
+            .is_ok();
+        if !moved {
+            crate::diag::diag("WARN", &format!("файл заказа не перенесён: {}", from.display()));
+            continue;
+        }
+        if let Ok(rel) = to.strip_prefix(root) {
+            files.push(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    files.sort();
+    files
+}
+
 /// Questions for the owner an agent leaves in the run folder, one per line.
 pub const QUESTIONS_FILE: &str = "questions.md";
 
@@ -1254,6 +1371,10 @@ impl Engine {
             &format!("запуск {run_id}: задача {} [{}] {kind:?}", task.id, dept.id),
         );
         let requests = request_catalog(home, &self.hub, task);
+        let mut project = crate::projectmem::RunProject::new(&dept.repos, work.repo.as_deref());
+        if dept.worktree {
+            project = project.with_worktree(&run_dir, &task.id)?;
+        }
         let text = brief::build(
             dept,
             task,
@@ -1262,9 +1383,14 @@ impl Engine {
             home.config.memory_digest_kb,
             &run_dir,
             requests.as_deref(),
+            &project,
         );
         std::fs::write(run_dir.join("brief.md"), &text)?;
         let mut plan = dept.run_plan(&task.id, kind)?;
+        for member in &mut plan.team.members {
+            member.repos = project.repos.clone();
+            member.workdir = project.worktree.clone();
+        }
         plan.spec.bind("brief", text);
         for file in [REQUEST_FILE, QUESTIONS_FILE] {
             let _ = std::fs::remove_file(run_dir.join(file));
@@ -1370,7 +1496,7 @@ impl Engine {
 
     /// The run ordered work from another department: the task waits until
     /// the orchestrator files the order and the order is done.
-    fn request(&mut self, task: &str, text: String, now: u64) {
+    fn request(&mut self, task: &str, text: String, files: Vec<String>, now: u64) {
         let depth = ancestors(&self.hub, task).len();
         let orchestrator = self.shared.lock().unwrap().orchestrator.clone();
         let refusal = if depth >= MAX_REQUEST_DEPTH {
@@ -1403,7 +1529,7 @@ impl Engine {
         });
         if refusal.is_none()
             && let Some(orchestrator) = orchestrator
-            && let Err(error) = orchestrator.request(task, &text)
+            && let Err(error) = orchestrator.request(task, &text, files)
         {
             self.mark_stuck(task, error);
         }
@@ -1419,7 +1545,19 @@ impl Engine {
         let now = now_ms();
         let task = finished.task.clone();
         if let Some(dept) = home.departments.get(&active.department) {
-            match crate::rules::harvest(&dept.id, &dept.dir, &task, &active.run_dir) {
+            if !dept.sites.is_empty() {
+                tokio::task::spawn_local(crate::sites::after_run(
+                    home.root.clone(),
+                    dept.id.clone(),
+                ));
+            }
+            match crate::rules::harvest(
+                &dept.id,
+                &dept.dir,
+                &task,
+                &active.run_dir,
+                home.config.offset_minutes(),
+            ) {
                 Ok((_, Some(proposal))) => publish_rule(
                     &self.hub,
                     proposal.target,
@@ -1430,11 +1568,42 @@ impl Engine {
                 Ok(_) => {}
                 Err(error) => crate::server_diag!("memory harvest failed: {error:#}"),
             }
+            if !dept.repos.is_empty() {
+                match crate::rules::harvest_share(&dept.id, &dept.dir, &task, &active.run_dir) {
+                    Ok(Some(proposal)) => publish_rule(
+                        &self.hub,
+                        proposal.target,
+                        proposal.id,
+                        proposal.text,
+                        RuleStatus::Proposed,
+                    ),
+                    Ok(None) => {}
+                    Err(error) => crate::server_diag!("share harvest failed: {error:#}"),
+                }
+            }
+            // The task's branch goes back to the owner's repository.
+            if dept.worktree && active.run_dir.join("repo").join(".git").exists() {
+                let chosen = self.hub.task(&task).and_then(|t| t.work).and_then(|w| w.repo);
+                let project = crate::projectmem::RunProject {
+                    worktree: Some(active.run_dir.join("repo")),
+                    branch: format!("agentsflow/{task}"),
+                    ..crate::projectmem::RunProject::new(&dept.repos, chosen.as_deref())
+                };
+                if let Err(error) = project.publish() {
+                    crate::diag::diag("WARN", &format!("ветка задачи {task} не забрана: {error:#}"));
+                }
+            }
         }
         if finished.result.is_ok()
             && let Some(request) = take_request(&active.run_dir)
         {
-            self.request(&task, request, now);
+            let home = self.home();
+            let files = take_request_files(
+                &home.root,
+                &home.state_dir().join("inbox"),
+                &active.run_dir,
+            );
+            self.request(&task, request, files, now);
             return;
         }
         let questions = take_questions(&active.run_dir);
@@ -2016,6 +2185,33 @@ mod tests {
     }
 
     #[test]
+    fn bare_code_goes_to_the_only_task_that_asks_for_it() {
+        offline(async |runs, _, _| {
+            let ask = |question: &str| {
+                let mut new = waiting("pr");
+                new.depends_on = vec![];
+                new.questions = vec![agentsflow_events::Question {
+                    text: question.into(),
+                    answer: None,
+                    from: "оркестратор".into(),
+                }];
+                runs.create(AgentId::from("owner"), new).unwrap().id
+            };
+            ask("Укажите путь к репозитории, содержащего файл");
+            assert_eq!(runs.task_awaiting_code("474315"), None);
+            let login = ask("Пришлите код из письма Kaspi");
+            assert_eq!(runs.task_awaiting_code("отправь"), None);
+            assert_eq!(runs.task_awaiting_code("123"), None);
+            assert_eq!(
+                runs.task_awaiting_code("474315").as_deref(),
+                Some(login.as_str())
+            );
+            ask("Нужен код подтверждения");
+            assert_eq!(runs.task_awaiting_code("474315"), None);
+        });
+    }
+
+    #[test]
     fn answers_release_waiting_tasks() {
         offline(async |runs, hub, _| {
             let mut new = waiting("pr");
@@ -2222,6 +2418,26 @@ mod tests {
         std::fs::write(&local[0], "правка").unwrap();
         copy_attachments(&dir, &files, &run).unwrap();
         assert_eq!(std::fs::read_to_string(&local[0]).unwrap(), "правка");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn order_files_move_to_the_inbox_and_reach_the_next_run() {
+        let dir = std::env::temp_dir().join(format!("agentsflow-order-{}", Uuid::new_v4()));
+        let run = dir.join("departments/baitaq/runs/t1");
+        std::fs::create_dir_all(run.join(REQUEST_DIR)).unwrap();
+        std::fs::write(run.join(REQUEST_DIR).join("groups_apply.py"), "print(1)").unwrap();
+        let inbox = dir.join(".agentsflow/inbox");
+        let files = take_request_files(&dir, &inbox, &run);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].starts_with(".agentsflow/inbox/") && files[0].ends_with("/groups_apply.py"));
+        assert!(!run.join(REQUEST_DIR).exists());
+        // The ordered task gets them like the owner's files.
+        let other = dir.join("departments/dev/runs/t2");
+        let local = copy_attachments(&dir, &files, &other).unwrap();
+        assert_eq!(std::fs::read_to_string(&local[0]).unwrap(), "print(1)");
+        // No folder, no files.
+        assert!(take_request_files(&dir, &inbox, &run).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

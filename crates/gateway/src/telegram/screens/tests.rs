@@ -252,6 +252,69 @@ async fn review_and_blocked_notifications_have_buttons() {
 }
 
 #[tokio::test]
+async fn a_reply_to_the_orchestrator_does_not_go_to_an_empty_mailbox() {
+    let hub = Hub::new();
+    hub.set_mail_enabled(true);
+    let letter = hub
+        .send_mail(
+            AgentId::from(crate::orchestrator::FROM),
+            AgentId::orchestrator(),
+            "Приёмка".into(),
+            "Напишите «готов»".into(),
+            None,
+        )
+        .unwrap();
+    let (mut bridge, _calls, server) = fake(hub.clone()).await;
+    bridge.update(&cb(&format!("s:mr:{}", letter.thread))).await;
+    bridge.update(&msg("готов")).await;
+    let last = hub.mail_all().pop().unwrap();
+    assert_eq!(last.id, letter.id, "no mail to a name nobody reads");
+    assert!(bridge.queues[&11].back().unwrap().text.contains("--home"));
+    server.abort();
+}
+
+#[test]
+fn a_letter_answers_only_the_one_task_it_names() {
+    let task = |id: &str, title: &str, open: bool| TaskSnapshot {
+        id: id.into(),
+        title: title.into(),
+        description: String::new(),
+        status: agentsflow_events::TaskStatus::Backlog,
+        assignee: None,
+        progress: 0,
+        labels: Vec::new(),
+        note: String::new(),
+        thread: None,
+        created_ms: 0,
+        updated_ms: 0,
+        work: Some(agentsflow_events::WorkInfo {
+            questions: vec![agentsflow_events::Question {
+                text: "где?".into(),
+                answer: (!open).then(|| "там".to_owned()),
+                from: "оркестратор".into(),
+            }],
+            ..Default::default()
+        }),
+    };
+    let tasks = [
+        task("aaaa1111", "Каспи", true),
+        task("bbbb2222", "Цены", true),
+        task("cccc3333", "Договор", false),
+    ];
+    assert_eq!(
+        asked_in("задача aaaa1111 ждёт", &tasks).as_deref(),
+        Some("aaaa1111")
+    );
+    assert_eq!(
+        asked_in("вопросы по «Цены»", &tasks).as_deref(),
+        Some("bbbb2222")
+    );
+    assert_eq!(asked_in("Каспи и Цены", &tasks), None);
+    assert_eq!(asked_in("вопросы по «Договор»", &tasks), None);
+    assert_eq!(asked_in("ни о чём", &tasks), None);
+}
+
+#[tokio::test]
 async fn mail_list_thread_reply_and_new() {
     let hub = Hub::new();
     hub.set_mail_enabled(true);

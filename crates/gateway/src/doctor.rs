@@ -192,8 +192,11 @@ pub async fn run(options: Options) -> bool {
                 model: Some("haiku".into()),
                 cwd: Some(dir.clone()),
                 mail: None,
+                mcp: None,
                 effort: None,
                 bypass: false,
+                add_dirs: Vec::new(),
+                env: Vec::new(),
             })
             .await
             {

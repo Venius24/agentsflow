@@ -90,6 +90,15 @@ pub struct SpawnEnv {
     pub effort: Option<String>,
     pub codex_bin: Option<PathBuf>,
     pub mail: Option<agentsflow_adapters::MailConfig>,
+    /// More tools for this agent; Claude only.
+    pub mcp: Option<agentsflow_adapters::ExtraMcp>,
+    /// Where the agent process starts, when not `cwd` (a project repository).
+    /// `cwd` stays the folder the guard judges paths by. Claude only.
+    pub workdir: Option<PathBuf>,
+    /// More folders the agent may work in. Claude only.
+    pub add_dirs: Vec<PathBuf>,
+    /// Extra environment of the agent. Claude only.
+    pub env: Vec<(String, String)>,
 }
 
 /// Starts one member as an actor; `member.mode` and `member.sandbox` must
@@ -101,6 +110,10 @@ pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHa
         effort,
         codex_bin,
         mail,
+        mcp,
+        workdir,
+        add_dirs,
+        env,
     } = env;
     let yes = member.mode != Some(AccessMode::Ask);
     let bypass = member.mode == Some(AccessMode::Bypass);
@@ -118,11 +131,14 @@ pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHa
             smart,
             move || {
                 ClaudeSession::start(ClaudeOptions {
-                    cwd: Some(cwd.clone()),
+                    cwd: Some(workdir.clone().unwrap_or_else(|| cwd.clone())),
                     model: model.clone(),
                     mail: mail.clone(),
                     effort: effort.clone(),
                     bypass,
+                    mcp: mcp.clone(),
+                    add_dirs: add_dirs.clone(),
+                    env: env.clone(),
                 })
             },
         ),
@@ -216,6 +232,10 @@ impl Runtime {
                     effort,
                     codex_bin: options.codex_bin.clone(),
                     mail: mail_config,
+                    mcp: None,
+                    workdir: None,
+                    add_dirs: Vec::new(),
+                    env: Vec::new(),
                 },
             );
             tasks.push(task);

@@ -25,6 +25,14 @@ pub const FROM: &str = "оркестратор";
 const AGENT_PREFIX: &str = "orchestrator:plan:";
 const TIMEOUT: Duration = Duration::from_secs(600);
 const RESULT_LIMIT: usize = 6000;
+/// Subject of a mail that carries a task result: the chat adds its file buttons.
+pub const RESULT_SUBJECT: &str = "Итог задачи ";
+/// How many closed tasks the orchestrator sees, newest first.
+const RECENT_CLOSED: usize = 8;
+const DIALOG_FILE: &str = "dialog.jsonl";
+/// Exchanges of the conversation each session gets; every session starts fresh.
+const DIALOG_TURNS: usize = 6;
+const DIALOG_TEXT: usize = 600;
 
 #[derive(Clone)]
 pub struct Orchestrator {
@@ -40,6 +48,8 @@ enum Trigger {
     Request {
         parent: String,
         text: String,
+        /// Files the ordering run handed over, already in the inbox.
+        files: Vec<String>,
     },
 }
 
@@ -59,11 +69,12 @@ impl Orchestrator {
 
     /// A free-form message of the owner: tasks, answers, anything.
     /// An order of a department run, filed as a task of another department.
-    pub fn request(&self, parent: &str, text: &str) -> Result<(), String> {
+    pub fn request(&self, parent: &str, text: &str, files: Vec<String>) -> Result<(), String> {
         self.tx
             .send(Trigger::Request {
                 parent: parent.to_owned(),
                 text: text.to_owned(),
+                files,
             })
             .map_err(|_| "оркестратор остановлен".to_owned())
     }
@@ -267,6 +278,9 @@ impl Engine {
                     }
                     body.push_str(&report.join("\n"));
                 }
+                if let Trigger::Owner(text, _) = &trigger {
+                    remember(&home, text, &body);
+                }
                 if !body.is_empty() {
                     let subject = match &trigger {
                         Trigger::Owner(..) => "Разобрал сообщение",
@@ -310,6 +324,9 @@ impl Engine {
             title: "оркестратор".into(),
             roles: vec!["lead".into()],
             lead: true,
+            sites: Vec::new(),
+            repos: Vec::new(),
+            workdir: None,
         };
         let mut spec = Spec::parse(
             "name = \"orchestrator\"\n[[step]]\nid = \"plan\"\nagent = \"lead\"\nprompt = \"{brief}\"\n",
@@ -406,6 +423,8 @@ const FORMAT: &str = r#"# Как ответить
 - {"type":"create_task","key":"a","title":"...","text":"полная постановка: что сделать, откуда данные, какой результат, твои предположения","department":"id отдела","risk":"internal|external","depends_on":["ключ или id задачи"],"questions":["вопрос хозяину"],"budget_usd":2.0}
   key — метка для depends_on внутри этого ответа; questions — только если без ответа будет угадывание (задача подождёт ответа); risk, depends_on, questions, budget_usd, size необязательны.
   "size":"small" — мелкая задача: короткая справка, правка пары строк, одно простое действие. Её сделает один быстрый агент без ревью. Сомневаешься — не ставь; external мелким не бывает.
+  "repo":"путь" — репозиторий из списка отдела, в котором делать задачу. Не указан — основной (первый). У отдела один репозиторий — не указывай.
+  Как выбрать отдел: работа в магазине по списку или файлу заданий (доноры, группы, сверки) — в отдел этого магазина, все пункты списка одной задачей: их делает один исполнитель и сам себя проверяет. Разобраться, почему что-то сломалось, починить, добавить функцию в коде — в отдел разработки с нужным repo: там ведущий разбирается и пишет план, исполнитель делает, ведущий проверяет.
 - {"type":"propose_department","id":"латиница-через-дефис","title":"...","description":"за что отвечает","rules":"правила отдела в markdown","default_risk":"internal|external","tasks":[ ...create_task без department... ]}
   Новый отдел создаётся только после «да» хозяина; его задачи подождут.
 - {"type":"ask_owner","task":"id","questions":["..."]} — вопросы по уже существующей задаче. Не повторяй вопросы, на которые хозяин уже ответил, даже другими словами. Ответ «на свой вкус» значит, что решает отдел: верни ему задачу (return_task) с указанием выбрать самому, а не спрашивай снова.
@@ -413,8 +432,55 @@ const FORMAT: &str = r#"# Как ответить
 - {"type":"return_task","task":"id","reason":"что конкретно исправить"} — вернуть отделу (один раз).
 - {"type":"send_to_owner","task":"id","summary":"..."} — отдать результат хозяину на приёмку.
 - {"type":"propose_rule","department":"id отдела или orchestrator","text":"одно правило коротко"} — постоянное правило; добавится только после «да» хозяина. Предлагай, когда хозяин просит запомнить или повторяет одно и то же указание.
+- {"type":"show_result","task":"id"} — прислать хозяину итог задачи целиком (шлёт шлюз, сам не пересказывай). Только по его сообщению.
+- {"type":"answer","task":"id","text":"слова хозяина"} — передать его ответ на открытые вопросы задачи. Только по его сообщению.
+- {"type":"close_task","task":"id"} — закрыть задачу, если хозяин просит. Только по его сообщению.
 
 Если делать нечего, верни пустой "actions" и ответь хозяину в "message"."#;
+
+/// Keeps one exchange: sessions are fresh, so "да" or "последний" would
+/// mean nothing without what was said before.
+fn remember(home: &Home, owner: &str, reply: &str) {
+    use std::io::Write;
+    let line = serde_json::json!({
+        "ts_ms": now_ms(),
+        "owner": short(owner.trim(), DIALOG_TEXT),
+        "reply": short(reply.trim(), DIALOG_TEXT),
+    });
+    let dir = home.state_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(DIALOG_FILE))
+        .and_then(|mut file| writeln!(file, "{line}"));
+    if let Err(error) = written {
+        crate::server_diag!("orchestrator dialog not saved: {error}");
+    }
+}
+
+fn recent_dialog(home: &Home) -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(home.state_dir().join(DIALOG_FILE)).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(DIALOG_TURNS)..]
+        .iter()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .map(|value| {
+            let field = |name: &str| value[name].as_str().unwrap_or_default().to_owned();
+            (field("owner"), field("reply"))
+        })
+        .collect()
+}
+
+/// The text of a task result: the file, or the summary without one.
+fn result_text(home: &Home, work: &agentsflow_events::WorkInfo) -> String {
+    work.result_path
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(home.root.join(path)).ok())
+        .unwrap_or_else(|| work.result_summary.clone())
+        .trim()
+        .to_owned()
+}
 
 /// The whole input of one orchestrator session.
 fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
@@ -424,12 +490,20 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
     out.push_str("\n\n# Отделы\n\n");
     for dept in home.departments.values() {
         out.push_str(&format!(
-            "- `{}` — {}: {} (риск по умолчанию {})\n",
+            "- `{}` — {}: {} (риск по умолчанию {}; {})\n",
             dept.id,
             dept.title,
             dept.description,
-            risk_name(dept.default_risk)
+            risk_name(dept.default_risk),
+            dept.shape()
         ));
+        for repo in &dept.repos {
+            out.push_str(&format!(
+                "  - repo `{}` — {}\n",
+                repo.display(),
+                crate::projectmem::describe(repo)
+            ));
+        }
     }
     let open: Vec<_> = tasks
         .iter()
@@ -447,8 +521,42 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                 risk_name(work.risk),
                 task.title
             ));
+            if work.state == WorkState::Queued && !work.depends_on.is_empty() {
+                out.push_str(&format!(
+                    "  - ждёт задачи: {}\n",
+                    work.depends_on.join(", ")
+                ));
+            }
             for question in work.questions.iter().filter(|q| q.answer.is_none()) {
                 out.push_str(&format!("  - открытый вопрос: {}\n", question.text));
+            }
+        }
+    }
+    let mut closed: Vec<_> = tasks
+        .iter()
+        .filter_map(|task| task.work.as_ref().map(|work| (task, work)))
+        .filter(|(_, work)| matches!(work.state, WorkState::Done | WorkState::Cancelled))
+        .collect();
+    closed.sort_by_key(|(task, _)| std::cmp::Reverse(task.updated_ms));
+    if !closed.is_empty() {
+        out.push_str("\n# Недавно закрытые задачи (сначала новые)\n\n");
+        for (task, work) in closed.into_iter().take(RECENT_CLOSED) {
+            out.push_str(&format!(
+                "- `{}` [{}, {}] {}: {}\n",
+                task.id,
+                work.department,
+                state_name(work.state),
+                task.title,
+                short(work.result_summary.trim(), 200).replace('\n', " ")
+            ));
+        }
+    }
+    if matches!(trigger, Trigger::Owner(..)) {
+        let dialog = recent_dialog(home);
+        if !dialog.is_empty() {
+            out.push_str("\n# Последние сообщения (для понимания, что имел в виду хозяин)\n\n");
+            for (owner, reply) in dialog {
+                out.push_str(&format!("- Хозяин: {owner}\n  Ты: {reply}\n"));
             }
         }
     }
@@ -466,8 +574,15 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                 );
             }
             out.push_str(
-                "\n\nРазложи его на задачи по отделам. Если это ответ на открытый вопрос — \
-                 вопросы задаются карточками, ответ хозяин даёт кнопкой; просто скажи ему об этом.\n",
+                "\n\nСначала пойми, чего он хочет:\n\
+                 - Просит показать итог, результат, отчёт или файл: show_result. «Последний» значит \
+                 самая свежая задача с готовым результатом. Не пересказывай итог сам, его пришлёт шлюз.\n\
+                 - Отвечает на открытый вопрос задачи: answer. Его ответ важнее формулировки вопроса.\n\
+                 - Просит закрыть, убрать или отменить задачи: close_task на каждую.\n\
+                 - Спрашивает, что происходит: ответь в message по спискам выше, без новых задач.\n\
+                 - Просит сделать новую работу: разложи на задачи по отделам.\n\
+                 Если неясно, о какой задаче речь, но вариант один, бери его; вариантов несколько — \
+                 коротко назови их и спроси, какой.\n",
             );
         }
         Trigger::Review(id) => {
@@ -500,20 +615,19 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                         out.push_str(&format!("- {note}\n"));
                     }
                 }
-                let result = work
-                    .result_path
-                    .as_ref()
-                    .and_then(|path| std::fs::read_to_string(home.root.join(path)).ok())
-                    .unwrap_or_else(|| work.result_summary.clone());
                 out.push_str("\n## Результат\n\n");
-                out.push_str(&short(result.trim(), RESULT_LIMIT));
+                out.push_str(&short(&result_text(home, work), RESULT_LIMIT));
                 out.push_str(&format!(
                     "\n\nПрими (accept), верни (return_task) или отдай хозяину (send_to_owner) задачу `{}`.\n",
                     task.id
                 ));
             }
         }
-        Trigger::Request { parent, text } => {
+        Trigger::Request {
+            parent,
+            text,
+            files,
+        } => {
             out.push_str("\n# Заказ отдела\n\n");
             if let Some(task) = tasks.iter().find(|task| &task.id == parent)
                 && let Some(work) = &task.work
@@ -525,6 +639,14 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                     task.title,
                     text.trim()
                 ));
+            }
+            if !files.is_empty() {
+                out.push_str("К заказу приложены файлы, исполнитель получит их во входных данных:\n");
+                for file in files {
+                    let name = file.rsplit('/').next().unwrap_or(file);
+                    out.push_str(&format!("- {name}\n"));
+                }
+                out.push('\n');
             }
             out.push_str(
                 "Оформи заказ одной задачей create_task (можно с вопросами хозяину, если без них никак) \
@@ -578,6 +700,9 @@ struct NewTask {
     budget_usd: Option<f64>,
     #[serde(default)]
     size: Option<String>,
+    /// One of the department's repositories, as listed in the prompt.
+    #[serde(default)]
+    repo: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -617,6 +742,69 @@ enum Action {
         department: String,
         text: String,
     },
+    ShowResult {
+        task: String,
+    },
+    Answer {
+        task: String,
+        text: String,
+    },
+    CloseTask {
+        task: String,
+    },
+}
+
+/// The gateway sends the result itself, so the model cannot retell it wrong.
+fn show_result(runs: &Runs, by: &AgentId, id: &str) -> Result<(), String> {
+    let task = runs
+        .hub()
+        .task(id)
+        .ok_or_else(|| format!("задачи {id} нет"))?;
+    let work = task
+        .work
+        .as_ref()
+        .ok_or_else(|| format!("у {id} нет отдела"))?;
+    let text = result_text(&runs.home(), work);
+    if text.is_empty() {
+        return Err(format!("у «{}» пока нет итога", task.title));
+    }
+    let subject: String = format!("{RESULT_SUBJECT}{id}: {}", task.title)
+        .chars()
+        .take(200)
+        .collect();
+    runs.hub()
+        .send_mail(
+            by.clone(),
+            AgentId::orchestrator(),
+            subject,
+            short(&text, 30_000),
+            None,
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn close_task(runs: &Runs, by: &AgentId, id: &str) -> Result<TaskSnapshot, String> {
+    let work = runs
+        .hub()
+        .task(id)
+        .and_then(|task| task.work)
+        .ok_or_else(|| format!("задачи {id} нет"))?;
+    if work.state == WorkState::Running {
+        return Err(format!(
+            "задача {id} сейчас в работе, её можно остановить в карточке"
+        ));
+    }
+    runs.hub()
+        .update_task(
+            by.clone(),
+            id,
+            crate::hub::TaskPatch {
+                status: Some(agentsflow_events::TaskStatus::Archived),
+                ..Default::default()
+            },
+        )
+        .map_err(|error| error.to_string())
 }
 
 /// The JSON of the reply: the last fenced block, or the outermost braces.
@@ -682,7 +870,7 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
         _ => None,
     };
     let attachments = match trigger {
-        Trigger::Owner(_, files) => files.clone(),
+        Trigger::Owner(_, files) | Trigger::Request { files, .. } => files.clone(),
         _ => Vec::new(),
     };
     let mut attached = false;
@@ -732,6 +920,24 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                     from: FROM.into(),
                 })
                 .collect();
+            let repo = match task.repo.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                None => None,
+                Some(repo) => {
+                    let home = runs.home();
+                    let known = home
+                        .departments
+                        .get(&task.department)
+                        .and_then(|dept| crate::projectmem::find_repo(&dept.repos, repo));
+                    if known.is_none() {
+                        report.push(format!(
+                            "⚠ «{}»: репозитория {repo} нет у отдела {}, взят основной",
+                            task.title.trim(),
+                            task.department
+                        ));
+                    }
+                    known
+                }
+            };
             let new = NewWork {
                 title: task.title.trim().to_owned(),
                 text: task.text,
@@ -753,6 +959,12 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
             match runs.create(by.clone(), new) {
                 Ok(created) => {
                     attached = true;
+                    if let Some(repo) = repo {
+                        let _ = runs.hub().update_work(by.clone(), &created.id, |_, work| {
+                            work.repo = Some(repo.to_string_lossy().into_owned());
+                            Ok(())
+                        });
+                    }
                     let work = created.work.as_ref().expect("work task");
                     report.push(format!(
                         "• {} → {} ({}){}",
@@ -825,8 +1037,29 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
             "📎 Задач из сообщения не вышло, файлы никуда не ушли: пришлите их с задачей".into(),
         );
     }
+    let from_owner = matches!(trigger, Trigger::Owner(..));
     for action in decisions {
+        // Only the owner's own words may answer questions or close work.
+        if !from_owner
+            && matches!(
+                action,
+                Action::ShowResult { .. } | Action::Answer { .. } | Action::CloseTask { .. }
+            )
+        {
+            report.push("⚠ это действие доступно только по сообщению хозяина".into());
+            continue;
+        }
         let line = match action {
+            Action::ShowResult { task } => match show_result(runs, &by, &task) {
+                Ok(()) => continue,
+                Err(error) => Err(error),
+            },
+            Action::Answer { task, text } => runs
+                .answer(&task, &text)
+                .map(|t| format!("✍ передал ответ в «{}»", t.title)),
+            Action::CloseTask { task } => {
+                close_task(runs, &by, &task).map(|t| format!("🗄 закрыл «{}»", t.title))
+            }
             Action::AskOwner { task, questions } => runs
                 .ask(by.clone(), &task, &questions)
                 .map(|t| format!("❓ вопросы по «{}»", t.title)),
@@ -979,6 +1212,136 @@ mod tests {
         );
         assert!(text.contains("- цены.xlsx"));
         assert!(!text.contains(".agentsflow/inbox"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn owner_gets_a_result_answers_and_closes_by_words() {
+        with_orchestrator("{}", async |_, runs, hub, _| {
+            let make = |title: &str| {
+                runs.create(
+                    AgentId::from(FROM),
+                    NewWork {
+                        title: title.into(),
+                        text: "x".into(),
+                        department: "general".into(),
+                        risk: None,
+                        depends_on: vec![],
+                        budget_usd: None,
+                        parent: None,
+                        source: "owner".into(),
+                        questions: vec![Question {
+                            text: "Какой?".into(),
+                            answer: None,
+                            from: FROM.into(),
+                        }],
+                        proposal: None,
+                        small: false,
+                        attachments: vec![],
+                    },
+                )
+                .unwrap()
+            };
+            let result = make("Отчёт");
+            hub.update_work(AgentId::from(FROM), &result.id, |_, work| {
+                work.result_summary = "полный итог отчёта".into();
+                Ok(())
+            })
+            .unwrap();
+            let ask = make("Цвет");
+            let old = make("Старая");
+            let actions = vec![
+                Action::ShowResult {
+                    task: result.id.clone(),
+                },
+                Action::Answer {
+                    task: ask.id.clone(),
+                    text: "синий".into(),
+                },
+                Action::CloseTask {
+                    task: old.id.clone(),
+                },
+                Action::ShowResult {
+                    task: "нет-такой".into(),
+                },
+            ];
+            let trigger = Trigger::Owner("покажи".into(), vec![]);
+            let report = apply(&runs, &trigger, actions);
+            let mail = hub
+                .mail_all()
+                .into_iter()
+                .find(|mail| mail.subject.starts_with(RESULT_SUBJECT))
+                .expect("result mail");
+            assert_eq!(mail.body, "полный итог отчёта");
+            assert!(mail.subject.contains(&result.id));
+            let answered = hub.task(&ask.id).unwrap().work.unwrap();
+            assert_eq!(answered.questions[0].answer.as_deref(), Some("синий"));
+            assert_eq!(
+                hub.task(&old.id).unwrap().work.unwrap().state,
+                WorkState::Cancelled
+            );
+            assert!(
+                report.iter().any(|line| line.contains("нет-такой")),
+                "{report:?}"
+            );
+
+            // Words of a department or a review never act for the owner.
+            let denied = apply(
+                &runs,
+                &Trigger::Review(result.id.clone()),
+                vec![Action::Answer {
+                    task: result.id.clone(),
+                    text: "да".into(),
+                }],
+            );
+            assert!(
+                denied.iter().any(|line| line.contains("только по сообщению")),
+                "{denied:?}"
+            );
+            assert!(
+                hub.task(&result.id).unwrap().work.unwrap().questions[0]
+                    .answer
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn prompt_shows_closed_tasks_and_the_conversation() {
+        let dir = std::env::temp_dir().join(format!("agentsflow-prompt-{}", uuid::Uuid::new_v4()));
+        crate::home::init(&dir).unwrap();
+        let home = Home::load(&dir).unwrap();
+        remember(&home, "сделай отчёт", "разложил");
+        let task = TaskSnapshot {
+            id: "t1".into(),
+            title: "Отчёт".into(),
+            description: String::new(),
+            status: agentsflow_events::TaskStatus::Done,
+            assignee: None,
+            progress: 0,
+            labels: vec![],
+            note: String::new(),
+            thread: None,
+            created_ms: 0,
+            updated_ms: 1,
+            work: Some(agentsflow_events::WorkInfo {
+                department: "general".into(),
+                state: WorkState::Done,
+                result_summary: "готово".into(),
+                ..Default::default()
+            }),
+        };
+        let text = prompt(
+            &home,
+            &[task],
+            &Trigger::Owner("покажи итог".into(), vec![]),
+        );
+        assert!(
+            text.contains("Недавно закрытые") && text.contains("`t1`"),
+            "{text}"
+        );
+        assert!(text.contains("Хозяин: сделай отчёт"), "{text}");
+        assert!(text.contains("show_result"), "{text}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

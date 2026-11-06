@@ -1,0 +1,30 @@
+# Logins of the sites departments may enter. Copy this file to
+#   <home>/.agentsflow/sites.toml
+# and fill in login and password yourself, between the single quotes. The folder is not in git and is closed
+# to departments. Use separate read-only accounts, not your main ones: an agent
+# that has logged in can press anything the account is allowed to press.
+#
+# A department gets a site with a line at the top of its department.toml:
+#   sites = ["kaspi", "onec"]
+
+# show_browser = true                 # show the window; only useful on your own PC
+# chrome = "C:/path/to/chrome.exe"    # when Chrome is not found by itself
+
+[site.kaspi]
+url = "https://kaspi.kz/mc/"
+login_url = "idmc.shop.kaspi.kz"      # a part of the address of the login pages
+login = ''
+password = ''
+# Log in by email. For a phone: remove before_login and use #user_phone_field.
+before_login = "Email"
+login_selector = "#user_email_field"
+
+[site.onec]
+url = "https://1cfresh.kz/a/ea73/118791/ru_RU/"
+login_url = "/openid/"
+login = ''
+password = ''
+login_selector = "#authWindow_basic_login"
+password_selector = "#authWindow_basic_password"
+remember_selector = "#authWindow_basic_rememberAuth"
+code_selector = "#authWindow_twoFactor_code,#authWindow_emailCode_confirmationCode"

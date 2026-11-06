@@ -470,6 +470,11 @@ fn check_inner(command: &str, cwd: &Path, depth: usize, in_cmd: bool) -> Option<
 
 pub fn check(command: &str, cwd: &Path) -> Option<Violation> {
     check_inner(command, cwd, 0, false).or_else(|| {
+        // The service folder holds the passwords of sites: any mention of it
+        // is refused, also inside the text of a script.
+        if in_department_run(cwd) && without_logs(command).contains(".agentsflow") {
+            return Some(foreign_violation());
+        }
         // Words that look like paths: a department run must not reach into
         // other departments or the home's own files.
         lex(command)?
@@ -478,6 +483,22 @@ pub fn check(command: &str, cwd: &Path) -> Option<Violation> {
             .filter(|word| word.text.contains(['/', '\\']) || word.text == "..")
             .find_map(|word| foreign_path(&word.text, cwd))
     })
+}
+
+fn in_department_run(cwd: &Path) -> bool {
+    let cwd = normalized(cwd);
+    let named =
+        |dir: Option<&Path>, name: &str| dir.and_then(Path::file_name).is_some_and(|n| n == name);
+    let runs = cwd.parent();
+    let departments = runs.and_then(Path::parent).and_then(Path::parent);
+    named(runs, "runs") && named(departments, "departments")
+}
+
+fn foreign_violation() -> Violation {
+    Violation {
+        rule: FOREIGN,
+        reason: "папки других отделов и служебные файлы дома закрыты для этого отдела".into(),
+    }
 }
 
 /// The rule of [`read_only`]: always denied, never asked.
@@ -580,6 +601,30 @@ fn writes_files(command: &str, depth: usize) -> bool {
 /// The rule of [`foreign_path`]: always denied, never asked.
 pub const FOREIGN: &str = "foreign-department";
 
+/// The owner's memory of a project (`~/.claude/projects/<slug>/memory`) is
+/// read only for the bot's agents: they keep their own memory next to it.
+/// Judged with [`FOREIGN`], so it is refused without asking.
+pub fn owner_memory_write(tool: &str, input: &serde_json::Value) -> Option<Violation> {
+    let text = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
+    let shell = matches!(
+        tool.to_ascii_lowercase().as_str(),
+        "bash" | "powershell" | "shell"
+    );
+    let hit = if shell {
+        text("command").is_some_and(crate::projectmem::writes_owner_memory)
+    } else {
+        crate::projectmem::is_write_tool(tool)
+            && ["file_path", "path", "notebook_path"]
+                .iter()
+                .filter_map(|key| text(key))
+                .any(|path| crate::projectmem::in_owner_memory(path) || is_log(path))
+    };
+    hit.then(|| Violation {
+        rule: FOREIGN,
+        reason: "память хозяина по проекту только для чтения: пиши в память бота, а факт для хозяина — в share.md".into(),
+    })
+}
+
 /// A run of a department works in `<home>/departments/<id>/runs/<task>`; it
 /// may read its own department, but not other departments, the
 /// orchestrator or `.agentsflow`. Other working folders are not affected.
@@ -615,15 +660,54 @@ pub fn foreign_path(path: &str, cwd: &Path) -> Option<Violation> {
     let lower = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
     let (resolved, home, department) = (lower(&resolved), lower(home), lower(department));
     let inside = |dir: &str| resolved == dir || resolved.starts_with(&format!("{dir}/"));
-    (inside(&home) && !inside(&department)).then(|| Violation {
-        rule: FOREIGN,
-        reason: "папки других отделов и служебные файлы дома закрыты для этого отдела".into(),
-    })
+    if LOGS
+        .iter()
+        .any(|log| resolved == format!("{home}/.agentsflow/{log}"))
+    {
+        return None;
+    }
+    (inside(&home) && !inside(&department)).then(foreign_violation)
+}
+
+/// The gateway's own logs: a department may read them (to find out why the
+/// bot misbehaves), nothing else of `.agentsflow`.
+pub const LOGS: &[&str] = &["server.log", "gateway.err", "gateway.out", "autostart.log"];
+
+/// The command in lower case with the log paths taken out.
+fn without_logs(command: &str) -> String {
+    let mut text = command.replace('\\', "/").to_lowercase();
+    for log in LOGS {
+        text = text.replace(&format!(".agentsflow/{log}"), "");
+    }
+    text
+}
+
+/// Whether a path is one of [`LOGS`].
+pub fn is_log(path: &str) -> bool {
+    let path = path.replace('\\', "/").to_lowercase();
+    LOGS.iter().any(|log| path.ends_with(&format!("/.agentsflow/{log}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_service_folder_is_closed_even_inside_a_script() {
+        let run = Path::new("/home/x/departments/shop/runs/t1");
+        for command in [
+            "cat /home/x/.agentsflow/sites.toml",
+            "python -c \"print(open('/home/x/.agentsflow/sites.toml').read())\"",
+            "cat ../../../../.AGENTSFLOW/sites.toml",
+        ] {
+            assert_eq!(
+                check(command, run).map(|v| v.rule),
+                Some(FOREIGN),
+                "{command}"
+            );
+        }
+        assert!(check("echo .agentsflow", Path::new("/work/project")).is_none());
+    }
 
     #[test]
     fn command_examples() {
@@ -873,6 +957,23 @@ mod tests {
             Some(FOREIGN)
         );
         assert_eq!(check("cat ../../memory/notes.md", &run), None);
+        // The gateway's logs are open for reading, the rest of .agentsflow is not.
+        let log = base.join(".agentsflow").join("server.log");
+        assert!(foreign_path(log.to_str().unwrap(), &run).is_none());
+        assert!(foreign_path("../../../../.agentsflow/sites.toml", &run).is_some());
+        assert_eq!(check(&format!("tail -50 {}", log.display()), &run), None);
+        assert_eq!(
+            check("cat ../../../../.agentsflow/sites.toml", &run).map(|v| v.rule),
+            Some(FOREIGN)
+        );
+        assert_eq!(
+            check(&format!("tail {} ../../../../.agentsflow/board.json", log.display()), &run)
+                .map(|v| v.rule),
+            Some(FOREIGN)
+        );
+        let write = serde_json::json!({"file_path": log.to_str().unwrap()});
+        assert!(owner_memory_write("Write", &write).is_some());
+        assert!(owner_memory_write("Read", &write).is_none());
         if cfg!(windows) {
             assert_eq!(
                 check("cd /c/srv/agentsflow && ls departments", &run).map(|v| v.rule),

@@ -1579,6 +1579,9 @@ async fn run_actor<A, F, Fut>(
                                             .find_map(|path| crate::guard::foreign_path(path, cwd))
                                             .map(|violation| agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
                                     }
+                                    if note.is_none() && let Some(violation) = crate::guard::owner_memory_write(tool, input) {
+                                        *note = Some(agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });
+                                    }
                                 }
                                 if *read_only && let Some(violation) = crate::guard::read_only(tool, command) {
                                     *note = Some(agentsflow_events::GuardNote { rule: violation.rule.into(), reason: violation.reason });

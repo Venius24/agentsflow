@@ -7,6 +7,9 @@ use agentsflow_events::Event;
 use anyhow::Result;
 use std::rc::Rc;
 
+/// Agents do not inherit this variable of the gateway.
+pub const TELEGRAM_TOKEN_VAR: &str = "AGENTSFLOW_TELEGRAM_TOKEN";
+
 #[derive(Clone, Debug)]
 pub struct MailConfig {
     pub url: String,
@@ -15,6 +18,14 @@ pub struct MailConfig {
     pub thread_limit: usize,
     pub id: String,
     pub peers: Vec<String>,
+}
+
+/// More MCP servers for one agent: `servers` is the value of `mcpServers`,
+/// `allowed` are the tools that need no permission request.
+#[derive(Clone, Debug)]
+pub struct ExtraMcp {
+    pub servers: serde_json::Value,
+    pub allowed: Vec<String>,
 }
 
 /// Cloneable handle that asks an agent to stop its current turn. `next_events`

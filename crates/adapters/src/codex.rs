@@ -276,7 +276,9 @@ impl CodexSession {
             .to_owned();
         let mut builder = AppServerBuilder::new()
             .command(find_binary(opts.bin))
-            .working_directory(&cwd);
+            .working_directory(&cwd)
+            // The bot's token is not the agent's business.
+            .env(crate::TELEGRAM_TOKEN_VAR, "");
         if let Some(effort) = opts.effort {
             builder = builder.config_override("model_reasoning_effort", json!(effort).to_string());
         }

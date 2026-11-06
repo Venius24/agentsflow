@@ -46,12 +46,17 @@ fn proposals_dir(dir: &Path) -> PathBuf {
     dir.join("memory").join("proposals")
 }
 
-pub fn today() -> String {
-    let days = (std::time::SystemTime::now()
+/// Today's date in the home's time zone (minutes east of UTC).
+pub fn today(offset_minutes: i32) -> String {
+    let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or_default()
-        / 86_400) as i64;
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default();
+    date_of(secs + i64::from(offset_minutes) * 60)
+}
+
+fn date_of(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
     // Civil date from days since the epoch (Howard Hinnant's algorithm).
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
@@ -63,6 +68,19 @@ pub fn today() -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Agents often start their note with their own "## date · task" heading;
+/// the gateway writes that heading itself, so a leading heading is dropped.
+fn strip_heading(notes: &str) -> &str {
+    let mut rest = notes;
+    while let Some(line) = rest.lines().next() {
+        if !line.trim_start().starts_with('#') {
+            break;
+        }
+        rest = rest[line.len()..].trim_start();
+    }
+    if rest.is_empty() { notes } else { rest }
 }
 
 fn take(path: &Path) -> Option<String> {
@@ -92,9 +110,18 @@ pub fn harvest(
     dept_dir: &Path,
     task: &str,
     run_dir: &Path,
+    offset_minutes: i32,
 ) -> Result<(bool, Option<Proposal>)> {
     let mut noted = false;
-    if let Some(notes) = take(&run_dir.join(NOTE_FILE)) {
+    // Agents sometimes write the note next to the department's rules
+    // (`../../memory.md`) instead of the run folder: nobody reads it there.
+    let notes = [run_dir.join(NOTE_FILE), dept_dir.join(NOTE_FILE)]
+        .iter()
+        .filter_map(|path| take(path))
+        .map(|text| strip_heading(&text).to_owned())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !notes.is_empty() {
         let memory = dept_dir.join("memory");
         std::fs::create_dir_all(&memory)?;
         use std::io::Write;
@@ -102,7 +129,8 @@ pub fn harvest(
             .create(true)
             .append(true)
             .open(memory.join("notes.md"))?;
-        write!(file, "\n## {} · задача {task}\n\n{notes}\n", today())?;
+        let date = today(offset_minutes);
+        write!(file, "\n## {date} · задача {task}\n\n{notes}\n")?;
         noted = true;
     }
     let proposal = match take(&run_dir.join(RULE_FILE)) {
@@ -110,6 +138,24 @@ pub fn harvest(
         None => None,
     };
     Ok((noted, proposal))
+}
+
+/// A fact an agent of a department with repositories wants in the owner's
+/// own memory of the project: kept as a proposal with the `share-` prefix,
+/// it reaches that memory only on the owner's approval.
+pub fn harvest_share(dept_id: &str, dept_dir: &Path, task: &str, run_dir: &Path) -> Result<Option<Proposal>> {
+    match take(&run_dir.join(crate::projectmem::SHARE_FILE)) {
+        Some(text) => {
+            let base = format!("{}{task}", crate::projectmem::SHARE_PREFIX);
+            Ok(Some(write_proposal(dept_id, dept_dir, &base, &text)?))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Whether a proposal is a fact for the owner's memory, not a rule.
+pub fn is_share(id: &str) -> bool {
+    id.starts_with(crate::projectmem::SHARE_PREFIX)
 }
 
 fn write_proposal(target: &str, dir: &Path, base: &str, text: &str) -> Result<Proposal> {
@@ -194,13 +240,29 @@ pub fn proposals(home: &Home) -> Vec<Proposal> {
 pub fn approve(home: &Home, target: &str, id: &str) -> Result<RuleCommit> {
     let path = proposal_path(home, target, id)?;
     let text = std::fs::read_to_string(&path)?;
+    if is_share(id) {
+        let repo = home
+            .departments
+            .get(target)
+            .and_then(|dept| dept.repos.first())
+            .with_context(|| format!("у отдела {target} нет репозитория"))?;
+        let file = crate::projectmem::share(repo, id, &text)?;
+        std::fs::remove_file(&path)?;
+        return Ok(RuleCommit {
+            target: target.to_owned(),
+            commit: String::new(),
+            subject: format!("в память проекта: {}", file.display()),
+            date: today(home.config.offset_minutes()),
+        });
+    }
     let dir = target_dir(home, target)?;
     let rules = dir.join(crate::department::RULES);
     let mut current = std::fs::read_to_string(&rules).unwrap_or_default();
     if !current.ends_with('\n') && !current.is_empty() {
         current.push('\n');
     }
-    current.push_str(&format!("\n## Правило от {}\n\n{}\n", today(), text.trim()));
+    let date = today(home.config.offset_minutes());
+    current.push_str(&format!("\n## Правило от {date}\n\n{}\n", text.trim()));
     std::fs::write(&rules, current)?;
     let subject = format!("rule({target}): {}", first_line(&text, 60));
     if let Err(error) = home::commit(&home.root, &[&rules], &subject) {
@@ -211,7 +273,7 @@ pub fn approve(home: &Home, target: &str, id: &str) -> Result<RuleCommit> {
         target: target.to_owned(),
         commit: head(&home.root).unwrap_or_default(),
         subject,
-        date: today(),
+        date: today(home.config.offset_minutes()),
     })
 }
 
@@ -226,7 +288,7 @@ pub fn reject(home: &Home, target: &str, id: &str) -> Result<()> {
         .create(true)
         .append(true)
         .open(memory.join(REJECTED))?;
-    writeln!(file, "- {}: {}", today(), first_line(&text, 300))?;
+    writeln!(file, "- {}: {}", today(home.config.offset_minutes()), first_line(&text, 300))?;
     std::fs::remove_file(path)?;
     Ok(())
 }
@@ -365,25 +427,41 @@ mod tests {
         std::fs::create_dir_all(&run).unwrap();
         std::fs::write(run.join(NOTE_FILE), "Остатки лежат в 1С → Склад.\n").unwrap();
         std::fs::write(run.join(RULE_FILE), "Отчёты всегда в xlsx.").unwrap();
-        let (noted, proposal) = harvest("general", &dept.dir, "t1", &run).unwrap();
+        let (noted, proposal) = harvest("general", &dept.dir, "t1", &run, 0).unwrap();
         assert!(noted);
         let proposal = proposal.unwrap();
         assert_eq!(proposal.id, "t1");
         assert!(!run.join(NOTE_FILE).exists() && !run.join(RULE_FILE).exists());
         let notes = std::fs::read_to_string(dept.memory_dir().join("notes.md")).unwrap();
         assert!(notes.contains("задача t1") && notes.contains("1С → Склад"));
+        assert_eq!(notes.matches("## ").count(), 1, "{notes}");
+        // A note left next to the rules is taken too.
+        std::fs::write(dept.dir.join(NOTE_FILE), "Отчёт 1С по счёту 1330 быстрее.").unwrap();
+        harvest("general", &dept.dir, "t2", &run, 0).unwrap();
+        let notes = std::fs::read_to_string(dept.memory_dir().join("notes.md")).unwrap();
+        assert!(notes.contains("задача t2") && notes.contains("счёту 1330"));
+        assert!(!dept.dir.join(NOTE_FILE).exists());
         // A second run of the same task does not overwrite the proposal.
         std::fs::write(run.join(RULE_FILE), "Ещё правило").unwrap();
-        let (_, second) = harvest("general", &dept.dir, "t1", &run).unwrap();
+        let (_, second) = harvest("general", &dept.dir, "t1", &run, 0).unwrap();
         assert_eq!(second.unwrap().id, "t1-2");
         assert_eq!(proposals(&home).len(), 2);
         // Empty files are ignored.
         std::fs::write(run.join(RULE_FILE), "  \n").unwrap();
         assert_eq!(
-            harvest("general", &dept.dir, "t1", &run).unwrap(),
+            harvest("general", &dept.dir, "t1", &run, 0).unwrap(),
             (false, None)
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn dates_follow_the_offset() {
+        assert_eq!(date_of(0), "1970-01-01");
+        // 2026-11-05 23:30 UTC is already the 6th at +05:00.
+        let late = 1_793_921_400;
+        assert_eq!(date_of(late), "2026-11-05");
+        assert_eq!(date_of(late + 5 * 3600), "2026-11-06");
     }
 
     #[test]

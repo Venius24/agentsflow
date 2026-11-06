@@ -1035,6 +1035,7 @@ async fn run_session(
     let runs = match &options.home {
         Some(home) => {
             let home = crate::home::Home::load(home)?;
+            crate::telegram::set_display_offset(home.config.offset_minutes());
             let state_dir = home.state_dir();
             std::fs::create_dir_all(&state_dir)?;
             runtime.hub.set_board_file(&state_dir.join("board.json"))?;

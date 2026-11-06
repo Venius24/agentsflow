@@ -85,6 +85,21 @@ struct Raw {
     steps: Vec<toml::Table>,
     #[serde(default, rename = "schedule")]
     schedules: Vec<Schedule>,
+    /// Names from `.agentsflow/sites.toml` this department may log in to.
+    #[serde(default)]
+    sites: Vec<String>,
+    /// Acts on live systems itself, under its own rules, instead of preparing
+    /// drafts and only reading sites.
+    #[serde(default)]
+    live: bool,
+    /// The owner's repositories the department works in, the first is where
+    /// its agents start: they get its CLAUDE.md, skills and memory.
+    #[serde(default)]
+    repos: Vec<PathBuf>,
+    /// The department changes code: each task gets its own git worktree of
+    /// the chosen repository and commits to its own branch.
+    #[serde(default)]
+    worktree: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +114,10 @@ pub struct Department {
     pub team: Team,
     pub workflow: Spec,
     pub schedules: Vec<Schedule>,
+    pub sites: Vec<String>,
+    pub live: bool,
+    pub repos: Vec<PathBuf>,
+    pub worktree: bool,
     pub dir: PathBuf,
 }
 
@@ -216,6 +235,31 @@ impl Department {
                 .expect("checked above");
             doer.lead = true;
         }
+        if let Some(repo) = raw.repos.iter().find(|repo| !repo.is_absolute()) {
+            bail!("repos: путь должен быть полным: {}", repo.display());
+        }
+        if !raw.sites.is_empty() {
+            if raw.sites.iter().any(|site| !valid_id(site)) {
+                bail!("sites: names are 1-24 characters a-z, 0-9, _ and -");
+            }
+            // One browser profile per department.
+            if raw.max_parallel != 1 {
+                bail!("a department with sites has max_parallel = 1");
+            }
+            for member in members.iter().filter(|m| !has_role(m, "reviewer")) {
+                // The guard keeps the passwords away from an agent, and it
+                // does not reach into Codex's shell the same way.
+                if member.kind != AgentKind::Claude {
+                    bail!("a department with sites needs Claude doers: {}", member.id);
+                }
+            }
+            if members
+                .iter()
+                .any(|m| !m.guard || m.mode == Some(AccessMode::Bypass))
+            {
+                bail!("a department with sites needs the guard on for every agent");
+            }
+        }
         let team = Team { members };
         team.validate()?;
         for schedule in &raw.schedules {
@@ -263,6 +307,10 @@ impl Department {
             team,
             workflow,
             schedules: raw.schedules,
+            sites: raw.sites,
+            live: raw.live,
+            repos: raw.repos,
+            worktree: raw.worktree,
             dir: dir.to_path_buf(),
         })
     }
@@ -331,7 +379,20 @@ impl Department {
                 ));
             }
         }
+        if let Some(home) = self.dir.parent().and_then(Path::parent) {
+            warnings.extend(crate::sites::problems(home, &self.id, &self.sites));
+        }
         warnings
+    }
+
+    /// How the department works, for the orchestrator.
+    pub fn shape(&self) -> &'static str {
+        let reviewed = self.workflow.step.len() > 1;
+        match (reviewed, self.worktree) {
+            (_, true) => "ведущий разбирается и проверяет, исполнитель правит код в своей копии репозитория",
+            (true, false) => "исполнитель и ревьюер",
+            (false, false) => "один исполнитель, сам себя проверяет",
+        }
     }
 
     fn with_role(&self, role: &str) -> Option<&Member> {
@@ -406,6 +467,10 @@ impl Department {
         let mut team = self.run_team(kind);
         for member in &mut team.members {
             member.id = AgentId::from(rename(member.id.as_str()));
+            if has_role(member, "doer") {
+                member.sites = self.sites.clone();
+            }
+            member.repos = self.repos.clone();
         }
         let mut spec = if kind == RunKind::Small {
             Spec::parse(&format!(
@@ -493,6 +558,48 @@ next = "review"
         );
         assert!(dept.workflow.step.iter().all(|step| step.max_loops == 1));
         assert!(dept.warnings().is_empty());
+    }
+
+    #[test]
+    fn sites_go_to_doers_and_need_claude_with_the_guard() {
+        let claude = r#"
+id = "shop"
+title = "Магазин"
+description = "Кабинеты"
+sites = ["kaspi"]
+[[agent]]
+id = "doer"
+kind = "claude"
+roles = ["doer"]
+[[agent]]
+id = "reviewer"
+kind = "codex"
+roles = ["reviewer"]
+[[step]]
+id = "do"
+agent = "@doer"
+prompt = "{brief}"
+"#;
+        let dept = Department::parse(claude, Path::new("/x")).unwrap();
+        let plan = dept.run_plan("t1", RunKind::Full).unwrap();
+        let sites = |role: &str| {
+            plan.team
+                .members
+                .iter()
+                .find(|m| has_role(m, role))
+                .unwrap()
+                .sites
+                .clone()
+        };
+        assert_eq!(sites("doer"), ["kaspi"]);
+        assert!(sites("reviewer").is_empty());
+
+        let codex_doer = claude.replacen("kind = \"claude\"", "kind = \"codex\"", 1);
+        assert!(Department::parse(&codex_doer, Path::new("/x")).is_err());
+        let parallel = claude.replacen("sites =", "max_parallel = 2\nsites =", 1);
+        assert!(Department::parse(&parallel, Path::new("/x")).is_err());
+        let no_guard = claude.replacen("kind = \"claude\"", "kind = \"claude\"\nguard = false", 1);
+        assert!(Department::parse(&no_guard, Path::new("/x")).is_err());
     }
 
     #[test]

@@ -175,8 +175,11 @@ pub async fn run(command: Command) -> Result<()> {
             model: command.model,
             cwd: command.cwd,
             mail: None,
+            mcp: None,
             effort: None,
             bypass: false,
+            add_dirs: Vec::new(),
+            env: Vec::new(),
         })
         .await?;
         run_turn(session, "claude", &command.prompt, command.yes).await

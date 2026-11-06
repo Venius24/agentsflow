@@ -149,6 +149,11 @@ pub struct ClaudeOptions {
     pub mail: Option<crate::MailConfig>,
     pub effort: Option<String>,
     pub bypass: bool,
+    pub mcp: Option<crate::ExtraMcp>,
+    /// More folders the agent may work in (`--add-dir`).
+    pub add_dirs: Vec<PathBuf>,
+    /// Extra environment of the CLI process.
+    pub env: Vec<(String, String)>,
 }
 
 const STDOUT_BUFFER_SIZE: usize = 10 * 1024 * 1024;
@@ -197,14 +202,31 @@ fn configure_bypass(command: &mut tokio::process::Command, bypass: bool) {
 impl ClaudeSession {
     pub async fn start(opts: ClaudeOptions) -> Result<Self> {
         let mut builder = ClaudeCliBuilder::new().permission_prompt_tool("stdio");
+        let mut servers = serde_json::Map::new();
+        let mut allowed: Vec<String> = Vec::new();
         if let Some(mail) = opts.mail {
-            let config = serde_json::json!({"mcpServers":{"mail":{"command":mail.exe,"args":["mail-mcp","--as",mail.id],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token,"AGENTSFLOW_PEERS":mail.peers.join(",")}}}});
-            builder = builder.mcp_config([config.to_string()]).allowed_tools([
-                "mcp__mail__send_mail",
-                "mcp__mail__check_inbox",
-                "mcp__mail__list_my_tasks",
-                "mcp__mail__update_task",
-            ]);
+            servers.insert("mail".to_owned(), serde_json::json!({"command":mail.exe,"args":["mail-mcp","--as",mail.id],"env":{"AGENTSFLOW_URL":mail.url,"AGENTSFLOW_TOKEN":mail.token,"AGENTSFLOW_PEERS":mail.peers.join(",")}}));
+            allowed.extend(
+                [
+                    "mcp__mail__send_mail",
+                    "mcp__mail__check_inbox",
+                    "mcp__mail__list_my_tasks",
+                    "mcp__mail__update_task",
+                ]
+                .map(str::to_owned),
+            );
+        }
+        if let Some(mcp) = opts.mcp {
+            if let Some(extra) = mcp.servers.as_object() {
+                servers.extend(extra.clone());
+            }
+            allowed.extend(mcp.allowed);
+        }
+        if !servers.is_empty() {
+            let config = serde_json::json!({"mcpServers": servers});
+            builder = builder
+                .mcp_config([config.to_string()])
+                .allowed_tools(allowed);
         }
         if let Some(model) = opts.model {
             builder = builder.model(model);
@@ -214,9 +236,17 @@ impl ClaudeSession {
         }
         let mut command = builder.build_command()?;
         configure_bypass(&mut command, opts.bypass);
+        for dir in &opts.add_dirs {
+            command.arg("--add-dir").arg(dir);
+        }
+        for (key, value) in &opts.env {
+            command.env(key, value);
+        }
         if let Some(effort) = opts.effort {
             command.arg("--effort").arg(effort);
         }
+        // The bot's token is not the agent's business.
+        command.env_remove(crate::TELEGRAM_TOKEN_VAR);
         let mut child = command.spawn()?;
         let (Some(mut input), Some(output), Some(mut errors)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
@@ -616,6 +646,9 @@ mod tests {
             mail: None,
             effort: None,
             bypass: false,
+            mcp: None,
+            add_dirs: Vec::new(),
+            env: Vec::new(),
         })
         .await?;
         session

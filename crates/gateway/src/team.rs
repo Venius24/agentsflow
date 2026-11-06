@@ -36,6 +36,15 @@ pub struct Member {
     pub roles: Vec<String>,
     #[serde(default)]
     pub lead: bool,
+    /// Sites this agent may log in to; set for the doers of one run.
+    #[serde(skip)]
+    pub sites: Vec<String>,
+    /// The owner's repositories this agent works in; set for one run.
+    #[serde(skip)]
+    pub repos: Vec<std::path::PathBuf>,
+    /// Where a Claude agent starts when not in `repos[0]`: the run's worktree.
+    #[serde(skip)]
+    pub workdir: Option<std::path::PathBuf>,
 }
 
 fn guard_enabled() -> bool {
