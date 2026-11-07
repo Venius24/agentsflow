@@ -929,6 +929,13 @@ fn app(state: AppState) -> Router {
         .route("/api/tasks/{id}/return", post(work::owner_return))
         .route("/api/agent/note", post(work::agent_note))
         .route("/api/tasks/{id}/proposal", post(work::proposal))
+        .route("/api/tasks/{id}/files", get(work::list_files))
+        .route("/api/tasks/{id}/file", get(work::download))
+        .route("/api/tasks/{id}/attach", post(work::attach))
+        .route(
+            "/api/upload",
+            post(work::upload).layer(DefaultBodyLimit::max(work::UPLOAD_LIMIT)),
+        )
         .layer(DefaultBodyLimit::max(256 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)

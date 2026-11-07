@@ -177,14 +177,18 @@ title = "Утренняя сводка"
 | Метод и путь | Что делает |
 |---|---|
 | `GET /api/departments` | отделы, агенты, лимиты, расход за месяц |
-| `POST /api/orchestrator` `{text}` | сообщение оркестратору |
+| `POST /api/orchestrator` `{text, files?}` | сообщение оркестратору; `files` — пути из `/api/upload` |
 | `POST /api/work` `{text, department, title?, risk?, depends_on?, budget_usd?}` | задача в отдел напрямую |
 | `POST /api/tasks/{id}/answer` `{text}` | ответ на вопросы |
 | `POST /api/tasks/{id}/proposal` `{create}` | решение по новому отделу |
 | `POST /api/tasks/{id}/return` `{text}` | вернуть с замечанием |
 | `POST /api/tasks/{id}/stop`, `/retry` | остановить, поставить снова |
-| `POST /api/agent/note` `{agent, text}` | записка агенту идущей задачи (`agent` вида `отдел:участник:задача`); 409, если задача не идёт |
+| `POST /api/agent/note` `{agent, text, files?}` | записка агенту идущей задачи (`agent` вида `отдел:участник:задача`); файлы копируются в папку запуска, записка называет копии; 409, если задача не идёт |
 | `GET /api/tasks/{id}/result` | текст result.md |
+| `POST /api/upload?name=…&batch=…` | тело запроса — файл (до 50 МБ); кладётся во входящие `.agentsflow/inbox/<batch>/`, ответ `{path, name, size, batch}` |
+| `POST /api/tasks/{id}/attach` `{files}` | приложить файлы из входящих к задаче: следующий круг получит их в `inputs/owner/` |
+| `GET /api/tasks/{id}/files` | файлы задачи: вложения хозяина, `result.md`, `artifacts/` запуска |
+| `GET /api/tasks/{id}/file?path=…&inline=true` | скачать файл из этого списка; HTML и SVG отдаются как текст |
 | `GET /api/rules`, `POST /api/rules/{target}/{id}/approve\|reject`, `POST /api/rules/revert/{commit}` | правила |
 | `GET /api/schedules`, `POST /api/schedules/{key}/pause\|resume\|run` | расписания |
 | `GET /api/runs`, `GET /api/spend`, `POST /api/home/reload` | запуски, расходы, перечитать дом |

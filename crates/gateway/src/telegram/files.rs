@@ -87,7 +87,7 @@ fn attachment_of(message: &Value) -> Option<Attachment> {
 }
 
 /// Имя файла от Telegram идёт в путь на диске: без папок и запрещённого Windows.
-pub(super) fn safe_name(name: &str) -> String {
+pub(crate) fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let clean: String = base
         .chars()
@@ -123,7 +123,7 @@ pub(super) fn safe_name(name: &str) -> String {
     }
 }
 
-fn unique_name(name: String, taken: &mut HashSet<String>) -> String {
+pub(crate) fn unique_name(name: String, taken: &mut HashSet<String>) -> String {
     let mut candidate = name.clone();
     let mut number = 2;
     while !taken.insert(candidate.to_lowercase()) {
@@ -224,7 +224,7 @@ async fn upload(bot: &Bot, chat: i64, path: PathBuf) -> std::result::Result<(), 
 }
 
 /// Файл результата задачи.
-pub(super) struct Entry {
+pub(crate) struct Entry {
     pub name: String,
     pub path: PathBuf,
     pub size: u64,
@@ -232,13 +232,13 @@ pub(super) struct Entry {
 
 /// Итог и файлы запуска. Ссылки не читаются: агент мог бы подсунуть ссылку на
 /// чужой файл и получить его содержимое в чат.
-pub(super) struct TaskFiles {
+pub(crate) struct TaskFiles {
     pub has_result: bool,
     pub entries: Vec<Entry>,
 }
 
 impl TaskFiles {
-    pub(super) fn read(run_dir: &Path) -> Self {
+    pub(crate) fn read(run_dir: &Path) -> Self {
         let mut entries = Vec::new();
         let result = run_dir.join("result.md");
         let has_result = std::fs::symlink_metadata(&result).is_ok_and(|meta| meta.is_file());

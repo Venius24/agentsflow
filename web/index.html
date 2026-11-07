@@ -598,6 +598,59 @@
     .sc *, .sc *::before, .sc *::after { animation: none !important; transition: none !important; }
     .sc-shimmer { color: var(--ink); background: none; }
   }
+  /* Files: tiles in composers (attach) and on the task card (download). */
+  .sc-atts { display: flex; gap: 8px; overflow-x: auto; padding: 10px 10px 2px; scrollbar-width: thin; }
+  .sc-att { position: relative; flex: none; width: 128px; height: 104px; display: flex; flex-direction: column; gap: 6px; padding: 10px 10px 9px; border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--raised); color: var(--ink); overflow: hidden; transition: transform .15s ease, border-color .15s ease, background-color .15s ease; }
+  .sc-att:hover { border-color: var(--muted); }
+  .sc-att-name { font-size: 12px; line-height: 1.35; font-weight: 600; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .sc-att-foot { margin-top: auto; display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .sc-att-foot small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sc-badge { flex: none; font: 600 10px/1 var(--mono); letter-spacing: .04em; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--bg); }
+  .sc-b-sheet { color: #1f8f55; border-color: rgba(31, 143, 85, .45); }
+  .sc-b-pdf { color: var(--bad); border-color: var(--bad-soft); }
+  .sc-b-image { color: #2f7bd6; border-color: rgba(47, 123, 214, .45); }
+  .sc-b-code { color: var(--warn); border-color: rgba(200, 140, 20, .45); }
+  .sc-att-img { padding: 0; }
+  .sc-att-thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .sc-att-img::after { content: ""; position: absolute; inset: auto 0 0 0; height: 44px; background: linear-gradient(transparent, rgba(0, 0, 0, .62)); pointer-events: none; }
+  .sc-att-img .sc-att-name, .sc-att-img .sc-att-ic { display: none; }
+  .sc-att-img .sc-att-foot { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 1; }
+  .sc-att-img .sc-att-foot small { color: #fff; }
+  .sc-att-x { position: absolute; top: 6px; right: 6px; z-index: 3; width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--line-2); background: var(--bg); color: var(--ink-2); display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .15s ease; }
+  .sc-att-x .sc-g { width: 12px; height: 12px; }
+  .sc-att:hover .sc-att-x, .sc-att-x:focus-visible { opacity: 1; }
+  .sc-att-up::before { content: ""; position: absolute; left: 0; bottom: 0; z-index: 2; height: 2px; width: 40%; background: var(--accent); animation: sc-upload 1.1s linear infinite; }
+  @keyframes sc-upload { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
+  .sc-att-bad { border-color: var(--bad); }
+  .sc-att-bad .sc-att-foot small { color: var(--bad); }
+  .sc-fgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .sc-fgrid .sc-att { width: auto; }
+  .sc-att.sc-dl:hover { transform: translateY(-1px); background: var(--hover); }
+  .sc-att-result { background: var(--own); border-color: var(--own-line); }
+  .sc-att-ic { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .sc-att-ic small { font-size: 11px; color: var(--muted); }
+  .sc-att-hit { position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+  .sc-att-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sc-att-acts { position: absolute; top: 6px; right: 6px; z-index: 2; display: flex; gap: 4px; opacity: 0; transition: opacity .15s ease; }
+  .sc-att:hover .sc-att-acts, .sc-att:focus-within .sc-att-acts { opacity: 1; }
+  .sc-att-a { width: 24px; height: 24px; border-radius: 7px; background: var(--bg); border: 1px solid var(--line-2); color: var(--ink-2); display: grid; place-items: center; }
+  .sc-att-a .sc-g { width: 13px; height: 13px; }
+  span.sc-att-a { pointer-events: none; }
+  a.sc-att-a:hover { color: var(--ink); border-color: var(--muted); }
+  @media (hover: none) { .sc-att-x, .sc-att-acts { opacity: 1; } }
+  .sc-drop-hint { display: flex; align-items: center; gap: 10px; width: 100%; border: 1.5px dashed var(--line-2); border-radius: var(--r-md); padding: 12px 14px; background: transparent; color: var(--muted); font: 12.5px/1.4 var(--font); text-align: left; cursor: pointer; transition: border-color .15s ease, color .15s ease; }
+  .sc-drop-hint:hover { border-color: var(--muted); color: var(--ink-2); }
+  .sc-drop-hint .sc-g { flex: none; }
+  .sc-ih .sc-addfile { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+  .sc .sc-dragover { outline: 2px dashed var(--accent); outline-offset: -4px; background-color: var(--accent-soft); }
+  .sc-cmp .sc-attach { width: 30px; height: 30px; }
+  .sc-cmp .sc-attach:disabled { opacity: .4; cursor: not-allowed; }
+  .sc-newfield { border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--panel); transition: border-color .15s ease; }
+  .sc-newfield:focus-within { border-color: var(--muted); }
+  .sc .sc-newfield textarea { border: 0; background: transparent; min-height: 120px; }
+  .sc-newfield-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 4px 8px 8px; font-size: 12.5px; color: var(--muted); }
+  .sc-note .sc-atts { padding: 2px 0; }
+  @media (prefers-reduced-motion: reduce) { .sc-att-up::before { animation: none; width: 100%; opacity: .5; } .sc-att.sc-dl:hover { transform: none; } }
 </style>
 </head>
 <body>
@@ -658,6 +711,8 @@
     <symbol id="sci-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
     <symbol id="sci-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
     <symbol id="sci-home" viewBox="0 0 24 24"><path d="M4 21V9l8-5 8 5v12"/><path d="M9 21v-6h6v6"/></symbol>
+    <symbol id="sci-clip" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.8-8.8a3.7 3.7 0 0 1 5.2 5.2l-8.8 8.8a1.8 1.8 0 0 1-2.6-2.6l8.1-8.1"/></symbol>
+    <symbol id="sci-down" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></symbol>
     <symbol id="sci-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></symbol>
   </svg>
 
@@ -2288,6 +2343,7 @@ const SC_QUEUED = "Сообщение хозяина, пришло, пока т�
 const sc = {
   mode: "scene", task: null, lanes: new Map(), byTask: new Map(), wf: new Map(), files: new Map(),
   show: new Map(), more: new Set(), timer: 0, ticks: 0, dragging: null, infoSig: "", emptySig: "", note: null,
+  taskFiles: new Map(), filesKey: new Map(),
 };
 const scReduce = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -2537,22 +2593,26 @@ function scDom(lane) {
   const stop = el("button", "sc-send sc-stop"); stop.type = "button"; stop.append(scG("sq")); stop.title = "Остановить задачу";
   stop.setAttribute("aria-label", "Остановить задачу");
   const send = el("button", "sc-send"); send.type = "submit"; send.append(scG("up")); send.setAttribute("aria-label", "Отправить");
-  row.append(access, el("span", "sc-sp"), model, stop, send);
-  box.append(ta, row);
+  const att = scAttacher();
+  row.append(att.button, access, el("span", "sc-sp"), model, stop, send);
+  box.append(att.tray, ta, row);
   const hint = el("div", "sc-hint");
-  form.append(box, hint);
+  form.append(box, hint, att.input);
   pane.append(tab, log, form);
-  const d = lane.dom = { pane, ic, name, role, state, log, live, ta, access, model, stop, send, hint, cur: null, tools: new Map(), perms: new Map(), notes: new Map(), lastTs: 0, prompts: 0, busy: false, lastTxt: null, handoff: null, sticky: true, hintError: "" };
+  att.paste(ta);
+  scDropZone(pane, files => { if (!ta.disabled) att.add(files); else scToast("Агент сейчас не работает. Файлы для задачи перетащите на карточку справа."); });
+  const d = lane.dom = { pane, ic, name, role, state, log, live, ta, access, model, stop, send, hint, att, cur: null, tools: new Map(), perms: new Map(), notes: new Map(), lastTs: 0, prompts: 0, busy: false, lastTxt: null, handoff: null, sticky: true, hintError: "" };
   log.addEventListener("scroll", () => { d.sticky = log.scrollTop + log.clientHeight >= log.scrollHeight - 60; });
   const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; };
   ta.addEventListener("input", grow);
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
   form.onsubmit = async e => {
     e.preventDefault();
-    const text = ta.value.trim();
-    if (!text) { ta.focus(); return; }
+    const text = ta.value.trim(), files = att.paths();
+    if (att.busy()) { d.hintError = "Файлы ещё загружаются"; scLaneHead(lane); return; }
+    if (!text && !files.length) { ta.focus(); return; }
     send.disabled = true; d.hintError = "";
-    try { await post("/api/agent/note", { agent: lane.id, text }); ta.value = ""; grow(); }
+    try { await post("/api/agent/note", { agent: lane.id, text: text || "Посмотри приложенные файлы.", files }); ta.value = ""; att.clear(); grow(); }
     catch (err) { d.hintError = "Не отправлено: " + err.message; }
     finally { send.disabled = false; scLaneHead(lane); }
   };
@@ -2820,6 +2880,7 @@ function scLaneHead(lane) {
   d.stop.hidden = !(running && lane.busy);
   d.ta.disabled = !running;
   d.send.disabled = !running;
+  d.att.button.disabled = !running;
   d.hint.className = "sc-hint" + (d.hintError ? " sc-bad" : "");
   d.hint.textContent = d.hintError || (!running ? "Задача не идёт: писать агенту можно, пока она в работе. Вернуть её с запиской можно в карточке справа."
     : lane.busy ? name + " работает. Сообщение дойдёт после текущего шага."
@@ -3059,19 +3120,36 @@ async function scStopAndReturn(task, text) {
   }
   await post(taskPath(task, "/return"), { text });
 }
-function scNoteForm(label, button, run, errBox) {
+function scNoteForm(label, button, run, errBox, task) {
   const form = el("form", "sc-note"), id = "sc-note-" + Math.random().toString(36).slice(2, 8);
   const l = el("label", "", label); l.htmlFor = id;
   const ta = el("textarea"); ta.id = id; ta.placeholder = "Что поменять";
   const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
   const cancel = el("button", "sc-btn", "Отмена"); cancel.type = "button";
-  const btns = el("div", "sc-btns"); btns.append(send, cancel);
-  form.append(l, ta, btns);
+  const btns = el("div", "sc-btns");
+  const att = task ? scAttacher() : null;
+  if (att) {
+    const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", "Файлы"));
+    pick.onclick = () => att.input.click();
+    btns.append(send, pick, cancel);
+    form.append(l, att.tray, ta, btns, att.input);
+    att.paste(ta);
+    scDropZone(form, files => att.add(files));
+  } else {
+    btns.append(send, cancel);
+    form.append(l, ta, btns);
+  }
   form.onsubmit = async e => {
     e.preventDefault();
-    if (!ta.value.trim()) { ta.focus(); return; }
+    if (att && att.busy()) { errBox.textContent = "Файлы ещё загружаются"; return; }
+    const files = att ? att.paths() : [];
+    if (!ta.value.trim() && !files.length) { ta.focus(); return; }
     send.disabled = true; errBox.textContent = "";
-    try { await run(ta.value.trim()); ta.value = ""; form.hidden = true; refreshHome(); } catch (err) { errBox.textContent = err.message; } finally { send.disabled = false; }
+    try {
+      if (files.length) await post(taskPath(task, "/attach"), { files });
+      await run(ta.value.trim() || "Посмотри приложенные файлы.");
+      ta.value = ""; if (att) att.clear(); form.hidden = true; refreshHome(); if (files.length) scLoadFiles(task, true);
+    } catch (err) { errBox.textContent = err.message; } finally { send.disabled = false; }
   };
   cancel.onclick = () => { form.hidden = true; };
   return { form, ta };
@@ -3081,10 +3159,11 @@ function scInfo(task) {
   if (!task) { info.replaceChildren(); sc.infoSig = ""; return; }
   const w = task.work, d = scDept(w.department);
   const files = sc.files.get(task.id);
+  scLoadFiles(task);
   const sig = [task.id, task.updated_ms, files ? files.size : 0, d ? d.running + "/" + d.month_spent_usd : ""].join("|");
   const active = document.activeElement;
   const typing = active && info.contains(active) && active.tagName === "TEXTAREA";
-  if (sig === sc.infoSig || typing || info.querySelector(".sc-note:not([hidden]) textarea:not(:placeholder-shown)")) return;
+  if (sig === sc.infoSig || typing || info.querySelector(".sc-note:not([hidden]) textarea:not(:placeholder-shown), .sc-note:not([hidden]) .sc-atts:not([hidden])")) return;
   sc.infoSig = sig;
   const nodes = [];
   const head = el("div", "sc-ih"); head.append(el("span", "", "Задача " + task.id), el("small", "", scWhen(task.created_ms)));
@@ -3133,17 +3212,28 @@ function scInfo(task) {
     };
     nodes.push(show, full);
   }
-  const fileRows = [];
-  for (const path of [...(w.attachments || [])]) fileRows.push([path, "вложение"]);
-  if (w.result_path) fileRows.push([w.result_path, "результат"]);
-  if (files) for (const [path, c] of files) fileRows.push([path, c]);
-  if (fileRows.length) {
-    nodes.push(el("div", "sc-ih", "Файлы"));
-    for (const [path, note] of fileRows.slice(0, 14)) {
+  const taskFiles = sc.taskFiles.get(task.id) || [];
+  const fh = el("div", "sc-ih"); fh.append(el("span", "", "Файлы" + (taskFiles.length ? " · " + taskFiles.length : "")));
+  const addFile = el("button", "sc-link sc-addfile"); addFile.type = "button"; addFile.append(scG("clip", 13), el("span", "", "Приложить"));
+  addFile.onclick = () => scPickForTask(task);
+  fh.append(addFile);
+  nodes.push(fh);
+  if (taskFiles.length) {
+    const grid = el("div", "sc-fgrid");
+    for (const f of taskFiles) grid.append(scFileTile(task, f));
+    nodes.push(grid);
+  } else {
+    const hint = el("button", "sc-drop-hint"); hint.type = "button";
+    hint.append(scG("clip", 16), el("span", "", "Перетащите файлы сюда или нажмите, чтобы выбрать. Отдел получит их в следующем круге."));
+    hint.onclick = () => scPickForTask(task);
+    nodes.push(hint);
+  }
+  if (files && files.size) {
+    nodes.push(el("div", "sc-ih", "Изменения в коде"));
+    for (const [path, c] of [...files].slice(0, 14)) {
       const r = el("div", "sc-row"); r.title = path;
-      r.append(scImg(scFileIcon(path), 16), el("span", "sc-t", scBase(path)));
-      if (typeof note === "string") r.append(el("small", "", note));
-      else { const s = el("small"); s.append(el("span", "sc-plus", "+" + note.add), " ", el("span", "sc-minus", "−" + note.del)); r.append(s); }
+      const s = el("small"); s.append(el("span", "sc-plus", "+" + c.add), " ", el("span", "sc-minus", "−" + c.del));
+      r.append(scImg(scFileIcon(path), 16), el("span", "sc-t", scBase(path)), s);
       nodes.push(r);
     }
   }
@@ -3151,7 +3241,7 @@ function scInfo(task) {
   const errBox = el("div", "sc-err-t"); errBox.setAttribute("role", "alert");
   const acts = el("div", "sc-acts");
   const back = (label, run) => {
-    const { form, ta } = scNoteForm(label, "Вернуть в работу", run, errBox); form.hidden = true;
+    const { form, ta } = scNoteForm(label, "Вернуть в работу", run, errBox, task); form.hidden = true;
     const open = el("button", "sc-btn"); open.type = "button"; open.append(scG("undo"), el("span", "", "Вернуть с запиской"));
     open.onclick = () => { form.hidden = !form.hidden; if (!form.hidden) ta.focus(); };
     acts.append(open, form);
@@ -3172,7 +3262,7 @@ function scInfo(task) {
     acts.append(scAct("Создать отдел", "sc-primary", "check", () => post(taskPath(task, "/proposal"), { create: true }), errBox));
     acts.append(scAct("В общий отдел", "", "folder", () => post(taskPath(task, "/proposal"), { create: false }), errBox));
   } else if (w.state === "waiting" && (w.questions || []).some(q => q.answer == null)) {
-    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", "Ответить", text => post(taskPath(task, "/answer"), { text }), errBox);
+    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", "Ответить", text => post(taskPath(task, "/answer"), { text }), errBox, task);
     form.querySelector("textarea").placeholder = "Ответ";
     form.querySelector(".sc-btns .sc-btn:last-child").remove();
     acts.append(form);
@@ -3308,12 +3398,22 @@ function scNew() {
   const send = el("button", "sc-btn sc-primary", "Отправить оркестратору"); send.type = "submit";
   const status = el("span", "sc-hint"); status.setAttribute("aria-live", "polite");
   const btns = el("div", "sc-btns"); btns.append(send, status);
-  box.append(el("h2", "", "Что сделать?"), el("p", "", "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева."), ta, btns);
+  const att = scAttacher();
+  const field = el("div", "sc-newfield"), frow = el("div", "sc-newfield-row");
+  const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", "Приложить файлы"));
+  pick.onclick = () => att.input.click();
+  frow.append(pick, el("span", "", "или перетащите их сюда, можно вставить из буфера"));
+  field.append(att.tray, ta, frow, att.input);
+  att.paste(ta);
+  scDropZone(root, files => att.add(files));
+  box.append(el("h2", "", "Что сделать?"), el("p", "", "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева."), field, btns);
   box.onsubmit = async e => {
     e.preventDefault();
-    if (!ta.value.trim()) { ta.focus(); return; }
+    if (att.busy()) { status.className = "sc-hint"; status.textContent = "Файлы ещё загружаются"; return; }
+    const files = att.paths();
+    if (!ta.value.trim() && !files.length) { ta.focus(); return; }
     send.disabled = true; status.className = "sc-hint"; status.textContent = "";
-    try { await post("/api/orchestrator", { text: ta.value }); ta.value = ""; status.textContent = "Принято. Задачи появятся слева, ответ придёт в почту и Telegram."; }
+    try { await post("/api/orchestrator", { text: ta.value.trim() || "Разбери приложенные файлы.", files }); ta.value = ""; att.clear(); status.textContent = "Принято. Задачи появятся слева, ответ придёт в почту и Telegram."; }
     catch (err) { status.className = "sc-hint sc-bad"; status.textContent = "Ошибка: " + err.message; }
     finally { send.disabled = false; }
   };
@@ -3380,7 +3480,165 @@ setInterval(() => {
   for (const l of sc.byTask.get(sc.task) || []) if (l.dom) scLiveRow(l);
   scTickInfo();
   if (sc.ticks % 20 === 0) refreshHome();
+  if (sc.ticks % 8 === 0) { const t = taskCards.get(sc.task); if (t && t.work && t.work.state === "running") scLoadFiles(t, true); }
 }, 1000);
+
+// Files. Attaching: each file goes to the inbox (/api/upload) as soon as it is
+// picked, dropped or pasted, and the message names the inbox paths.
+// Downloading: /api/tasks/{id}/files lists the owner's attachments, the result
+// and the run's files; /file serves only those.
+const SC_UPLOAD_MAX = 50 * 1048576;
+const SC_VIEWABLE = ["md", "txt", "csv", "tsv", "json", "jsonl", "log", "toml", "yaml", "yml", "xml", "html", "htm", "svg", "py", "js", "ts", "rs", "sh", "ps1", "sql", "ini", "cfg", "srt", "pdf", "png", "jpg", "jpeg", "gif", "webp"];
+const SC_FILE_KIND = { attachment: "от вас", result: "итог", artifact: "от отдела" };
+function scExt(name) { const m = /\.([^.\\/]+)$/.exec(String(name)); return m ? m[1].toLowerCase() : ""; }
+function scKindOf(ext) {
+  if (["xlsx", "xls", "csv", "tsv", "ods"].includes(ext)) return "sheet";
+  if (ext === "pdf") return "pdf";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
+  if (["py", "js", "ts", "rs", "sh", "ps1", "json", "jsonl", "toml", "yaml", "yml", "sql", "html", "css", "vbs", "bat", "cmd"].includes(ext)) return "code";
+  return "";
+}
+function scSize(n) {
+  n = n || 0;
+  if (n < 1024) return n + " Б";
+  if (n < 1048576) return Math.round(n / 1024) + " КБ";
+  return (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace(".", ",") + " МБ";
+}
+function scBadge(name) {
+  const ext = scExt(name), kind = scKindOf(ext);
+  return el("span", "sc-badge" + (kind ? " sc-b-" + kind : ""), ext ? ext.toUpperCase().slice(0, 5) : "ФАЙЛ");
+}
+function scHasFiles(e) { return !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"); }
+// `node` lights up while files are dragged over it; cards dragged on the board are ignored.
+function scDropZone(node, onFiles) {
+  let depth = 0;
+  node.addEventListener("dragenter", e => { if (!scHasFiles(e)) return; e.preventDefault(); depth++; node.classList.add("sc-dragover"); });
+  node.addEventListener("dragover", e => { if (!scHasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+  node.addEventListener("dragleave", e => { if (!scHasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) node.classList.remove("sc-dragover"); });
+  node.addEventListener("drop", e => {
+    if (!scHasFiles(e)) return;
+    e.preventDefault(); e.stopPropagation(); depth = 0; node.classList.remove("sc-dragover");
+    if (e.dataTransfer.files.length) onFiles(e.dataTransfer.files);
+  });
+}
+async function scUpload(file, batch) {
+  if (file.size > SC_UPLOAD_MAX) throw new Error("больше 50 МБ");
+  const r = await fetch(api("/api/upload?name=" + encodeURIComponent(file.name || "файл") + (batch ? "&batch=" + batch : "")), { method: "POST", body: file });
+  let data = null;
+  try { data = await r.json(); } catch (_) {}
+  if (!r.ok) throw new Error((data && data.error) || "HTTP " + r.status);
+  return data;
+}
+// The files of one message: tiles, a paperclip button, drop and paste. Uploads run one
+// after another so the whole message shares one inbox folder.
+function scAttacher() {
+  const tray = el("div", "sc-atts"); tray.hidden = true;
+  const input = el("input"); input.type = "file"; input.multiple = true; input.hidden = true; input.tabIndex = -1;
+  const button = el("button", "sc-ib sc-attach"); button.type = "button"; button.append(scG("clip"));
+  button.title = "Приложить файлы"; button.setAttribute("aria-label", "Приложить файлы");
+  button.onclick = () => input.click();
+  const st = { tray, input, button, items: [], batch: "", chain: Promise.resolve() };
+  const draw = () => {
+    tray.replaceChildren(...st.items.map(item => {
+      const tile = el("div", "sc-att sc-att-" + item.state);
+      tile.title = item.name + (item.error ? ": " + item.error : "");
+      if (item.thumb) { const img = el("img", "sc-att-thumb"); img.src = item.thumb; img.alt = ""; tile.classList.add("sc-att-img"); tile.append(img); }
+      const foot = el("div", "sc-att-foot");
+      foot.append(scBadge(item.name), el("small", "", item.state === "up" ? "загрузка…" : item.state === "bad" ? item.error : scSize(item.size)));
+      const x = el("button", "sc-att-x"); x.type = "button"; x.append(scG("x")); x.setAttribute("aria-label", "Убрать " + item.name);
+      x.onclick = () => { st.items = st.items.filter(i => i !== item); if (item.thumb) URL.revokeObjectURL(item.thumb); draw(); };
+      tile.append(el("div", "sc-att-name", item.name), foot, x);
+      return tile;
+    }));
+    tray.hidden = !st.items.length;
+  };
+  st.add = files => {
+    for (const file of Array.from(files)) {
+      if (st.items.length >= 20) { scToast("Не больше 20 файлов в одном сообщении"); break; }
+      const item = { name: file.name || "файл", size: file.size, state: "up", thumb: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "" };
+      st.items.push(item);
+      st.chain = st.chain.then(async () => {
+        if (!st.items.includes(item)) return;
+        try { const data = await scUpload(file, st.batch); st.batch = data.batch; item.path = data.path; item.name = data.name; item.state = "ok"; }
+        catch (err) { item.state = "bad"; item.error = err.message; }
+        draw();
+      });
+    }
+    draw();
+  };
+  st.paths = () => st.items.filter(i => i.state === "ok").map(i => i.path);
+  st.busy = () => st.items.some(i => i.state === "up");
+  st.clear = () => { for (const i of st.items) if (i.thumb) URL.revokeObjectURL(i.thumb); st.items = []; st.batch = ""; draw(); };
+  st.paste = ta => ta.addEventListener("paste", e => {
+    const files = e.clipboardData && e.clipboardData.files;
+    if (files && files.length) { e.preventDefault(); st.add(files); }
+  });
+  input.onchange = () => { st.add(input.files); input.value = ""; };
+  return st;
+}
+function scFileUrl(task, path, inline) {
+  return api(taskPath(task, "/file?path=" + encodeURIComponent(path) + (inline ? "&inline=true" : "")));
+}
+// A downloadable tile: the whole tile downloads, the eye opens text, pictures and PDF in a tab.
+function scFileTile(task, f) {
+  const name = scBase(f.name), ext = scExt(name), image = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
+  const tile = el("div", "sc-att sc-dl" + (f.kind === "result" ? " sc-att-result" : ""));
+  tile.title = f.name + " · " + scSize(f.size) + " · " + (SC_FILE_KIND[f.kind] || "");
+  if (image) {
+    const img = el("img", "sc-att-thumb"); img.src = scFileUrl(task, f.path, true); img.alt = ""; img.loading = "lazy";
+    tile.classList.add("sc-att-img"); tile.append(img);
+  } else {
+    const top = el("div", "sc-att-ic"); top.append(scImg(scFileIcon(name), 18), el("small", "", SC_FILE_KIND[f.kind] || ""));
+    tile.append(top);
+  }
+  const foot = el("div", "sc-att-foot"); foot.append(scBadge(name), el("small", "", scSize(f.size)));
+  const hit = el("a", "sc-att-hit"); hit.href = scFileUrl(task, f.path); hit.download = name; hit.setAttribute("aria-label", "Скачать " + name);
+  tile.append(el("div", "sc-att-name", name), foot, hit);
+  const acts = el("div", "sc-att-acts");
+  if (SC_VIEWABLE.includes(ext)) {
+    const view = el("a", "sc-att-a"); view.href = scFileUrl(task, f.path, true); view.target = "_blank"; view.rel = "noopener";
+    view.title = "Открыть"; view.setAttribute("aria-label", "Открыть " + name); view.append(scG("eye")); acts.append(view);
+  }
+  const dl = el("span", "sc-att-a"); dl.append(scG("down")); acts.append(dl);
+  tile.append(acts);
+  return tile;
+}
+function scLoadFiles(task, force) {
+  if (!task) return;
+  const key = task.id + "|" + task.updated_ms;
+  if (!force && sc.filesKey.get(task.id) === key) return;
+  sc.filesKey.set(task.id, key);
+  getJson(taskPath(task, "/files")).then(data => {
+    const list = data.files || [];
+    if (JSON.stringify(list) === JSON.stringify(sc.taskFiles.get(task.id) || null)) return;
+    sc.taskFiles.set(task.id, list);
+    if (sc.task === task.id) { sc.infoSig = ""; scInfo(taskCards.get(task.id)); }
+  }).catch(() => {});
+}
+const scTaskInput = el("input"); scTaskInput.type = "file"; scTaskInput.multiple = true; scTaskInput.hidden = true; scTaskInput.tabIndex = -1;
+$("#scene").append(scTaskInput);
+let scTaskFor = null;
+scTaskInput.onchange = () => { if (scTaskFor) scAttachToTask(scTaskFor, scTaskInput.files); scTaskInput.value = ""; };
+function scPickForTask(task) { scTaskFor = task; scTaskInput.click(); }
+// Files dropped on the task card: the department gets them with its next round.
+async function scAttachToTask(task, files) {
+  files = Array.from(files).slice(0, 20);
+  if (!files.length) return;
+  scToast("Загружаю " + files.length + " " + scPlural(files.length, "файл", "файла", "файлов") + "…");
+  let batch = "";
+  const paths = [], failed = [];
+  for (const file of files) {
+    try { const data = await scUpload(file, batch); batch = data.batch; paths.push(data.path); }
+    catch (err) { failed.push(file.name + ": " + err.message); }
+  }
+  try { if (paths.length) await post(taskPath(task, "/attach"), { files: paths }); }
+  catch (err) { scToast("Не приложил: " + err.message); return; }
+  const running = task.work && task.work.state === "running";
+  scToast(failed.length ? "Не загрузились: " + failed.join("; ")
+    : "Приложено к задаче. Отдел получит файлы в следующем круге" + (running ? "; агенту прямо сейчас — скрепкой в его записке." : "."));
+  scLoadFiles(task, true);
+}
+scDropZone($("#sc-info"), files => { const task = taskCards.get(sc.task); if (task) scAttachToTask(task, files); else scToast("Сначала выберите задачу слева"); });
 
 buildOrch();
 let savedView = "overview", viewSaved = false;

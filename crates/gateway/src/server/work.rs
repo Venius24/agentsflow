@@ -2,7 +2,10 @@
 
 use super::*;
 use crate::runs::{NewWork, Runs};
+use crate::telegram::files::{TaskFiles, safe_name, unique_name};
 use agentsflow_events::Risk;
+use std::collections::HashSet;
+use std::path::Path;
 
 fn no_home() -> Response {
     (
@@ -255,10 +258,19 @@ fn bad_request(error: String) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({"error":error}))).into_response()
 }
 
-/// A free-form owner message: the orchestrator turns it into tasks.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Message {
+    text: String,
+    #[serde(default)]
+    files: Vec<String>,
+}
+
+/// A free-form owner message: the orchestrator turns it into tasks. `files`
+/// are inbox paths from `/api/upload`.
 pub(super) async fn orchestrator(
     State(state): State<AppState>,
-    input: Result<Json<Text>, axum::extract::rejection::JsonRejection>,
+    input: Result<Json<Message>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
     let runs = match runs(&state) {
         Ok(runs) => runs,
@@ -267,7 +279,13 @@ pub(super) async fn orchestrator(
     let Ok(Json(input)) = input else {
         return bad_request("invalid message".into());
     };
-    match runs.message(&input.text) {
+    let sent = if input.files.is_empty() {
+        runs.message(&input.text)
+    } else {
+        inbox_files(runs, &input.files)
+            .and_then(|files| runs.message_with_files(&input.text, files))
+    };
+    match sent {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok":true}))).into_response(),
         Err(error) => bad_request(error),
     }
@@ -315,6 +333,8 @@ pub(super) async fn owner_return(
 pub(super) struct AgentNote {
     agent: String,
     text: String,
+    #[serde(default)]
+    files: Vec<String>,
 }
 
 /// The owner writes to an agent of a running task.
@@ -329,7 +349,11 @@ pub(super) async fn agent_note(
     let Ok(Json(input)) = input else {
         return bad_request("invalid note".into());
     };
-    match runs.note(&input.agent, &input.text) {
+    let files = match inbox_files(runs, &input.files) {
+        Ok(files) => files,
+        Err(error) => return bad_request(error),
+    };
+    match runs.note_with_files(&input.agent, &input.text, files) {
         Ok(id) => Json(json!({"id":id})).into_response(),
         Err(error) => (StatusCode::CONFLICT, Json(json!({"error":error}))).into_response(),
     }
@@ -445,9 +469,414 @@ pub(super) async fn revert_rule(
     }
 }
 
+/// Largest file the page uploads: the same as the bot can send.
+pub(super) const UPLOAD_LIMIT: usize = 50 * 1024 * 1024;
+/// Files in one message, as in a Telegram album.
+const MAX_FILES: usize = 20;
+
+#[derive(Deserialize)]
+pub(super) struct UploadQuery {
+    name: String,
+    #[serde(default)]
+    batch: Option<String>,
+}
+
+fn valid_batch(batch: &str) -> bool {
+    (1..=32).contains(&batch.len()) && batch.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+fn home_relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+/// A file from the page lands in the inbox, like one sent to the bot: the
+/// raw body is the file, `name` its name, `batch` groups one message's files.
+pub(super) async fn upload(
+    State(state): State<AppState>,
+    Query(query): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    if body.is_empty() {
+        return bad_request("пустой файл".into());
+    }
+    let batch = match query.batch {
+        Some(batch) if valid_batch(&batch) => batch,
+        Some(_) => return bad_request("invalid batch".into()),
+        None => Uuid::new_v4().simple().to_string()[..8].to_owned(),
+    };
+    let dir = runs.inbox_dir().join(&batch);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return bad_request("не удалось создать папку входящих".into());
+    }
+    let mut taken: HashSet<String> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_lowercase())
+        .collect();
+    if taken.len() >= MAX_FILES {
+        return bad_request(format!("не больше {MAX_FILES} файлов за раз"));
+    }
+    let name = unique_name(safe_name(&query.name), &mut taken);
+    let path = dir.join(&name);
+    let written = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await?;
+        file.write_all(&body).await?;
+        file.flush().await
+    };
+    if written.await.is_err() {
+        let _ = std::fs::remove_file(&path);
+        return bad_request(format!("не удалось сохранить «{name}»"));
+    }
+    let root = runs.home().root.clone();
+    Json(json!({
+        "path": home_relative(&root, &path),
+        "name": name,
+        "size": body.len(),
+        "batch": batch,
+    }))
+    .into_response()
+}
+
+/// Paths the page sends back must be plain files of the inbox.
+fn inbox_files(runs: &Runs, files: &[String]) -> Result<Vec<String>, String> {
+    check_inbox(&runs.home().root, &runs.inbox_dir(), files)
+}
+
+fn check_inbox(root: &Path, inbox: &Path, files: &[String]) -> Result<Vec<String>, String> {
+    if files.len() > MAX_FILES {
+        return Err(format!("не больше {MAX_FILES} файлов за раз"));
+    }
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let inbox = inbox
+        .canonicalize()
+        .map_err(|_| "входящих пока нет".to_owned())?;
+    files
+        .iter()
+        .map(|file| {
+            let full = root.join(file);
+            let plain = std::fs::symlink_metadata(&full).is_ok_and(|meta| meta.is_file());
+            let inside = full
+                .canonicalize()
+                .is_ok_and(|full| full.starts_with(&inbox));
+            if plain && inside {
+                Ok(file.replace('\\', "/"))
+            } else {
+                Err(format!("файла нет во входящих: {file}"))
+            }
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Files {
+    files: Vec<String>,
+}
+
+/// Owner's files for a task: its next round gets them in `inputs/owner/`.
+pub(super) async fn attach(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    input: Result<Json<Files>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid files".into());
+    };
+    let files = match inbox_files(runs, &input.files) {
+        Ok(files) if !files.is_empty() => files,
+        Ok(_) => return bad_request("файлов нет".into()),
+        Err(error) => return bad_request(error),
+    };
+    match runs.attach(&id, files) {
+        Ok(task) => Json(json!({"task":task})).into_response(),
+        Err(error) => bad_request(error),
+    }
+}
+
+struct TaskFile {
+    path: String,
+    name: String,
+    size: u64,
+    kind: &'static str,
+    full: std::path::PathBuf,
+}
+
+/// What the owner can download from a task: their attachments, the result
+/// and the run's artifacts. Links are skipped, as in the bot.
+fn task_files(runs: &Runs, id: &str) -> Option<Vec<TaskFile>> {
+    let work = runs.hub().task(id)?.work?;
+    let home = runs.home();
+    let run_dir = home
+        .departments
+        .get(&work.department)
+        .map(|dept| dept.run_dir(id));
+    Some(list_task_files(
+        &home.root,
+        &work.attachments,
+        run_dir.as_deref(),
+    ))
+}
+
+fn list_task_files(root: &Path, attachments: &[String], run_dir: Option<&Path>) -> Vec<TaskFile> {
+    let mut out = Vec::new();
+    for file in attachments {
+        let full = root.join(file);
+        let Ok(meta) = std::fs::symlink_metadata(&full) else {
+            continue;
+        };
+        if meta.is_file() {
+            out.push(TaskFile {
+                path: file.replace('\\', "/"),
+                name: file.rsplit(['/', '\\']).next().unwrap_or(file).to_owned(),
+                size: meta.len(),
+                kind: "attachment",
+                full,
+            });
+        }
+    }
+    if let Some(run_dir) = run_dir {
+        let result = run_dir.join("result.md");
+        for entry in TaskFiles::read(run_dir).entries {
+            let kind = if entry.path == result {
+                "result"
+            } else {
+                "artifact"
+            };
+            out.push(TaskFile {
+                path: home_relative(root, &entry.path),
+                name: entry.name,
+                size: entry.size,
+                kind,
+                full: entry.path,
+            });
+        }
+    }
+    out
+}
+
+pub(super) async fn list_files(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Some(files) = task_files(runs, &id) else {
+        return task_failure(TaskError::NotFound);
+    };
+    let list: Vec<Value> = files
+        .iter()
+        .map(|file| json!({"path":file.path,"name":file.name,"size":file.size,"kind":file.kind}))
+        .collect();
+    Json(json!({"files":list})).into_response()
+}
+
+#[derive(Deserialize)]
+pub(super) struct FileQuery {
+    path: String,
+    #[serde(default)]
+    inline: bool,
+}
+
+fn content_type(name: &str) -> &'static str {
+    let extension = name
+        .rsplit_once('.')
+        .map_or("", |(_, extension)| extension)
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "zip" => "application/zip",
+        // Text of any kind, HTML and SVG included, is shown as plain text:
+        // a page an agent wrote must not run scripts next to the token.
+        "md" | "txt" | "csv" | "tsv" | "json" | "jsonl" | "log" | "toml" | "yaml" | "yml"
+        | "xml" | "html" | "htm" | "svg" | "rs" | "py" | "js" | "ts" | "sh" | "ps1" | "sql"
+        | "ini" | "cfg" | "srt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `Content-Disposition` with the real (often Cyrillic) name: RFC 6266
+/// `filename*` plus an ASCII fallback for old clients.
+fn disposition(name: &str, inline: bool) -> String {
+    let fallback: String = name
+        .chars()
+        .map(|c| {
+            if c == ' ' || (c.is_ascii_graphic() && c != '"' && c != '\\') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    let kind = if inline { "inline" } else { "attachment" };
+    format!("{kind}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+/// One file of a task by the path `/files` listed: nothing else is served.
+pub(super) async fn download(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<FileQuery>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let missing = || (StatusCode::NOT_FOUND, Json(json!({"error":"файла нет"}))).into_response();
+    let Some(file) = task_files(runs, &id)
+        .into_iter()
+        .flatten()
+        .find(|file| file.path == query.path)
+    else {
+        return missing();
+    };
+    let Ok(bytes) = tokio::fs::read(&file.full).await else {
+        return missing();
+    };
+    let kind = content_type(&file.name);
+    let inline = query.inline
+        && (kind.starts_with("image/") || kind.starts_with("text/") || kind == "application/pdf");
+    (
+        [
+            (header::CONTENT_TYPE, kind.to_owned()),
+            (header::CONTENT_DISPOSITION, disposition(&file.name, inline)),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            (header::CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::title_from;
+    use super::{check_inbox, content_type, disposition, list_task_files, title_from};
+    use std::path::Path;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("agentsflow-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn inbox_paths_must_stay_in_the_inbox() {
+        let root = scratch("inbox");
+        let inbox = root.join(".agentsflow/inbox");
+        std::fs::create_dir_all(inbox.join("ab12")).unwrap();
+        std::fs::write(inbox.join("ab12/цены.xlsx"), b"x").unwrap();
+        std::fs::write(root.join("secret.txt"), b"x").unwrap();
+        let ok = check_inbox(&root, &inbox, &[".agentsflow/inbox/ab12/цены.xlsx".into()]).unwrap();
+        assert_eq!(ok, vec![".agentsflow/inbox/ab12/цены.xlsx".to_owned()]);
+        for bad in [
+            "secret.txt",
+            ".agentsflow/inbox/../../secret.txt",
+            ".agentsflow/inbox/ab12/нет.xlsx",
+            ".agentsflow/inbox/ab12",
+        ] {
+            assert!(check_inbox(&root, &inbox, &[bad.into()]).is_err(), "{bad}");
+        }
+        let absolute = root.join("secret.txt").display().to_string();
+        assert!(check_inbox(&root, &inbox, &[absolute]).is_err());
+        let many = vec![".agentsflow/inbox/ab12/цены.xlsx".to_owned(); 21];
+        assert!(check_inbox(&root, &inbox, &many).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn task_files_list_attachments_result_and_artifacts() {
+        let root = scratch("taskfiles");
+        std::fs::create_dir_all(root.join(".agentsflow/inbox/ab12")).unwrap();
+        std::fs::write(root.join(".agentsflow/inbox/ab12/цены.xlsx"), b"12").unwrap();
+        let run = root.join("departments/shop/runs/t1");
+        std::fs::create_dir_all(run.join("artifacts/sub")).unwrap();
+        std::fs::write(run.join("result.md"), b"done").unwrap();
+        std::fs::write(run.join("artifacts/sub/report.csv"), b"a,b").unwrap();
+        let files = list_task_files(
+            &root,
+            &[
+                ".agentsflow/inbox/ab12/цены.xlsx".into(),
+                ".agentsflow/inbox/ab12/gone.txt".into(),
+            ],
+            Some(&run),
+        );
+        let seen: Vec<_> = files
+            .iter()
+            .map(|f| (f.kind, f.name.as_str(), f.path.as_str(), f.size))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (
+                    "attachment",
+                    "цены.xlsx",
+                    ".agentsflow/inbox/ab12/цены.xlsx",
+                    2
+                ),
+                (
+                    "result",
+                    "result.md",
+                    "departments/shop/runs/t1/result.md",
+                    4
+                ),
+                (
+                    "artifact",
+                    "sub/report.csv",
+                    "departments/shop/runs/t1/artifacts/sub/report.csv",
+                    3
+                ),
+            ]
+        );
+        assert!(list_task_files(Path::new("/nowhere"), &[], None).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn downloads_never_serve_active_content() {
+        assert_eq!(content_type("page.html"), "text/plain; charset=utf-8");
+        assert_eq!(content_type("logo.SVG"), "text/plain; charset=utf-8");
+        assert_eq!(content_type("photo.JPG"), "image/jpeg");
+        assert_eq!(content_type("data.bin"), "application/octet-stream");
+        assert_eq!(
+            disposition("цены 1.xlsx", false),
+            "attachment; filename=\"____ 1.xlsx\"; filename*=UTF-8''%D1%86%D0%B5%D0%BD%D1%8B%201.xlsx"
+        );
+        assert!(disposition("a\".txt", true).starts_with("inline; filename=\"a_.txt\""));
+    }
 
     #[test]
     fn titles_come_from_the_first_line() {

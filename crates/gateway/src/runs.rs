@@ -355,7 +355,15 @@ impl Runs {
 
     /// The owner's note to an agent of a running task (`dept:member:task`):
     /// it reaches the agent after its current turn, or with its next prompt.
-    pub fn note(&self, agent: &str, text: &str) -> Result<String, String> {
+    /// Files from the inbox are copied into the run folder
+    /// now (the agent may not read the state folder), the note names the
+    /// copies, and the task keeps them for its next rounds.
+    pub fn note_with_files(
+        &self,
+        agent: &str,
+        text: &str,
+        files: Vec<String>,
+    ) -> Result<String, String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("пустое сообщение".into());
@@ -376,7 +384,33 @@ impl Runs {
         if !running || member.is_empty() {
             return Err("задача этого агента сейчас не выполняется".into());
         }
-        Ok(self.hub.queue_note(AgentId::from(agent), text.to_owned()))
+        let mut text = text.to_owned();
+        if !files.is_empty() {
+            let home = self.home();
+            let dept = home
+                .departments
+                .get(department)
+                .ok_or_else(|| "отдела нет".to_owned())?;
+            let local = copy_attachments(&home.root, &files, &dept.run_dir(task))
+                .map_err(|error| format!("не скопировал файлы: {error}"))?;
+            if local.is_empty() {
+                return Err("файлов нет во входящих".into());
+            }
+            self.attach(task, files)?;
+            text.push_str(
+                "
+
+Приложил файлы:",
+            );
+            for path in local {
+                text.push_str(&format!(
+                    "
+- {}",
+                    path.display()
+                ));
+            }
+        }
+        Ok(self.hub.queue_note(AgentId::from(agent), text))
     }
 
     /// Asks the run of `task` to stop; false when it is not running.

@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
-mod files;
+pub(crate) mod files;
 mod reader;
 mod screens;
 
