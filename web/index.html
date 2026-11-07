@@ -707,6 +707,36 @@
   .sc-card.sc-unread .sc-card-t { font-weight: 650; }
   @media (max-width: 880px) { .sc-result { padding: 18px 16px 32px; } .sc-doc-files .sc-att { width: calc(50% - 4px); } }
   @media (prefers-reduced-motion: reduce) { .sc-doc-file:hover { transform: none; } }
+  /* The result as a chat turn: the request bubble, the answer, file cards, actions. */
+  .sc-chat { max-width: 780px; margin: 0 auto; display: grid; gap: 28px; }
+  .sc-turn-ask { display: grid; justify-items: end; gap: 8px; }
+  .sc-ask-files { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+  .sc-ask-bubble { max-width: min(580px, 88%); background: var(--bubble); border-radius: 20px; padding: 10px 16px 12px; font-size: 14.5px; line-height: 1.6; color: var(--ink); }
+  .sc-ask-from { font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
+  .sc-ask-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sc-ask-bubble .sc-link { margin-top: 4px; font-size: 12.5px; }
+  .sc-turn-ans { display: grid; gap: 14px; min-width: 0; }
+  .sc-ans-who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
+  .sc-ans-av { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--panel); display: grid; place-items: center; flex: none; }
+  .sc-ans-who span { color: var(--ink-2); }
+  .sc-ans-who small { color: var(--muted); font-size: 12px; }
+  .sc-turn-ans .sc-doc { border-top: 0; padding-top: 0; font-size: 15.5px; line-height: 1.72; }
+  .sc-fcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .sc-fcard { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 14px; background: var(--panel); color: var(--ink); text-decoration: none; transition: transform .15s ease, border-color .15s ease, background-color .15s ease; }
+  .sc-fcard:hover { transform: translateY(-1px); border-color: var(--muted); background: var(--hover); }
+  .sc-fcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .sc-fcard-ic { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; color: #fff; background: #6b6b6b; }
+  .sc-fcard-ic .sc-g { width: 20px; height: 20px; color: #fff; }
+  .sc-fk-sheet { background: #1f8f55; } .sc-fk-doc { background: var(--accent); } .sc-fk-pdf { background: #d0443a; } .sc-fk-image { background: #2f7bd6; } .sc-fk-code { background: #b07a12; }
+  .sc-fcard-t { flex: 1; min-width: 0; display: grid; gap: 1px; }
+  .sc-fcard-t b { font-size: 13.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .sc-fcard-t small { font-size: 12px; color: var(--muted); }
+  .sc-fcard-dl { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line-2); display: grid; place-items: center; color: var(--ink-2); }
+  .sc-fcard-dl .sc-g { width: 15px; height: 15px; }
+  .sc-ans-acts { display: flex; gap: 2px; margin-left: -6px; }
+  .sc .sc-act-ib:hover { color: var(--ink); background: var(--hover); }
+  .sc .sc-act-ib .sc-g { width: 16px; height: 16px; }
+  @media (prefers-reduced-motion: reduce) { .sc-fcard:hover { transform: none; } }
 </style>
 </head>
 <body>
@@ -3649,6 +3679,7 @@ function scFileUrl(task, path, inline) {
 // A downloadable tile: the whole tile downloads, the eye opens text, pictures and PDF in a tab.
 function scFileTile(task, f) {
   const name = scBase(f.name), ext = scExt(name), image = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
+  const shown = f.kind === "result" ? "Итог задачи" : name;
   const tile = el("div", "sc-att sc-dl" + (f.kind === "result" ? " sc-att-result" : ""));
   tile.title = f.name + " · " + scSize(f.size) + " · " + (SC_FILE_KIND[f.kind] || "");
   if (image) {
@@ -3660,7 +3691,7 @@ function scFileTile(task, f) {
   }
   const foot = el("div", "sc-att-foot"); foot.append(scBadge(name), el("small", "", scSize(f.size)));
   const hit = el("a", "sc-att-hit"); hit.href = scFileUrl(task, f.path); hit.download = name; hit.setAttribute("aria-label", "Скачать " + name);
-  tile.append(el("div", "sc-att-name", name), foot, hit);
+  tile.append(el("div", "sc-att-name", shown), foot, hit);
   const acts = el("div", "sc-att-acts");
   if (SC_VIEWABLE.includes(ext)) {
     const view = el("a", "sc-att-a"); view.href = scFileUrl(task, f.path, true); view.target = "_blank"; view.rel = "noopener";
@@ -3828,6 +3859,31 @@ function scResultTabs(task) {
   }
   if (view === "result") scResult(task);
 }
+// The result as a chat: the request on the right, the department's answer below it,
+// files as cards and a row of actions under the answer, as in ChatGPT and Claude.
+const SC_KIND_NAME = { sheet: "Таблица", pdf: "PDF", image: "Изображение", code: "Код", "": "Файл" };
+function scResultTitle(task, text) {
+  const h = /^\s*#{1,3}\s+(.+)$/m.exec(text || "");
+  return (h ? h[1].replace(/[*`]/g, "").trim() : "") || task.title;
+}
+function scFileCard(task, f, label) {
+  const name = label || scBase(f.name), ext = f.kind === "result" ? "md" : scExt(f.name);
+  const kind = f.kind === "result" ? "doc" : scKindOf(ext);
+  const card = el("a", "sc-fcard"); card.href = scFileUrl(task, f.path); card.download = name;
+  card.title = "Скачать " + name;
+  const ic = el("span", "sc-fcard-ic sc-fk-" + (kind || "file"));
+  ic.append(kind === "image" ? scG("eye") : scG(kind === "sheet" ? "grid" : "doc"));
+  const t = el("span", "sc-fcard-t");
+  t.append(el("b", "", name), el("small", "", [f.kind === "result" ? "Документ" : SC_KIND_NAME[kind] || "Файл", ext ? ext.toUpperCase() : "", scSize(f.size)].filter(Boolean).join(" · ")));
+  const dl = el("span", "sc-fcard-dl"); dl.append(scG("down"));
+  card.append(ic, t, dl);
+  return card;
+}
+function scIconBtn(icon, label, run) {
+  const b = el("button", "sc-ib sc-act-ib"); b.type = "button"; b.append(scG(icon)); b.title = label; b.setAttribute("aria-label", label);
+  b.onclick = () => run(b);
+  return b;
+}
 function scResult(task) {
   const box = $("#sc-result"), w = task.work;
   const files = sc.taskFiles.get(task.id) || [];
@@ -3841,42 +3897,69 @@ function scResult(task) {
       .finally(() => { sc.resultLoading.delete(key); box.dataset.sig = ""; scDirty(); });
   }
   const text = cached && cached.text != null ? cached.text : w.result_summary || "";
-  const sig = key + "|" + (cached ? cached.key + (cached.text || "").length : "-") + "|" + JSON.stringify(files);
+  const lanes = sc.byTask.get(task.id) || [];
+  const sig = key + "|" + (cached ? cached.key + (cached.text || "").length : "-") + "|" + JSON.stringify(files) + "|" + lanes.length;
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
-  const wrap = el("div", "sc-docwrap");
-  const head = el("div", "sc-doc-head");
+  const chat = el("div", "sc-chat");
+
+  // The request: the owner's attachments above a bubble on the right.
+  const ask = el("div", "sc-turn sc-turn-ask");
+  const attached = files.filter(f => f.kind === "attachment");
+  if (attached.length) {
+    const row = el("div", "sc-ask-files");
+    for (const f of attached) row.append(scFileTile(task, f));
+    ask.append(row);
+  }
+  const bubble = el("div", "sc-ask-bubble");
+  const from = { owner: "Вы", orchestrator: "Оркестратор", schedule: "По расписанию" }[w.source] || "Заказ отдела";
+  bubble.append(el("div", "sc-ask-from", from + " · " + scWhen(task.created_ms)));
+  const body = el("div", "sc-ask-text", (task.description || task.title).trim());
+  bubble.append(body);
+  if ((task.description || "").length > 420) {
+    body.classList.add("sc-clamp");
+    const more = el("button", "sc-link", "Показать полностью"); more.type = "button";
+    more.onclick = () => { const open = body.classList.toggle("sc-clamp"); more.textContent = open ? "Показать полностью" : "Свернуть"; };
+    bubble.append(more);
+  }
+  ask.append(bubble);
+  chat.append(ask);
+
+  // The answer: who answered, the text, files, actions.
+  const ans = el("div", "sc-turn sc-turn-ans");
+  const d = scDept(w.department), runsN = (w.runs || []).length, doer = lanes[0];
+  const who = el("div", "sc-ans-who");
+  const av = el("span", "sc-ans-av"); av.append(doer ? scAgentIcon(doer, 18) : scG("folder", 16));
+  who.append(av, el("b", "", d ? d.title : w.department));
+  if (doer) who.append(el("span", "", scName(doer)));
+  who.append(el("small", "", [workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN > 1 ? runsN + " " + scPlural(runsN, "круг", "круга", "кругов") : ""].filter(Boolean).join(" · ")));
+  ans.append(who);
+  ans.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? "Итог не найден." : "Загружаю итог…"));
+  const made = files.filter(f => f.kind === "artifact" && !f.name.startsWith("browser/"));
   const resultFile = files.find(f => f.kind === "result");
+  if (made.length || resultFile) {
+    const cards = el("div", "sc-fcards");
+    for (const f of made) cards.append(scFileCard(task, f));
+    if (resultFile) cards.append(scFileCard(task, resultFile, scResultTitle(task, text)));
+    ans.append(cards);
+  }
+  const acts = el("div", "sc-ans-acts");
+  if (text) acts.append(scIconBtn("copy", "Копировать ответ", async b => {
+    try { await navigator.clipboard.writeText(text); b.replaceChildren(scG("check")); setTimeout(() => b.replaceChildren(scG("copy")), 1500); }
+    catch (_) { scToast("Не удалось скопировать"); }
+  }));
   if (resultFile) {
-    const chip = el("a", "sc-doc-file"); chip.href = scFileUrl(task, resultFile.path); chip.download = "result.md";
-    chip.title = "Скачать итог файлом";
-    const t = el("div"); t.append(el("b", "", "result.md"), el("small", "", "Итог · " + scSize(resultFile.size) + " · скачать"));
-    chip.append(scImg("md", 22), t, scG("down"));
-    head.append(chip);
+    const dl = el("a", "sc-ib sc-act-ib"); dl.href = scFileUrl(task, resultFile.path); dl.download = "";
+    dl.title = "Скачать ответ файлом"; dl.setAttribute("aria-label", "Скачать ответ файлом"); dl.append(scG("down"));
+    acts.append(dl);
   }
-  const d = scDept(w.department), runsN = (w.runs || []).length;
-  head.append(el("span", "sc-doc-meta", [d ? d.title : w.department, workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN ? runsN + " " + scPlural(runsN, "круг", "круга", "кругов") : ""].filter(Boolean).join(" · ")));
-  head.append(el("span", "sc-sp"));
-  if (text) {
-    const copy = el("button", "sc-btn"); copy.type = "button"; copy.append(scG("copy"), el("span", "", "Копировать"));
-    copy.onclick = async () => { try { await navigator.clipboard.writeText(text); scToast("Итог скопирован"); } catch (_) { scToast("Не удалось скопировать"); } };
-    head.append(copy);
-  }
-  if (resultFile) {
-    const open = el("a", "sc-btn"); open.href = scFileUrl(task, resultFile.path, true); open.target = "_blank"; open.rel = "noopener";
-    open.append(scG("eye"), el("span", "", "Как текст")); head.append(open);
-  }
-  wrap.append(head);
-  const others = files.filter(f => f.kind !== "result");
-  if (others.length) {
-    const row = el("div", "sc-doc-files");
-    for (const f of others) row.append(scFileTile(task, f));
-    wrap.append(row);
-  }
-  wrap.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? "Итог не найден." : "Загружаю итог…"));
+  if (lanes.length) acts.append(scIconBtn("orch", "Как работали агенты", () => { sc.rview.set(task.id, "agents"); scRender(); for (const l of lanes) if (l.dom) scStick(l, true); }));
+  ans.append(acts);
+  chat.append(ans);
+
   const top = box.dataset.task === task.id ? box.scrollTop : 0;
   box.dataset.task = task.id;
-  box.replaceChildren(wrap);
+  box.replaceChildren(chat);
   box.scrollTop = top;
 }
 

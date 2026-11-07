@@ -770,10 +770,23 @@ pub(super) async fn download(
     let kind = content_type(&file.name);
     let inline = query.inline
         && (kind.starts_with("image/") || kind.starts_with("text/") || kind == "application/pdf");
+    // The result downloads under the task's title, not as "result.md".
+    let name = match runs.hub().task(&id) {
+        Some(task) if file.kind == "result" => safe_name(&format!(
+            "{}.md",
+            task.title.chars().take(80).collect::<String>()
+        )),
+        _ => file
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&file.name)
+            .to_owned(),
+    };
     (
         [
             (header::CONTENT_TYPE, kind.to_owned()),
-            (header::CONTENT_DISPOSITION, disposition(&file.name, inline)),
+            (header::CONTENT_DISPOSITION, disposition(&name, inline)),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
             (header::CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
         ],
