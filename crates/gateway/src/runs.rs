@@ -77,7 +77,8 @@ impl RunEnv {
         // A department with repositories: Claude starts in the first one and
         // loads its CLAUDE.md and skills; the guard still judges by the run
         // folder. Codex keeps the run folder (its sandbox writes only there).
-        let in_repo = member.kind == agentsflow_events::AgentKind::Claude && !member.repos.is_empty();
+        let in_repo =
+            member.kind == agentsflow_events::AgentKind::Claude && !member.repos.is_empty();
         spawn_member(
             hub,
             member,
@@ -88,8 +89,12 @@ impl RunEnv {
                 codex_bin: self.codex_bin.clone(),
                 mail: None,
                 mcp: site_tools(member, dir),
-                workdir: in_repo
-                    .then(|| member.workdir.clone().unwrap_or_else(|| member.repos[0].clone())),
+                workdir: in_repo.then(|| {
+                    member
+                        .workdir
+                        .clone()
+                        .unwrap_or_else(|| member.repos[0].clone())
+                }),
                 add_dirs: if in_repo {
                     crate::projectmem::add_dirs(&member.repos, dir)
                 } else {
@@ -346,6 +351,32 @@ impl Runs {
 
     pub fn kick(&self) {
         let _ = self.tx.send(Cmd::Kick);
+    }
+
+    /// The owner's note to an agent of a running task (`dept:member:task`):
+    /// it reaches the agent after its current turn, or with its next prompt.
+    pub fn note(&self, agent: &str, text: &str) -> Result<String, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("пустое сообщение".into());
+        }
+        let mut parts = agent.split(':');
+        let (Some(department), Some(member), Some(task), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return Err("это не агент отдела".into());
+        };
+        let running = self
+            .shared
+            .lock()
+            .unwrap()
+            .running
+            .get(task)
+            .is_some_and(|run| run.department == department);
+        if !running || member.is_empty() {
+            return Err("задача этого агента сейчас не выполняется".into());
+        }
+        Ok(self.hub.queue_note(AgentId::from(agent), text.to_owned()))
     }
 
     /// Asks the run of `task` to stop; false when it is not running.
@@ -916,7 +947,10 @@ fn take_request_files(root: &Path, inbox: &Path, run_dir: &Path) -> Vec<String> 
             .and_then(|()| std::fs::copy(&from, &to))
             .is_ok();
         if !moved {
-            crate::diag::diag("WARN", &format!("файл заказа не перенесён: {}", from.display()));
+            crate::diag::diag(
+                "WARN",
+                &format!("файл заказа не перенесён: {}", from.display()),
+            );
             continue;
         }
         if let Ok(rel) = to.strip_prefix(root) {
@@ -1479,7 +1513,8 @@ impl Engine {
                 workflow::execute_traced(&hub, &agents, &plan.spec, &task_text, &run_id, stop_rx)
                     .await;
             timer.abort();
-            for actor in agents.values() {
+            for (id, actor) in agents.iter() {
+                hub.drop_notes(id);
                 actor.shutdown().await;
             }
             for handle in handles {
@@ -1583,14 +1618,21 @@ impl Engine {
             }
             // The task's branch goes back to the owner's repository.
             if dept.worktree && active.run_dir.join("repo").join(".git").exists() {
-                let chosen = self.hub.task(&task).and_then(|t| t.work).and_then(|w| w.repo);
+                let chosen = self
+                    .hub
+                    .task(&task)
+                    .and_then(|t| t.work)
+                    .and_then(|w| w.repo);
                 let project = crate::projectmem::RunProject {
                     worktree: Some(active.run_dir.join("repo")),
                     branch: format!("agentsflow/{task}"),
                     ..crate::projectmem::RunProject::new(&dept.repos, chosen.as_deref())
                 };
                 if let Err(error) = project.publish() {
-                    crate::diag::diag("WARN", &format!("ветка задачи {task} не забрана: {error:#}"));
+                    crate::diag::diag(
+                        "WARN",
+                        &format!("ветка задачи {task} не забрана: {error:#}"),
+                    );
                 }
             }
         }
@@ -1598,11 +1640,8 @@ impl Engine {
             && let Some(request) = take_request(&active.run_dir)
         {
             let home = self.home();
-            let files = take_request_files(
-                &home.root,
-                &home.state_dir().join("inbox"),
-                &active.run_dir,
-            );
+            let files =
+                take_request_files(&home.root, &home.state_dir().join("inbox"), &active.run_dir);
             self.request(&task, request, files, now);
             return;
         }
@@ -2430,7 +2469,9 @@ mod tests {
         let inbox = dir.join(".agentsflow/inbox");
         let files = take_request_files(&dir, &inbox, &run);
         assert_eq!(files.len(), 1);
-        assert!(files[0].starts_with(".agentsflow/inbox/") && files[0].ends_with("/groups_apply.py"));
+        assert!(
+            files[0].starts_with(".agentsflow/inbox/") && files[0].ends_with("/groups_apply.py")
+        );
         assert!(!run.join(REQUEST_DIR).exists());
         // The ordered task gets them like the owner's files.
         let other = dir.join("departments/dev/runs/t2");

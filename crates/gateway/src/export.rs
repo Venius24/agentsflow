@@ -101,6 +101,15 @@ fn render_event(envelope: &Envelope) -> Option<String> {
             };
             let _ = writeln!(out, "**{agent} ({role}):** {}", escape_text(text));
         }
+        Event::Thinking { text } => {
+            let _ = writeln!(out, "**{agent} (thinking):** {}", escape_text(text));
+        }
+        Event::Note { text, status, .. } => {
+            if *status != agentsflow_events::NoteStatus::Queued {
+                return None;
+            }
+            let _ = writeln!(out, "**owner → {agent}:** {}", escape_text(text));
+        }
         Event::ToolCall { name, input, .. } => {
             let (args, _) = truncate(&input.to_string(), TOOL_INPUT_LIMIT);
             let _ = writeln!(

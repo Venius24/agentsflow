@@ -277,6 +277,327 @@
     .rail-foot { margin: 0; flex-direction: row; flex-wrap: wrap; align-items: center; }
     .rail-foot .team-meta, .rail-foot .meta { display: none; }
   }
+
+  /* ---- Scene (serve --home): Codex/Claude-like window over the departments' runs ---- */
+  .sc {
+    --bg: #ffffff; --side: #f7f7f6; --panel: #fafaf9; --raised: #f1f1f0; --hover: #ebebea;
+    --line: #e7e7e5; --line-2: #d5d5d3; --ink: #1a1a1a; --ink-2: #3c3c3c; --muted: #6a6a6a;
+    --accent: #cf3a10; --accent-ink: #ffffff; --accent-soft: rgba(207, 58, 16, .09);
+    --bubble: #f1f1f0; --own: #fdebe3; --own-line: #f4c6b2;
+    --ok: #13804f; --ok-soft: rgba(19, 128, 79, .09); --bad: #c03030; --bad-soft: rgba(192, 48, 48, .08); --warn: #8a5a00;
+    --ground: var(--bg); --rule: var(--line-2); --alert: var(--bad); --ink-3: var(--muted); --focus: var(--accent); --user-bg: var(--bubble);
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, "SFMono-Regular", monospace;
+    --r-lg: 18px; --r-md: 12px; --r-sm: 8px; --ink-filter: none;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sc {
+    --bg: #181818; --side: #1f1f1f; --panel: #1c1c1c; --raised: #262626; --hover: #2b2b2b;
+    --line: #2c2c2c; --line-2: #3b3b3b; --ink: #ececec; --ink-2: #c6c6c6; --muted: #8e8e8e;
+    --accent: #ff5b2e; --accent-ink: #1a1a1a; --accent-soft: rgba(255, 91, 46, .13);
+    --bubble: #2a2a2a; --own: #3a2219; --own-line: #5b3020;
+    --ok: #4cc38a; --ok-soft: rgba(76, 195, 138, .12); --bad: #f07272; --bad-soft: rgba(240, 114, 114, .12); --warn: #e0a640;
+    --ink-filter: invert(1); color-scheme: dark; } }
+  :root[data-theme="dark"] .sc {
+    --bg: #181818; --side: #1f1f1f; --panel: #1c1c1c; --raised: #262626; --hover: #2b2b2b;
+    --line: #2c2c2c; --line-2: #3b3b3b; --ink: #ececec; --ink-2: #c6c6c6; --muted: #8e8e8e;
+    --accent: #ff5b2e; --accent-ink: #1a1a1a; --accent-soft: rgba(255, 91, 46, .13);
+    --bubble: #2a2a2a; --own: #3a2219; --own-line: #5b3020;
+    --ok: #4cc38a; --ok-soft: rgba(76, 195, 138, .12); --bad: #f07272; --bad-soft: rgba(240, 114, 114, .12); --warn: #e0a640;
+    --ink-filter: invert(1); color-scheme: dark;
+  }
+  .sc { position: fixed; inset: 0; z-index: 5; display: grid; grid-template-columns: 264px minmax(0, 1fr) 272px; background: var(--bg); color: var(--ink); font: 400 14px/1.55 var(--font); -webkit-font-smoothing: antialiased; font-variant-numeric: normal; }
+  .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"] { grid-template-columns: 264px minmax(0, 1fr) 0; }
+  .sc.sc-noinfo .sc-info, .sc[data-mode="board"] .sc-info, .sc[data-mode="new"] .sc-info { display: none; }
+  .sc[data-mode="board"] #sc-panel, .sc[data-mode="new"] #sc-panel { visibility: hidden; }
+  .sc ::selection { background: var(--accent-soft); color: var(--ink); }
+  .sc code { font-family: var(--mono); font-size: 12.5px; }
+  .sc h1, .sc h2, .sc h3 { font-weight: 600; }
+  .sc a { color: inherit; }
+  .sc a.sc-btn { text-decoration: none; }
+  .sc-info > .sc-link { justify-self: start; }
+  .sc-panes.sc-one .sc-log, .sc-panes.sc-one .sc-cmp { padding-left: max(20px, calc((100% - 860px) / 2)); padding-right: max(20px, calc((100% - 860px) / 2)); }
+  .sc-g { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .sc-icon { display: block; flex: none; }
+  .sc-ink { filter: var(--ink-filter); }
+  .sc-sp { flex: 1; }
+  .sc .sc-btn { height: 32px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: transparent; color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s, transform .08s, opacity .15s; }
+  .sc .sc-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--line-2); }
+  .sc .sc-btn:active:not(:disabled) { transform: scale(.97); }
+  .sc .sc-btn.sc-primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .sc .sc-btn.sc-primary:hover:not(:disabled) { background: var(--ink); opacity: .9; }
+  .sc .sc-btn.sc-danger:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+  .sc .sc-ib { width: 30px; height: 30px; padding: 0; border: 0; background: transparent; border-radius: var(--r-sm); display: inline-grid; place-items: center; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; flex: none; }
+  .sc .sc-ib:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+  .sc .sc-ib:active:not(:disabled) { transform: scale(.94); }
+  .sc .sc-link { border: 0; background: none; padding: 0; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-2); }
+  .sc .sc-link:hover:not(:disabled) { color: var(--ink); }
+
+  .sc-side { background: var(--side); border-right: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; }
+  .sc-side-top { display: flex; align-items: center; gap: 2px; padding: 12px 10px 6px 14px; }
+  .sc-ws { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+  .sc-mark { width: 18px; height: 18px; position: relative; flex: none; }
+  .sc-mark i { position: absolute; width: 7.5px; height: 7.5px; border-radius: 2.5px; background: var(--ink); }
+  .sc-mark i:nth-child(1) { left: 0; top: 0; } .sc-mark i:nth-child(2) { right: 0; top: 0; background: var(--accent); }
+  .sc-mark i:nth-child(3) { left: 0; bottom: 0; } .sc-mark i:nth-child(4) { right: 0; bottom: 0; opacity: .35; }
+  .sc-close-side { display: none !important; }
+  .sc-scroll { overflow-y: auto; padding: 0 8px 12px; }
+  .sc-sec { font-size: 12.5px; color: var(--muted); font-weight: 500; padding: 14px 8px 4px; }
+  .sc-si { display: flex; align-items: center; gap: 9px; min-height: 32px; padding: 0 8px; border-radius: var(--r-sm); text-decoration: none; color: var(--ink-2); font-size: 13.5px; cursor: pointer; transition: background .15s, color .15s; }
+  a.sc-si:hover { background: var(--hover); color: var(--ink); }
+  .sc-si[aria-current] { background: var(--hover); color: var(--ink); font-weight: 500; }
+  .sc-si > .sc-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-si small { color: var(--muted); font-size: 12px; flex: none; }
+  .sc-si small.sc-bad { color: var(--bad); }
+  .sc-si.sc-sub { padding-left: 33px; }
+  .sc-si.sc-done { color: var(--muted); }
+  .sc-si.sc-quiet { color: var(--muted); cursor: default; }
+  .sc-si .sc-lead { width: 16px; display: grid; place-items: center; flex: none; color: var(--muted); }
+  .sc-newtask { margin: 4px 8px 6px; }
+  .sc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .sc-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: sc-spin .9s linear infinite; flex: none; }
+  @keyframes sc-spin { to { transform: rotate(360deg); } }
+  .sc-side-foot { border-top: 1px solid var(--line); padding: 10px 14px 12px; display: grid; gap: 10px; }
+  .sc-usage { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+  .sc-usage > div { display: flex; justify-content: space-between; gap: 8px; }
+  .sc-usage b { color: var(--ink-2); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .sc-meter { display: block; height: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; }
+  .sc-meter i { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; transition: width .4s; }
+  .sc-meter.sc-over i { background: var(--bad); }
+  .sc-foot-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .sc-conn { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .sc-conn.sc-on { background: var(--ok); } .sc-conn.sc-off { background: var(--bad); }
+
+  .sc-main { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+  .sc-bar { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--line); min-width: 0; }
+  .sc-bar h1 { margin: 0; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sc-crumb { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .sc-bar .sc-menu { display: none; }
+  .sc-seg { display: inline-flex; padding: 2px; border-radius: 9px; background: var(--raised); gap: 2px; flex: none; }
+  .sc .sc-seg button { height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: 500 13px/1 var(--font); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: background .15s, color .15s; white-space: nowrap; min-width: 0; }
+  .sc .sc-seg button:hover:not(:disabled) { color: var(--ink); }
+  .sc .sc-seg button[aria-pressed="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+  .sc-n { font-size: 11px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); display: inline-grid; place-items: center; padding: 0 4px; }
+  .sc-view { min-height: 0; display: none; }
+  .sc[data-mode="scene"] .sc-view-scene { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
+  .sc[data-mode="board"] .sc-view-board { display: block; }
+  .sc[data-mode="new"] .sc-view-new { display: block; }
+
+  .sc-steps { display: flex; align-items: center; gap: 6px; padding: 10px 18px; border-bottom: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--muted); white-space: nowrap; scrollbar-width: none; min-height: 45px; }
+  .sc-st { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 5px; border-radius: 999px; flex: none; }
+  .sc-st .sc-g { width: 14px; height: 14px; }
+  .sc-st.sc-done { color: var(--ink-2); } .sc-st.sc-done .sc-g { color: var(--ok); }
+  .sc-st.sc-back { color: var(--ink-2); } .sc-st.sc-back .sc-g { color: var(--bad); }
+  .sc-st.sc-bad { color: var(--bad); }
+  .sc-st.sc-now { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .sc-st.sc-wait { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .sc-ring { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid currentColor; margin: 0 2px; flex: none; }
+  .sc-st.sc-now .sc-ring { background: var(--accent); border-color: var(--accent); animation: sc-beat 1.6s ease-in-out infinite; }
+  .sc-st.sc-wait .sc-ring { background: var(--accent); border-color: var(--accent); }
+  .sc-ln { width: 18px; height: 1px; background: var(--line-2); flex: none; }
+  .sc-ln.sc-back { background: repeating-linear-gradient(90deg, var(--bad) 0 3px, transparent 3px 6px); }
+  @keyframes sc-beat { 0%, 100% { box-shadow: 0 0 0 0 var(--accent-soft); } 50% { box-shadow: 0 0 0 5px transparent; } }
+  .sc-switch { display: none; }
+
+  .sc-panes { --n: 1; display: grid; grid-template-columns: repeat(var(--n), minmax(320px, 1fr)); min-height: 0; overflow-x: auto; }
+  .sc-pane { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
+  .sc-pane + .sc-pane { border-left: 1px solid var(--line); }
+  .sc-tab { height: 44px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+  .sc-tab b { font-weight: 600; font-size: 13.5px; white-space: nowrap; }
+  .sc-role { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .sc-tabic { width: 18px; height: 18px; display: grid; place-items: center; color: var(--muted); flex: none; }
+  .sc-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); white-space: nowrap; flex: none; }
+  .sc-state::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .sc-state.sc-live { color: var(--accent); font-weight: 500; }
+  .sc-state.sc-live::before { background: var(--accent); animation: sc-beat 1.6s ease-in-out infinite; }
+  .sc-state.sc-ok { color: var(--ok); } .sc-state.sc-ok::before { background: var(--ok); }
+  .sc-state.sc-bad { color: var(--bad); } .sc-state.sc-bad::before { background: var(--bad); }
+
+  .sc-log { overflow-y: auto; overscroll-behavior: contain; padding: 18px 20px 12px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .sc-log > * { flex: none; animation: sc-in .25s ease-out; }
+  @keyframes sc-in { from { opacity: 0; transform: translateY(4px); } }
+  .sc-log p { margin: 0; }
+  .sc-txt { font-size: 14px; line-height: 1.65; color: var(--ink); overflow-wrap: anywhere; }
+  .sc-txt p + p, .sc-txt p + ul, .sc-txt p + ol, .sc-txt ul + p, .sc-txt ol + p, .sc-txt pre + p { margin-top: 8px; }
+  .sc-txt ol, .sc-txt ul { margin: 6px 0 0; padding-left: 20px; }
+  .sc-txt li + li { margin-top: 3px; }
+  .sc-txt .sc-h { font-weight: 600; }
+  .sc-txt .sc-tag { margin-bottom: 8px; }
+  .sc-code, .sc-pre { margin: 8px 0 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--raised); font: 12px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; color: var(--ink-2); }
+  .sc-clamp { max-height: 11.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .sc-more { margin-top: 6px; }
+
+  .sc-in { align-self: flex-end; max-width: 88%; min-width: 0; background: var(--bubble); border-radius: var(--r-lg); border-bottom-right-radius: 6px; padding: 10px 14px; font-size: 13.5px; line-height: 1.55; }
+  .sc-in-t { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sc-from { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .sc-from .sc-g { width: 13px; height: 13px; }
+  .sc-in.sc-own { background: var(--own); box-shadow: inset 0 0 0 1px var(--own-line); }
+  .sc-in.sc-own .sc-from { color: var(--accent); }
+  .sc-in.sc-own.sc-dropped { opacity: .7; }
+  .sc-round { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+  .sc-round::before, .sc-round::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .sc-round.sc-bad { color: var(--bad); }
+  .sc-quiet { color: var(--muted); font-size: 12.5px; }
+  .sc-errline { color: var(--bad); background: var(--bad-soft); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  .sc-fold { min-width: 0; }
+  .sc-fold > summary { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; list-style: none; padding: 2px 0; border-radius: 6px; transition: color .15s; max-width: 100%; }
+  .sc-fold > summary::-webkit-details-marker { display: none; }
+  .sc-fold > summary:hover { color: var(--ink); }
+  .sc-chev { width: 14px; height: 14px; transition: transform .15s; }
+  .sc-fold[open] > summary .sc-chev { transform: rotate(90deg); }
+  .sc-fold-b { margin: 8px 0 2px 6px; padding-left: 14px; border-left: 2px solid var(--line-2); color: var(--muted); font-size: 13.5px; line-height: 1.65; overflow-wrap: anywhere; min-width: 0; }
+  .sc-fold-b p { white-space: pre-wrap; }
+  .sc-fold-b p + p { margin-top: 6px; }
+  .sc-fold.sc-livefold .sc-fold-b { border-left-color: var(--accent); color: var(--ink-2); }
+  .sc-cmd { min-width: 0; }
+  .sc-cmd + .sc-cmd { margin-top: 6px; }
+  .sc-cmd > summary { display: grid; gap: 1px; cursor: pointer; list-style: none; min-width: 0; }
+  .sc-cmd > summary::-webkit-details-marker { display: none; }
+  .sc-cmd code { color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .sc-cmd > summary:hover code { color: var(--ink); }
+  .sc-res { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-cmd.sc-err .sc-res { color: var(--bad); }
+  .sc-shimmer { background: linear-gradient(90deg, var(--muted) 0%, var(--ink) 45%, var(--muted) 90%); background-size: 220% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: sc-shim 2.6s linear infinite; font-weight: 500; }
+  @keyframes sc-shim { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+  .sc-liverow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+  .sc-caret { display: inline-block; width: 6px; height: 14px; background: var(--accent); vertical-align: -2px; margin-left: 2px; animation: sc-blink 1s steps(1) infinite; }
+  @keyframes sc-blink { 50% { opacity: 0; } }
+
+  .sc-change { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--panel); transition: border-color .15s; min-width: 0; }
+  .sc-change:hover { border-color: var(--line-2); }
+  .sc-change-h { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; min-width: 0; }
+  .sc-change-h .sc-nm { display: grid; line-height: 1.3; min-width: 0; flex: 1; }
+  .sc-change-h .sc-nm b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-change-h .sc-nm small { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-plus { color: var(--ok); } .sc-minus { color: var(--bad); }
+  .sc-diff { border-top: 1px solid var(--line); font: 12px/1.65 var(--mono); padding: 4px 0; max-height: 420px; overflow: auto; }
+  .sc-diff div { padding: 0 12px; white-space: pre; }
+  .sc-diff .sc-a { background: var(--ok-soft); } .sc-diff .sc-a::before { content: "+ "; color: var(--ok); }
+  .sc-diff .sc-d { background: var(--bad-soft); color: var(--ink-2); } .sc-diff .sc-d::before { content: "\2212  "; color: var(--bad); }
+  .sc-diff .sc-c { color: var(--muted); } .sc-diff .sc-c::before { content: "  "; }
+  .sc-diff .sc-hk { color: var(--muted); opacity: .8; padding-top: 4px; }
+  .sc-tag { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 500; }
+  .sc-tag .sc-g { width: 13px; height: 13px; }
+  .sc-tag.sc-back { background: var(--bad-soft); color: var(--bad); }
+  .sc-tag.sc-ok { background: var(--ok-soft); color: var(--ok); }
+
+  .sc-cmp { padding: 8px 14px 14px; }
+  .sc-cmp-box { border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--panel); transition: border-color .15s; }
+  .sc-cmp-box:focus-within { border-color: var(--muted); }
+  .sc .sc-cmp textarea { display: block; width: 100%; border: 0; border-radius: var(--r-lg); background: transparent; color: var(--ink); resize: none; padding: 12px 14px 4px; font: 14px/1.45 var(--font); min-height: 44px; max-height: 140px; outline: none; }
+  .sc .sc-cmp textarea::placeholder, .sc textarea::placeholder { color: var(--muted); }
+  .sc .sc-cmp textarea:disabled { cursor: not-allowed; }
+  .sc-cmp-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px 6px 8px; font-size: 12.5px; color: var(--muted); min-width: 0; }
+  .sc-pill { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border-radius: 7px; color: var(--muted); font-size: 12.5px; white-space: nowrap; min-width: 0; overflow: hidden; }
+  .sc-pill .sc-g { width: 14px; height: 14px; }
+  .sc-pill.sc-write { color: var(--accent); }
+  .sc-pill b { color: var(--ink-2); font-weight: 500; }
+  .sc .sc-send { width: 30px; height: 30px; border-radius: 50%; border: 0; padding: 0; background: var(--ink); color: var(--bg); display: grid; place-items: center; cursor: pointer; transition: transform .08s, opacity .15s; flex: none; }
+  .sc .sc-send:hover:not(:disabled) { opacity: .88; border: 0; }
+  .sc .sc-send:active:not(:disabled) { transform: scale(.92); }
+  .sc .sc-send:disabled { opacity: .35; }
+  .sc-send .sc-g { width: 15px; height: 15px; stroke-width: 2.2; }
+  .sc .sc-send.sc-stop { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--line-2); }
+  .sc-send.sc-stop .sc-g { fill: currentColor; stroke: none; width: 11px; height: 11px; }
+  .sc-hint { font-size: 12px; color: var(--muted); padding: 6px 4px 0; min-height: 18px; }
+  .sc-hint.sc-bad { color: var(--bad); }
+
+  .sc-info { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 14px 16px 24px; display: grid; align-content: start; gap: 4px; min-height: 0; min-width: 0; }
+  .sc-ih { font-size: 12.5px; font-weight: 600; color: var(--ink-2); padding: 14px 0 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .sc-ih:first-child { padding-top: 4px; }
+  .sc-ih small { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .sc-row { display: flex; align-items: center; gap: 9px; min-height: 30px; font-size: 13px; color: var(--ink-2); padding: 0 6px; margin: 0 -6px; border-radius: var(--r-sm); min-width: 0; }
+  .sc-row .sc-g { color: var(--muted); width: 15px; height: 15px; }
+  .sc-row .sc-t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sc-row small { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .sc-mrow { display: grid; gap: 6px; padding: 4px 0 6px; font-size: 13px; color: var(--ink-2); }
+  .sc-mrow > div { display: flex; justify-content: space-between; gap: 8px; }
+  .sc-mrow small { color: var(--muted); font-size: 12px; }
+  .sc-para { font-size: 13px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sc-para.sc-bad { color: var(--bad); }
+  .sc-info .sc-txt { font-size: 13px; line-height: 1.55; color: var(--ink-2); }
+  .sc-info .sc-txt .sc-h { font-size: 13px; }
+  .sc-qs { margin: 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); display: grid; gap: 4px; }
+  .sc-qs small { display: block; color: var(--muted); }
+  .sc-divider { height: 1px; background: var(--line); margin: 10px 0 0; }
+  .sc-acts { display: grid; gap: 8px; padding-top: 6px; }
+  .sc-acts .sc-btn { justify-content: flex-start; }
+  .sc-err-t { color: var(--bad); font-size: 12.5px; overflow-wrap: anywhere; min-height: 0; }
+  .sc-note { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--bg); }
+  .sc-note label { font-size: 12.5px; color: var(--muted); }
+  .sc .sc-note textarea, .sc .sc-newbox textarea { min-height: 72px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: 13.5px/1.45 var(--font); outline: none; width: 100%; }
+  .sc .sc-note textarea:focus, .sc .sc-newbox textarea:focus { border-color: var(--muted); }
+  .sc-note .sc-btns, .sc-card .sc-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .sc-empty { display: grid; align-content: start; gap: 10px; padding: 28px 24px; max-width: 640px; overflow-y: auto; min-height: 0; }
+  .sc-empty h2 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+  .sc-empty .sc-para { font-size: 14px; }
+  .sc-view-new { overflow: auto; padding: 40px 24px; }
+  .sc-newbox { max-width: 680px; margin: 0 auto; display: grid; gap: 12px; }
+  .sc-newbox h2 { margin: 0; font-size: 22px; letter-spacing: -.015em; }
+  .sc-newbox p { margin: 0; color: var(--muted); font-size: 13.5px; }
+  .sc .sc-newbox textarea { min-height: 140px; font-size: 14.5px; padding: 14px 16px; border-radius: var(--r-lg); }
+  .sc-newbox .sc-btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  .sc-view-board { overflow: auto; padding: 18px 18px 24px; min-height: 0; }
+  .sc-cols { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; align-items: start; min-width: 1000px; }
+  .sc-col { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px; display: grid; gap: 8px; align-content: start; min-height: 220px; transition: border-color .15s, background .15s; }
+  .sc-col.sc-drop { border-color: var(--accent); background: var(--accent-soft); }
+  .sc-col-h { display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .sc-col-h small { color: var(--muted); font-weight: 400; }
+  .sc-col-empty { color: var(--muted); font-size: 12.5px; padding: 6px 4px; }
+  .sc-card { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px; display: grid; gap: 8px; cursor: grab; transition: transform .15s, border-color .15s; min-width: 0; }
+  .sc-card:hover { transform: translateY(-2px); border-color: var(--line-2); }
+  .sc-card.sc-dragging { opacity: .45; }
+  .sc-card.sc-live { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .sc-card-t { font-weight: 600; font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+  .sc-card-m { display: flex; gap: 4px 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .sc-card-who { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .sc-ticker { font-size: 12.5px; line-height: 1.5; color: var(--ink-2); background: var(--raised); border-radius: var(--r-sm); padding: 8px 10px; overflow-wrap: anywhere; }
+  .sc-ticker b { color: var(--accent); font-weight: 600; }
+
+  .sc-dlg { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .45); z-index: 30; }
+  .sc-dlg .sc-note { width: min(440px, calc(100vw - 32px)); padding: 16px; background: var(--panel); }
+  .sc-dlg h3 { margin: 0; font-size: 15px; }
+  .sc-toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 16px); opacity: 0; pointer-events: none; background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: var(--r-sm); font-size: 13px; transition: opacity .2s, transform .2s; z-index: 40; max-width: calc(100vw - 32px); }
+  .sc-toast.sc-show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 1240px) {
+    .sc, .sc.sc-noinfo { grid-template-columns: 248px minmax(0, 1fr); }
+    .sc .sc-info { display: none; position: fixed; right: 0; top: 52px; bottom: 0; width: min(320px, 92vw); z-index: 20; box-shadow: -12px 0 32px rgba(0, 0, 0, .25); }
+    .sc.sc-showinfo[data-mode="scene"] .sc-info { display: grid; }
+  }
+  @media (max-width: 880px) {
+    .sc, .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"] { grid-template-columns: minmax(0, 1fr); }
+    .sc-side { display: none; position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); z-index: 25; box-shadow: 12px 0 32px rgba(0, 0, 0, .3); }
+    .sc.sc-showside .sc-side { display: grid; }
+    .sc-close-side { display: inline-grid !important; }
+    .sc-bar .sc-menu { display: inline-grid; }
+    .sc-crumb { display: none; }
+    .sc-switch { display: flex; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+    .sc-switch .sc-seg { width: 100%; } .sc .sc-switch .sc-seg button { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .sc-panes { grid-template-columns: minmax(0, 1fr); overflow-x: hidden; }
+    .sc-pane + .sc-pane { border-left: 0; }
+    .sc-pane:not(.sc-on) { display: none; }
+    .sc-tab { padding: 0 16px; }
+    .sc-log { padding: 16px; }
+    .sc-cmp { padding: 8px 12px 12px; }
+    .sc-view-board { padding: 16px; }
+    .sc-cols { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+    .sc-steps { padding: 10px 16px; }
+  }
+  @media (max-width: 520px) {
+    .sc-bar { padding: 0 8px 0 6px; gap: 6px; }
+    .sc .sc-bar .sc-seg button { padding: 0 9px; }
+    .sc-bar .sc-folder { display: none; }
+    .sc-role { display: none; }
+    .sc-model { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .sc *, .sc *::before, .sc *::after { animation: none !important; transition: none !important; }
+    .sc-shimmer { color: var(--ink); background: none; }
+  }
 </style>
 </head>
 <body>
@@ -287,6 +608,7 @@
       <span>agentsflow</span>
     </div>
     <nav class="nav" aria-label="Разделы">
+      <button type="button" data-view-button="scene" hidden></button>
       <button type="button" data-view-button="home" hidden></button>
       <button type="button" data-view-button="overview"></button>
       <button type="button" data-view-button="chat"></button>
@@ -310,6 +632,79 @@
     <section class="dash-view" data-view="dash" hidden></section>
     <section class="board-view" data-view="board" hidden></section>
   </div>
+</div>
+<!-- Scene (serve --home): departments' tasks on the left, the task's agents side by side, the task card on the right. -->
+<div class="sc" id="scene" data-mode="scene" hidden>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="sci-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="sci-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="sci-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="sci-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="sci-up" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></symbol>
+    <symbol id="sci-sq" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/></symbol>
+    <symbol id="sci-new" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+    <symbol id="sci-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="sci-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="sci-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="sci-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+    <symbol id="sci-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="sci-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="sci-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></symbol>
+    <symbol id="sci-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="sci-arrow" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="sci-run" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 14h6v6h-6z"/><path d="M10 7h4a3 3 0 0 1 3 3v4"/></symbol>
+    <symbol id="sci-orch" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><path d="M12 7v4M12 11l-6 6M12 11l6 6"/></symbol>
+    <symbol id="sci-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="sci-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+    <symbol id="sci-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+    <symbol id="sci-home" viewBox="0 0 24 24"><path d="M4 21V9l8-5 8 5v12"/><path d="M9 21v-6h6v6"/></symbol>
+    <symbol id="sci-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></symbol>
+  </svg>
+
+  <aside class="sc-side" aria-label="Задачи">
+    <div class="sc-side-top">
+      <div class="sc-ws"><span class="sc-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>agentsflow</div>
+      <span class="sc-sp"></span>
+      <button class="sc-ib sc-close-side" type="button" id="sc-close-side" aria-label="Скрыть список задач"><svg class="sc-g"><use href="#sci-x"/></svg></button>
+    </div>
+    <a class="sc-si sc-newtask" href="#new" id="sc-newlink"><span class="sc-lead"><svg class="sc-g"><use href="#sci-new"/></svg></span><span class="sc-t">Новая задача</span></a>
+    <div class="sc-scroll" id="sc-list"></div>
+    <div class="sc-side-foot">
+      <div class="sc-usage" id="sc-usage"></div>
+      <div class="sc-foot-row">
+        <span class="sc-conn" id="sc-conn"></span><span id="sc-conn-text">подключение…</span>
+        <span class="sc-sp"></span>
+        <button class="sc-ib" type="button" id="sc-theme" aria-label="Сменить тему" title="Сменить тему"><svg class="sc-g"><use href="#sci-moon"/></svg></button>
+        <button class="sc-ib" type="button" id="sc-classic" aria-label="Классический вид" title="Классический вид: отделы, правила, расписания, чаты, почта"><svg class="sc-g"><use href="#sci-grid"/></svg></button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="sc-main">
+    <header class="sc-bar">
+      <button class="sc-ib sc-menu" type="button" id="sc-menu" aria-label="Список задач"><svg class="sc-g"><use href="#sci-menu"/></svg></button>
+      <svg class="sc-g sc-folder" style="color:var(--muted)" aria-hidden="true"><use href="#sci-folder"/></svg>
+      <span class="sc-crumb" id="sc-crumb"></span>
+      <h1 id="sc-title">agentsflow</h1>
+      <span class="sc-sp"></span>
+      <span class="sc-seg" role="group" aria-label="Вид">
+        <button type="button" data-sc-mode="scene" aria-pressed="true">Сцена</button>
+        <button type="button" data-sc-mode="board" aria-pressed="false">Доска <span class="sc-n" id="sc-wait-n" hidden></span></button>
+      </span>
+      <button class="sc-ib" type="button" id="sc-panel" aria-label="Карточка задачи" title="Карточка задачи"><svg class="sc-g"><use href="#sci-panel"/></svg></button>
+    </header>
+    <div class="sc-view sc-view-scene">
+      <nav class="sc-steps" id="sc-steps" aria-label="Ход задачи"></nav>
+      <div class="sc-switch" id="sc-switch"></div>
+      <div class="sc-panes" id="sc-panes"></div>
+    </div>
+    <div class="sc-view sc-view-board" id="sc-board"></div>
+    <div class="sc-view sc-view-new" id="sc-new"></div>
+  </main>
+
+  <aside class="sc-info" id="sc-info" aria-label="Задача"></aside>
+  <div class="sc-dlg" id="sc-dlg" hidden></div>
+  <div class="sc-toast" id="sc-toast" role="status" aria-live="polite"></div>
 </div>
 
 <script>
@@ -432,6 +827,7 @@ const ICONS = {
   dash: ["M4 20V10", "M10 20V4", "M16 20v-7", "M2 20h20"],
   check: ["M5 12l5 5 9-10"],
   home: ["M4 21V9l8-5 8 5v12", "M9 21v-6h6v6"],
+  scene: ["M3 5h18v14H3z", "M10 5v14", "M15 9h3", "M15 13h3"],
 };
 function icon(name, size = 18) {
   const s = svg("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.75", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" });
@@ -614,6 +1010,7 @@ function permButtons(agent, ev, fail) {
 }
 
 function handle(env) {
+  sceneEvent(env);
   if (env.event.type === "usage") return;
   recordViewEvent(env);
   // Department tasks and rule proposals live on the departments view, not in agent panes.
@@ -1063,6 +1460,7 @@ let lastSeq = 0, es = null;
 function setConn(state, text) {
   $("#conn-dot").className = "dot " + (state === "on" ? "on" : state === "bad" ? "bad" : "");
   $("#conn-text").textContent = text;
+  sceneConn(state, text);
 }
 function connect() {
   if (!TOKEN) { setConn("bad", "нет токена"); return; }
@@ -1096,7 +1494,8 @@ async function loadState() {
     if (s.home && !homeMode) {
       homeMode = true;
       $('[data-view-button="home"]').hidden = false;
-      if (!viewSaved) setView("home"); else refreshHome();
+      $('[data-view-button="scene"]').hidden = false;
+      if (!viewSaved) setView("scene"); else refreshHome();
     }
     for (const a of team) {
       const pane = panes[a.id] || (buildPane(a), panes[a.id]);
@@ -1148,6 +1547,7 @@ function recordViewEvent(env) {
     if (activeView === "dash") renderDash();
     scheduleOverview();
     scheduleHome();
+    scDirty();
   }
   const phrase = eventPhrase(env.event);
   if (phrase) {
@@ -1165,10 +1565,13 @@ async function loadTasks() {
   if (activeView === "board") renderBoard();
   if (activeView === "dash") renderDash();
   scheduleOverview();
+  scDirty();
 }
 function setView(view) {
   activeView = view;
   for (const node of document.querySelectorAll("[data-view]")) node.hidden = node.dataset.view !== view;
+  $(".shell").hidden = view === "scene";
+  $("#scene").hidden = view !== "scene";
   syncNav();
   try { localStorage.setItem("agentsflow.view", view); } catch (_) {}
   if (statsTimer) clearInterval(statsTimer);
@@ -1177,8 +1580,9 @@ function setView(view) {
   if (view === "dash") { renderDash(); refreshStats(); statsTimer = setInterval(refreshStats, 3000); }
   if (view === "board") renderBoard();
   if (view === "home") { renderHome(); refreshHome(); }
+  if (view === "scene") openScene();
 }
-const NAV = { home: ["home", "Отделы"], overview: ["overview", "Обзор"], chat: ["chat", "Чаты"], board: ["board", "Доска"], dash: ["dash", "Статистика"] };
+const NAV = { scene: ["scene", "Сцена"], home: ["home", "Отделы"], overview: ["overview", "Обзор"], chat: ["chat", "Чаты"], board: ["board", "Доска"], dash: ["dash", "Статистика"] };
 for (const button of document.querySelectorAll("[data-view-button]")) {
   const [ic, label] = NAV[button.dataset.viewButton];
   button.append(icon(ic), el("span", "", label));
@@ -1653,6 +2057,7 @@ async function refreshHome() {
     homeData.error = "";
   } catch (err) { homeData.error = "Не удалось загрузить отделы: " + err.message; }
   scheduleHome();
+  scDirty();
 }
 function scheduleHome() {
   if (activeView !== "home" || homeTimer) return;
@@ -1873,12 +2278,1116 @@ function renderHome() {
   }
 }
 
+// ---- Scene (serve --home): the task's agents side by side, their thinking live ----
+// Run agents are "dept:member:task". Their events become lanes; workflow events of
+// the task's runs (session = run id) become the steps strip.
+const SC_IMG = { claude: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNTYgMjU3IiB3aWR0aD0iMjU2IiBoZWlnaHQ9IjI1NyI+PGc+CiAgICAgICAgPHBhdGggZD0iTTUwLjIyNzg0ODEsMTcwLjMyMTAxMyBMMTAwLjU4NTMxNiwxNDIuMDYzNzk3IEwxMDEuNDI3ODQ4LDEzOS42MDEwMTMgTDEwMC41ODUzMTYsMTM4LjI0IEw5OC4xMjI1MzE2LDEzOC4yNCBMODkuNjk3MjE1MiwxMzcuNzIxNTE5IEw2MC45MjE1MTksMTM2Ljk0Mzc5NyBMMzUuOTY5NjIwMywxMzUuOTA2ODM1IEwxMS43OTU0NDMsMTM0LjYxMDYzMyBMNS43MDMyOTExNCwxMzMuMzE0NDMgTDAsMTI1Ljc5NjQ1NiBMMC41ODMyOTExMzksMTIyLjAzNzQ2OCBMNS43MDMyOTExNCwxMTguNjAyNTMyIEwxMy4wMjY4MzU0LDExOS4yNTA2MzMgTDI5LjIyOTM2NzEsMTIwLjM1MjQwNSBMNTMuNTMzMTY0NiwxMjIuMDM3NDY4IEw3MS4xNjE1MTksMTIzLjA3NDQzIEw5Ny4yOCwxMjUuNzk2NDU2IEwxMDEuNDI3ODQ4LDEyNS43OTY0NTYgTDEwMi4wMTExMzksMTI0LjExMTM5MiBMMTAwLjU4NTMxNiwxMjMuMDc0NDMgTDk5LjQ4MzU0NDMsMTIyLjAzNzQ2OCBMNzQuMzM3MjE1MiwxMDQuOTkyNDA1IEw0Ny4xMTY5NjIsODYuOTc1MTg5OSBMMzIuODU4NzM0Miw3Ni42MDU1Njk2IEwyNS4xNDYzMjkxLDcxLjM1NTk0OTQgTDIxLjI1NzcyMTUsNjYuNDMwMzc5NyBMMTkuNTcyNjU4Miw1NS42NzE4OTg3IEwyNi41NzIxNTE5LDQ3Ljk1OTQ5MzcgTDM1Ljk2OTYyMDMsNDguNjA3NTk0OSBMMzguMzY3NTk0OSw0OS4yNTU2OTYyIEw0Ny44OTQ2ODM1LDU2LjU3OTI0MDUgTDY4LjI0NTA2MzMsNzIuMzI4MTAxMyBMOTQuODE3MjE1Miw5MS45MDA3NTk1IEw5OC43MDU4MjI4LDk1LjE0MTI2NTggTDEwMC4yNjEyNjYsOTQuMDM5NDkzNyBMMTAwLjQ1NTY5Niw5My4yNjE3NzIyIEw5OC43MDU4MjI4LDkwLjM0NTMxNjUgTDg0LjI1MzE2NDYsNjQuMjI2ODM1NCBMNjguODI4MzU0NCwzNy42NTQ2ODM1IEw2MS45NTg0ODEsMjYuNjM2OTYyIEw2MC4xNDM3OTc1LDIwLjAyNjMyOTEgQzU5LjQ5NTY5NjIsMTcuMzA0MzAzOCA1OS4wNDIwMjUzLDE1LjAzNTk0OTQgNTkuMDQyMDI1MywxMi4yNDkxMTM5IEw2Ny4wMTM2NzA5LDEuNDI1ODIyNzggTDcxLjQyMDc1OTUsLTEuNDIxMDg1NDdlLTE0IEw4Mi4wNDk2MjAzLDEuNDI1ODIyNzggTDg2LjUyMTUxOSw1LjMxNDQzMDM4IEw5My4xMzIxNTE5LDIwLjQxNTE4OTkgTDEwMy44MjU4MjMsNDQuMjAwNTA2MyBMMTIwLjQxNzIxNSw3Ni41NDA3NTk1IEwxMjUuMjc3OTc1LDg2LjEzMjY1ODIgTDEyNy44NzAzOCw5NS4wMTE2NDU2IEwxMjguODQyNTMyLDk3LjczMzY3MDkgTDEzMC41Mjc1OTUsOTcuNzMzNjcwOSBMMTMwLjUyNzU5NSw5Ni4xNzgyMjc4IEwxMzEuODg4NjA4LDc3Ljk2NjU4MjMgTDEzNC40MTYyMDMsNTUuNjA3MDg4NiBMMTM2Ljg3ODk4NywyNi44MzEzOTI0IEwxMzcuNzIxNTE5LDE4LjczMDEyNjYgTDE0MS43Mzk3NDcsOS4wMDg2MDc1OSBMMTQ5LjcxMTM5MiwzLjc1ODk4NzM0IEwxNTUuOTMzMTY1LDYuNzQwMjUzMTYgTDE2MS4wNTMxNjUsMTQuMDYzNzk3NSBMMTYwLjM0MDI1MywxOC43OTQ5MzY3IEwxNTcuMjk0MTc3LDM4LjU2MjAyNTMgTDE1MS4zMzE2NDYsNjkuNTQxMjY1OCBMMTQ3LjQ0MzAzOCw5MC4yODA1MDYzIEwxNDkuNzExMzkyLDkwLjI4MDUwNjMgTDE1Mi4zMDM3OTcsODcuNjg4MTAxMyBMMTYyLjgwMzAzOCw3My43NTM5MjQxIEwxODAuNDMxMzkyLDUxLjcxODQ4MSBMMTg4LjIwODYwOCw0Mi45NjkxMTM5IEwxOTcuMjgyMDI1LDMzLjMxMjQwNTEgTDIwMy4xMTQ5MzcsMjguNzEwODg2MSBMMjE0LjEzMjY1OCwyOC43MTA4ODYxIEwyMjIuMjMzOTI0LDQwLjc2NTU2OTYgTDIxOC42MDQ1NTcsNTMuMjA5MTEzOSBMMjA3LjI2Mjc4NSw2Ny41OTY5NjIgTDE5Ny44NjUzMTYsNzkuNzgxMjY1OCBMMTg0LjM4NDgxLDk3LjkyODEwMTMgTDE3NS45NTk0OTQsMTEyLjQ0NTU3IEwxNzYuNzM3MjE1LDExMy42MTIxNTIgTDE3OC43NDYzMjksMTEzLjQxNzcyMiBMMjA5LjIwNzA4OSwxMDYuOTM2NzA5IEwyMjUuNjY4ODYxLDEwMy45NTU0NDMgTDI0NS4zMDYzMjksMTAwLjU4NTMxNiBMMjU0LjE4NTMxNiwxMDQuNzMzMTY1IEwyNTUuMTU3NDY4LDEwOC45NDU4MjMgTDI1MS42NTc3MjIsMTE3LjU2NTU3IEwyMzAuNjU5MjQxLDEyMi43NTAzOCBMMjA2LjAzMTM5MiwxMjcuNjc1OTQ5IEwxNjkuMzQ4ODYxLDEzNi4zNjA1MDYgTDE2OC44OTUxOSwxMzYuNjg0NTU3IEwxNjkuNDEzNjcxLDEzNy4zMzI2NTggTDE4NS45NDAyNTMsMTM4Ljg4ODEwMSBMMTkzLjAwNDU1NywxMzkuMjc2OTYyIEwyMTAuMzA4ODYxLDEzOS4yNzY5NjIgTDI0Mi41MTk0OTQsMTQxLjY3NDkzNyBMMjUwLjk0NDgxLDE0Ny4yNDg2MDggTDI1NiwxNTQuMDUzNjcxIEwyNTUuMTU3NDY4LDE1OS4yMzg0ODEgTDI0Mi4xOTU0NDMsMTY1Ljg0OTExNCBMMjI0LjY5NjcwOSwxNjEuNzAxMjY2IEwxODMuODY2MzI5LDE1MS45Nzk3NDcgTDE2OS44NjczNDIsMTQ4LjQ4IEwxNjcuOTIzMDM4LDE0OC40OCBMMTY3LjkyMzAzOCwxNDkuNjQ2NTgyIEwxNzkuNTg4ODYxLDE2MS4wNTMxNjUgTDIwMC45NzYyMDMsMTgwLjM2NjU4MiBMMjI3Ljc0Mjc4NSwyMDUuMjUzNjcxIEwyMjkuMTAzNzk3LDIxMS40MTA2MzMgTDIyNS42Njg4NjEsMjE2LjI3MTM5MiBMMjIyLjAzOTQ5NCwyMTUuNzUyOTExIEwxOTguNTEzNDE4LDE5OC4wNTk3NDcgTDE4OS40NCwxOTAuMDg4MTAxIEwxNjguODk1MTksMTcyLjc4Mzc5NyBMMTY3LjUzNDE3NywxNzIuNzgzNzk3IEwxNjcuNTM0MTc3LDE3NC41OTg0ODEgTDE3Mi4yNjUzMTYsMTgxLjUzMzE2NSBMMTk3LjI4MjAyNSwyMTkuMTIzMDM4IEwxOTguNTc4MjI4LDIzMC42NTkyNDEgTDE5Ni43NjM1NDQsMjM0LjQxODIyOCBMMTkwLjI4MjUzMiwyMzYuNjg2NTgyIEwxODMuMTUzNDE4LDIzNS4zOTAzOCBMMTY4LjUwNjMyOSwyMTQuODQ1NTcgTDE1My40MDU1NywxOTEuNzA4MzU0IEwxNDEuMjIxMjY2LDE3MC45NjkxMTQgTDEzOS43MzA2MzMsMTcxLjgxMTY0NiBMMTMyLjUzNjcwOSwyNDkuMjU5NzQ3IEwxMjkuMTY2NTgyLDI1My4yMTMxNjUgTDEyMS4zODkzNjcsMjU2LjE5NDQzIEwxMTQuOTA4MzU0LDI1MS4yNjg4NjEgTDExMS40NzM0MTgsMjQzLjI5NzIxNSBMMTE0LjkwODM1NCwyMjcuNTQ4MzU0IEwxMTkuMDU2MjAzLDIwNy4wMDM1NDQgTDEyMi40MjYzMjksMTkwLjY3MTM5MiBMMTI1LjQ3MjQwNSwxNzAuMzg1ODIzIEwxMjcuMjg3MDg5LDE2My42NDU1NyBMMTI3LjE1NzQ2OCwxNjMuMTkxODk5IEwxMjUuNjY2ODM1LDE2My4zODYzMjkgTDExMC4zNzE2NDYsMTg0LjM4NDgxIEw4Ny4xMDQ4MTAxLDIxNS44MTc3MjIgTDY4LjY5ODczNDIsMjM1LjUyIEw2NC4yOTE2NDU2LDIzNy4yNjk4NzMgTDU2LjY0NDA1MDYsMjMzLjMxNjQ1NiBMNTcuMzU2OTYyLDIyNi4yNTIxNTIgTDYxLjYzNDQzMDQsMjE5Ljk2NTU3IEw4Ny4xMDQ4MTAxLDE4Ny41NjA1MDYgTDEwMi40NjQ4MSwxNjcuNDY5MzY3IEwxMTIuMzgwNzU5LDE1NS44NjgzNTQgTDExMi4zMTU5NDksMTU0LjE4MzI5MSBMMTExLjczMjY1OCwxNTQuMTgzMjkxIEw0NC4wNzA4ODYxLDE5OC4xMjQ1NTcgTDMyLjAxNjIwMjUsMTk5LjY4IEwyNi44MzEzOTI0LDE5NC44MTkyNDEgTDI3LjQ3OTQ5MzcsMTg2Ljg0NzU5NSBMMjkuOTQyMjc4NSwxODQuMjU1MTkgTDUwLjI5MjY1ODIsMTcwLjI1NjIwMyBMNTAuMjI3ODQ4MSwxNzAuMzIxMDEzIFoiIGZpbGw9IiNEOTc3NTciPjwvcGF0aD4KICAgIDwvZz48L3N2Zz4=", openai: "data:image/svg+xml;base64,PHN2ZyBkYXRhLWljPSJpbmsiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDI1NiAyNjAiIHdpZHRoPSIyNTYiIGhlaWdodD0iMjYwIj48Zz4KICAgICAgICA8cGF0aCBkPSJNMjM5LjE4MzkxNCwxMDYuMjAyNzgzIEMyNDUuMDU0MzA0LDg4LjUyNDIwOTYgMjQzLjAyMjI4LDY5LjE3MzM4MDUgMjMzLjYwNzU5OSw1My4wOTk4ODY0IEMyMTkuNDUxNjc4LDI4LjQ1ODgwMjEgMTkwLjk5OTcwMywxNS43ODM2MTI5IDE2My4yMTMwMDcsMjEuNzM5NTA1IEMxNDcuNTU0MDc3LDQuMzIxNDU4ODMgMTIzLjc5NDkwOSwtMy40MjM5ODU1NCAxMDAuODc5MDEsMS40MTg3Mzg5OCBDNzcuOTYzMTEwNSw2LjI2MTQ2MzQ5IDU5LjM2OTAwOTMsMjIuOTU3MjUzNiA1Mi4wOTU5NjIxLDQ1LjIyMTQyMTkgQzMzLjg0MzY0OTQsNDguOTY0NDg2NyAxOC4wOTAxNzIxLDYwLjM5Mjc0OSA4Ljg2NjcyNTEzLDc2LjU4MTgwMzMgQy01LjQ0MzQ5MSwxMDEuMTgyOTYyIC0yLjE5NTQ0NDMxLDEzMi4yMTUyNTUgMTYuODk4NjY2MiwxNTMuMzIwMDk0IEMxMS4wMDYwODY1LDE3MC45OTA2NTYgMTMuMDE5NzI4MywxOTAuMzQzOTkxIDIyLjQyMzgyMzEsMjA2LjQyMjk5MSBDMzYuNTk3NTU1MywyMzEuMDcyMzQ0IDY1LjA2ODAzNDIsMjQzLjc0NjU2NiA5Mi44Njk1NzM4LDIzNy43ODMzNzIgQzEwNS4yMzU2MzksMjUxLjcwODI0OSAxMjMuMDAxMTEzLDI1OS42MzA5NDIgMTQxLjYyMzk2OCwyNTkuNTI2OTIgQzE3MC4xMDUzNTksMjU5LjU1MjE2OSAxOTUuMzM3NjExLDI0MS4xNjU3MTggMjA0LjAzNzc3NywyMTQuMDQ1NjYxIEMyMjIuMjg3MzQsMjEwLjI5NjM1NiAyMzguMDM4NDg5LDE5OC44Njk3ODMgMjQ3LjI2NzAxNCwxODIuNjg1MjggQzI2MS40MDQ0NTMsMTU4LjEyNzUxNSAyNTguMTQyNDk0LDEyNy4yNjI3NzUgMjM5LjE4MzkxNCwxMDYuMjAyNzgzIEwyMzkuMTgzOTE0LDEwNi4yMDI3ODMgWiBNMTQxLjYyMzk2OCwyNDIuNTQxMjA3IEMxMzAuMjU1NjgyLDI0Mi41NTkxNzcgMTE5LjI0Mzg3NiwyMzguNTc0NjQyIDExMC41MTkzODEsMjMxLjI4NjE5NyBMMTEyLjA1NDE0NiwyMzAuNDE2NDk2IEwxNjMuNzI0NTk1LDIwMC41OTA4ODEgQzE2Ni4zNDA2NDgsMTk5LjA1NjQ0NCAxNjcuOTU0MzIxLDE5Ni4yNTY4MTggMTY3Ljk3MDc4MSwxOTMuMjI0MDA1IEwxNjcuOTcwNzgxLDEyMC4zNzM3ODggTDE4OS44MTU2MTQsMTMzLjAxMDAyNiBDMTkwLjAzNDEzMiwxMzMuMTIxNDIzIDE5MC4xODYyMzUsMTMzLjMzMDU2NCAxOTAuMjI0ODg1LDEzMy41NzI3NzQgTDE5MC4yMjQ4ODUsMTkzLjk0MDIyOSBDMTkwLjE2ODYwMywyMjAuNzU4NDI3IDE2OC40NDIxNjYsMjQyLjQ4NDg2NCAxNDEuNjIzOTY4LDI0Mi41NDEyMDcgWiBNMzcuMTU3NTc0OSwxOTcuOTMwNjIgQzMxLjQ1NjQ5OCwxODguMDg2MzU5IDI5LjQwOTQ4MTgsMTc2LjU0Njk4NCAzMS4zNzY2MjM3LDE2NS4zNDI0MjYgTDMyLjkxMTM4OTUsMTY2LjI2MzI4NSBMODQuNjMyOTk3MywxOTYuMDg4OTAxIEM4Ny4yMzg5MzQ5LDE5Ny42MTgyMDcgOTAuNDY4MjcxNywxOTcuNjE4MjA3IDkzLjA3NDIwOTMsMTk2LjA4ODkwMSBMMTU2LjI1NTQwMiwxNTkuNjYzNzkzIEwxNTYuMjU1NDAyLDE4NC44ODUxMTEgQzE1Ni4yNDM1NTcsMTg1LjE0OTc3MSAxNTYuMTExNzI1LDE4NS4zOTQ2MDIgMTU1Ljg5NzI5LDE4NS41NTAxNzYgTDEwMy41NjE3NzYsMjE1LjczMzkwMyBDODAuMzA1NDk1MywyMjkuMTMxNjMyIDUwLjU5MjQ5NTQsMjIxLjE2NTQzNSAzNy4xNTc1NzQ5LDE5Ny45MzA2MiBaIE0yMy41NDkzMTgxLDg1LjM4MTEyNzMgQzI5LjI4OTk4NjEsNzUuNDczMzA5NyAzOC4zNTExOTExLDY3LjkxNjI2NDggNDkuMTI4NzQ4Miw2NC4wNDc4ODI1IEw0OS4xMjg3NDgyLDEyNS40Mzg1MTUgQzQ5LjA4OTE0OTIsMTI4LjQ1OTQyNSA1MC42OTY1Mzg2LDEzMS4yNjI1NTYgNTMuMzIzNzc0OCwxMzIuNzU0MjMyIEwxMTYuMTk4MDE0LDE2OS4wMjU4NjQgTDk0LjM1MzE4MDgsMTgxLjY2MjEwMiBDOTQuMTEzMjMyNSwxODEuNzg5NDM0IDkzLjgyNTc0NjEsMTgxLjc4OTQzNCA5My41ODU3OTc5LDE4MS42NjIxMDIgTDQxLjM1MjYwMTUsMTUxLjUyOTUzNCBDMTguMTQxOTQyNiwxMzguMDc2MDk4IDEwLjE4MTc2ODEsMTA4LjM4NTU2MiAyMy41NDkzMTgxLDg1LjEyNTMzMyBMMjMuNTQ5MzE4MSw4NS4zODExMjczIFogTTIwMy4wMTQ2LDEyNy4wNzU1OTggTDEzOS45MzU3MjUsOTAuNDQ1ODU0NSBMMTYxLjcyOTQsNzcuODYwNzc0OCBDMTYxLjk2OTM0OCw3Ny43MzM0NDM0IDE2Mi4yNTY4MzQsNzcuNzMzNDQzNCAxNjIuNDk2NzgzLDc3Ljg2MDc3NDggTDIxNC43Mjk5NzksMTA4LjA0NDUwMiBDMjMxLjAzMjMyOSwxMTcuNDUxNzQ3IDI0MC40MzcyOTQsMTM1LjQyNjEwOSAyMzguODcxNTA0LDE1NC4xODI3MzkgQzIzNy4zMDU3MTQsMTcyLjkzOTM2OCAyMjUuMDUwNzE5LDE4OS4xMDU1NzIgMjA3LjQxNDI2MiwxOTUuNjc5NjMgTDIwNy40MTQyNjIsMTM0LjI4ODk5OCBDMjA3LjMyMjUyMSwxMzEuMjc2ODY3IDIwNS42NTA2OTcsMTI4LjUzNTg1MyAyMDMuMDE0NiwxMjcuMDc1NTk4IFogTTIyNC43NTcxMTYsOTQuMzg1MDg2NyBMMjIzLjIyMjM1LDkzLjQ2NDIyNzIgTDE3MS42MDMwNiw2My4zODI4MTczIEMxNjguOTgxMjkzLDYxLjg0NDM3NTEgMTY1LjczMjQ1Niw2MS44NDQzNzUxIDE2My4xMTA2ODksNjMuMzgyODE3MyBMOTkuOTgwNjU1NCw5OS44MDc5MjU5IEw5OS45ODA2NTU0LDc0LjU4NjYwNzcgQzk5Ljk1MzMwMDQsNzQuMzI1NDA4OCAxMDAuMDcxMDk1LDc0LjA3MDE4NjkgMTAwLjI4NzYwOSw3My45MjE1NDI2IEwxNTIuNTIwODA1LDQzLjc4ODk3MzggQzE2OC44NjMwOTgsMzQuMzc0MzUxOCAxODkuMTc0MjU2LDM1LjI1MjkwNDMgMjA0LjY0MjU3OSw0Ni4wNDM0ODQxIEMyMjAuMTEwOTAzLDU2LjgzNDA2MzggMjI3Ljk0OTI2OSw3NS41OTIzOTU5IDIyNC43NTcxMTYsOTQuMTgwNDUxMyBMMjI0Ljc1NzExNiw5NC4zODUwODY3IFogTTg4LjA2MDY0MDksMTM5LjA5NzkzMSBMNjYuMjE1ODA3NiwxMjYuNTEyODUxIEM2NS45OTUwMzk5LDEyNi4zNzkwOTEgNjUuODQ1MDk2NSwxMjYuMTU0MTc2IDY1LjgwNjUzNjcsMTI1Ljg5ODk0NSBMNjUuODA2NTM2Nyw2NS42ODQ5NjYgQzY1LjgzMTQ0OTUsNDYuODI4NTM2NyA3Ni43NTAwNjA1LDI5LjY4NDYwMzIgOTMuODI3MDg1MiwyMS42ODgzMDU1IEMxMTAuOTA0MTEsMTMuNjkyMDA3OSAxMzEuMDYzODMzLDE2LjI4MzU0NjIgMTQ1LjU2MzIsMjguMzM4OTk4IEwxNDQuMDI4NDM0LDI5LjIwODY5ODYgTDkyLjM1Nzk4NTIsNTkuMDM0MzE0MiBDODkuNzQxOTMyNyw2MC41Njg3NTEzIDg4LjEyODI1OTcsNjMuMzY4Mzc2NyA4OC4xMTE3OTk4LDY2LjQwMTE5MDEgTDg4LjA2MDY0MDksMTM5LjA5NzkzMSBaIE05OS45Mjk0OTY1LDExMy41MTg1IEwxMjguMDY2ODcsOTcuMzAxMTQxNyBMMTU2LjI1NTQwMiwxMTMuNTE4NSBMMTU2LjI1NTQwMiwxNDUuOTUzMjE4IEwxMjguMTY5MTg3LDE2Mi4xNzA1NzcgTDk5Ljk4MDY1NTQsMTQ1Ljk1MzIxOCBMOTkuOTI5NDk2NSwxMTMuNTE4NSBaIiBmaWxsPSIjMDAwMDAwIj48L3BhdGg+CiAgICA8L2c+PC9zdmc+", md: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIj48cGF0aCBmaWxsPSJub25lIiBzdHJva2U9IiM3NTU4MzgiIGQ9Ik0yLjUgNy45NTVoMjd2MTYuMDkxaC0yN3oiLz48cGF0aCBmaWxsPSIjNzU1ODM4IiBkPSJNNS45MDkgMjAuNjM2di05LjI3MmgyLjcyN2wyLjcyOCAzLjQwOWwyLjcyNy0zLjQwOWgyLjcyN3Y5LjI3MmgtMi43Mjd2LTUuMzE4bC0yLjcyNyAzLjQwOWwtMi43MjgtMy40MDl2NS4zMTh6bTE3LjA0NiAwbC00LjA5MS00LjVoMi43Mjd2LTQuNzcyaDIuNzI3djQuNzcyaDIuNzI3eiIvPjwvc3ZnPg==", py: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9IlNWR1g4YVNyZFR2IiB4MT0iLTEzMy4yNjgiIHgyPSItMTMzLjE5OCIgeTE9Ii0yMDIuOTEiIHkyPSItMjAyLjg0IiBncmFkaWVudFRyYW5zZm9ybT0ibWF0cml4KDE4OS4zOCAwIDAgMTg5LjgxIDI1MjQzLjA2MSAzODUxOS4xNykiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMzODdlYjgiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMzNjY5OTQiLz48L2xpbmVhckdyYWRpZW50PjxsaW5lYXJHcmFkaWVudCBpZD0iU1ZHZ3lQUXZjaXUiIHgxPSItMTMzLjU3NSIgeDI9Ii0xMzMuNDk1IiB5MT0iLTIwMy4yMDMiIHkyPSItMjAzLjEzMyIgZ3JhZGllbnRUcmFuc2Zvcm09Im1hdHJpeCgxODkuMzggMCAwIDE4OS44MSAyNTMwOS4wNjEgMzg1ODMuNDIpIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmZlMDUyIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZmZjMzMxIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHBhdGggZmlsbD0idXJsKCNTVkdYOGFTcmRUdikiIGQ9Ik0xNS44ODUgMi4xYy03LjEgMC02LjY1MSAzLjA3LTYuNjUxIDMuMDd2My4xOWg2Ljc1MnYxSDYuNTQ1UzIgOC44IDIgMTYuMDA1czQuMDEzIDYuOTEyIDQuMDEzIDYuOTEySDguMzN2LTMuMzYxcy0uMTMtNC4wMTMgMy45LTQuMDEzaDYuNzYyczMuNzcyLjA2IDMuNzcyLTMuNjUyVjUuOHMuNTcyLTMuNzEyLTYuODQyLTMuNzEyWm0tMy43MzIgMi4xMzdhMS4yMTQgMS4yMTQgMCAxIDEtMS4xODMgMS4yNDR2LS4wMmExLjIxNCAxLjIxNCAwIDAgMSAxLjIxNC0xLjIxNFoiLz48cGF0aCBmaWxsPSJ1cmwoI1NWR2d5UFF2Y2l1KSIgZD0iTTE2LjA4NSAyOS45MWM3LjEgMCA2LjY1MS0zLjA4IDYuNjUxLTMuMDh2LTMuMThoLTYuNzUxdi0xaDkuNDdTMzAgMjMuMTU4IDMwIDE1Ljk5NXMtNC4wMTMtNi45MTItNC4wMTMtNi45MTJIMjMuNjRWMTIuNHMuMTMgNC4wMTMtMy45IDQuMDEzaC02Ljc2NVM5LjIgMTYuMzU2IDkuMiAyMC4wNjhWMjYuMnMtLjU3MiAzLjcxMiA2Ljg0MiAzLjcxMmguMDRabTMuNzMyLTIuMTQ3QTEuMjE0IDEuMjE0IDAgMSAxIDIxIDI2LjUxOXYuMDNhMS4yMTQgMS4yMTQgMCAwIDEtMS4yMTQgMS4yMTR6Ii8+PC9zdmc+", excel: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9IlNWR3hVak82VGJRIiB4MT0iNC40OTQiIHgyPSIxMy44MzIiIHkxPSItMjA5Mi4wODYiIHkyPSItMjA3NS45MTQiIGdyYWRpZW50VHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyMTAwKSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzE4ODg0ZiIvPjxzdG9wIG9mZnNldD0iLjUiIHN0b3AtY29sb3I9IiMxMTdlNDMiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwYjY2MzEiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cGF0aCBmaWxsPSIjMTg1YzM3IiBkPSJNMTkuNTgxIDE1LjM1TDguNTEyIDEzLjR2MTQuNDA5QTEuMTkgMS4xOSAwIDAgMCA5LjcwNSAyOWgxOS4xQTEuMTkgMS4xOSAwIDAgMCAzMCAyNy44MDlWMjIuNVoiLz48cGF0aCBmaWxsPSIjMjFhMzY2IiBkPSJNMTkuNTgxIDNIOS43MDVhMS4xOSAxLjE5IDAgMCAwLTEuMTkzIDEuMTkxVjkuNUwxOS41ODEgMTZsNS44NjEgMS45NUwzMCAxNlY5LjVaIi8+PHBhdGggZmlsbD0iIzEwN2M0MSIgZD0iTTguNTEyIDkuNWgxMS4wNjlWMTZIOC41MTJaIi8+PHBhdGggZD0iTTE2LjQzNCA4LjJIOC41MTJ2MTYuMjVoNy45MjJhMS4yIDEuMiAwIDAgMCAxLjE5NC0xLjE5MVY5LjM5MUExLjIgMS4yIDAgMCAwIDE2LjQzNCA4LjIiIG9wYWNpdHk9Ii4xIi8+PHBhdGggZD0iTTE1Ljc4MyA4Ljg1SDguNTEyVjI1LjFoNy4yNzFhMS4yIDEuMiAwIDAgMCAxLjE5NC0xLjE5MVYxMC4wNDFhMS4yIDEuMiAwIDAgMC0xLjE5NC0xLjE5MSIgb3BhY2l0eT0iLjIiLz48cGF0aCBkPSJNMTUuNzgzIDguODVIOC41MTJWMjMuOGg3LjI3MWExLjIgMS4yIDAgMCAwIDEuMTk0LTEuMTkxVjEwLjA0MWExLjIgMS4yIDAgMCAwLTEuMTk0LTEuMTkxIiBvcGFjaXR5PSIuMiIvPjxwYXRoIGQ9Ik0xNS4xMzIgOC44NWgtNi42MlYyMy44aDYuNjJhMS4yIDEuMiAwIDAgMCAxLjE5NC0xLjE5MVYxMC4wNDFhMS4yIDEuMiAwIDAgMC0xLjE5NC0xLjE5MSIgb3BhY2l0eT0iLjIiLz48cGF0aCBmaWxsPSJ1cmwoI1NWR3hVak82VGJRKSIgZD0iTTMuMTk0IDguODVoMTEuOTM4YTEuMTkzIDEuMTkzIDAgMCAxIDEuMTk0IDEuMTkxdjExLjkxOGExLjE5MyAxLjE5MyAwIDAgMS0xLjE5NCAxLjE5MUgzLjE5NEExLjE5IDEuMTkgMCAwIDEgMiAyMS45NTlWMTAuMDQxQTEuMTkgMS4xOSAwIDAgMSAzLjE5NCA4Ljg1Ii8+PHBhdGggZmlsbD0iI2ZmZiIgZD0ibTUuNyAxOS44NzNsMi41MTEtMy44ODRsLTIuMy0zLjg2MmgxLjg0N0w5LjAxMyAxNC42Yy4xMTYuMjM0LjIuNDA4LjIzOC41MjRoLjAxN3EuMTIzLS4yODEuMjYtLjU0NmwxLjM0Mi0yLjQ0N2gxLjdsLTIuMzU5IDMuODRsMi40MTkgMy45MDVoLTEuODA5bC0xLjQ1LTIuNzExQTIuNCAyLjQgMCAwIDEgOS4yIDE2LjhoLS4wMjRhMS43IDEuNyAwIDAgMS0uMTY4LjM1MWwtMS40OTMgMi43MjJaIi8+PHBhdGggZmlsbD0iIzMzYzQ4MSIgZD0iTTI4LjgwNiAzaC05LjIyNXY2LjVIMzBWNC4xOTFBMS4xOSAxLjE5IDAgMCAwIDI4LjgwNiAzIi8+PHBhdGggZmlsbD0iIzEwN2M0MSIgZD0iTTE5LjU4MSAxNkgzMHY2LjVIMTkuNTgxWiIvPjwvc3ZnPg==", text: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiIgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIj48cGF0aCBmaWxsPSIjYzJjMmMyIiBkPSJNMjIuMDM4IDJINi4zNzVhMS43NTUgMS43NTUgMCAwIDAtMS43NSAxLjc1djI0LjVBMS43NTUgMS43NTUgMCAwIDAgNi4zNzUgMzBoMTkuMjVhMS43NTUgMS43NTUgMCAwIDAgMS43NS0xLjc1VjYuODU2Wm0uNTI1IDIuODQ0bDEuNjYzIDEuNTMxaC0xLjY2M1pNNi4zNzUgMjguMjVWMy43NWgxNC40Mzh2NC4zNzVoNC44MTNWMjguMjVaIi8+PHBhdGggZmlsbD0iIzgyOWVjMiIgZD0iTTguMTI1IDE1LjA5N2gxMy4wNzZ2MS43NUg4LjEyNXptMCA5LjM0Mmg5Ljc2MnYxLjc1SDguMTI1em0wLTQuNjc2aDE1Ljc1djEuNzVIOC4xMjV6bTAtOS41MzNoMTUuNzV2MS43NUg4LjEyNXoiLz48L3N2Zz4=" };
+const SC_FOLLOWUP = "Хозяин написал, пока ты работал:";
+const SC_QUEUED = "Сообщение хозяина, пришло, пока ты ждал своей очереди:";
+const sc = {
+  mode: "scene", task: null, lanes: new Map(), byTask: new Map(), wf: new Map(), files: new Map(),
+  show: new Map(), more: new Set(), timer: 0, ticks: 0, dragging: null, infoSig: "", emptySig: "", note: null,
+};
+const scReduce = matchMedia("(prefers-reduced-motion: reduce)");
+
+function scG(name, size, cls) {
+  const s = svg("svg", { class: "sc-g" + (cls ? " " + cls : ""), "aria-hidden": "true" });
+  if (size) { s.style.width = size + "px"; s.style.height = size + "px"; }
+  s.append(svg("use", { href: "#sci-" + name }));
+  return s;
+}
+function scImg(name, size) {
+  const img = el("img", "sc-icon" + (name === "openai" ? " sc-ink" : ""));
+  img.src = SC_IMG[name]; img.alt = ""; img.width = img.height = size || 16;
+  return img;
+}
+function scPlural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
+}
+function scSecs(ms) {
+  const s = Math.max(1, Math.round((ms || 0) / 1000));
+  if (s < 60) return s + " с";
+  const m = Math.floor(s / 60), r = s % 60;
+  if (m < 60) return m + " мин" + (r ? " " + r + " с" : "");
+  return Math.floor(m / 60) + " ч " + (m % 60) + " мин";
+}
+function scWhen(ms) {
+  if (!ms) return "";
+  const d = new Date(ms), now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "вчера";
+  return d.toLocaleDateString("ru", { day: "numeric", month: "short" });
+}
+function scToast(text) {
+  const t = $("#sc-toast"); t.textContent = text; t.classList.add("sc-show");
+  clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove("sc-show"), 3200);
+}
+function scIsRun(agent) {
+  const parts = String(agent).split(":");
+  return parts.length === 3 && parts.every(Boolean) && parts[0] !== "orchestrator";
+}
+function scRunTask(run) {
+  for (const task of taskCards.values()) if (task.work && (task.work.runs || []).some(r => r.id === run)) return task.id;
+  return null;
+}
+function scRunning(id) { const t = taskCards.get(id); return !!(t && t.work && t.work.state === "running"); }
+function scDept(id) { return homeData.departments.find(d => d.id === id) || null; }
+function scMember(lane) { const d = scDept(lane.dept); return d && (d.agents || []).find(a => a.id === lane.member) || null; }
+function scKind(lane) { const m = scMember(lane); return m ? m.kind : ""; }
+function scName(lane) {
+  const m = scMember(lane);
+  if (!m) return lane.member;
+  if (m.kind === "codex") return "Codex";
+  const model = String(m.model || "");
+  for (const [re, name] of [[/opus/i, "Opus"], [/sonnet/i, "Sonnet"], [/haiku/i, "Haiku"], [/fable/i, "Fable"]]) if (re.test(model)) return name;
+  return "Claude";
+}
+function scRole(lane) {
+  const m = scMember(lane);
+  if (m && m.title) return m.title;
+  const roles = m ? m.roles || [] : [];
+  const map = { doer: "исполнитель", reviewer: "ревьюер", small: "мелкие задачи", fallback: "запасной исполнитель" };
+  for (const r of roles) if (map[r]) return map[r];
+  return lane.member;
+}
+function scModelLabel(m) {
+  if (!m || !m.model) return "";
+  const parts = String(m.model).replace(/^claude-/, "").split("-");
+  let out;
+  if (parts[0].toLowerCase() === "gpt") out = "GPT-" + parts.slice(1).map((p, i) => i ? p[0].toUpperCase() + p.slice(1) : p).join(" ");
+  else {
+    const words = [], nums = [];
+    for (const p of parts) (/^\d+$/.test(p) ? nums : words).push(p);
+    out = words.map(w => w[0].toUpperCase() + w.slice(1)).join(" ") + (nums.length ? " " + nums.join(".") : "");
+  }
+  return out;
+}
+const SC_EFFORT = { low: "Низкое", medium: "Среднее", high: "Высокое", xhigh: "Очень высокое", max: "Максимум" };
+function scAgentIcon(lane, size) {
+  const kind = lane ? scKind(lane) : "";
+  if (kind === "codex") return scImg("openai", size);
+  if (kind === "claude") return scImg("claude", size);
+  return scG("run", size);
+}
+function scTaskTitle(id) { const t = taskCards.get(id); return t ? t.title : id; }
+
+// One lane per run agent. State is tracked for every event; the DOM is built
+// when the task is first opened, by replaying the lane's events.
+function scLane(agent) {
+  let lane = sc.lanes.get(agent);
+  if (lane) return lane;
+  const [dept, member, task] = agent.split(":");
+  lane = { id: agent, dept, member, task, events: [], busy: false, running: new Map(), lastTs: 0, last: "", ticker: "", step: "", stepN: {}, dom: null, doneReason: "" };
+  sc.lanes.set(agent, lane);
+  if (!sc.byTask.has(task)) sc.byTask.set(task, []);
+  sc.byTask.get(task).push(lane);
+  return lane;
+}
+function sceneEvent(env) {
+  const ev = env.event;
+  if (env.agent === "orchestrator") {
+    if (ev.type === "workflow" && env.session && env.session !== "orchestrator") {
+      const list = sc.wf.get(env.session) || [];
+      list.push({ status: ev.status, step: ev.step || "", detail: ev.detail || "", ts: env.ts_ms });
+      sc.wf.set(env.session, list);
+      // A step that sent the work back (review -> fix) marks the reviewer's last answer.
+      if (ev.status === "looped" && ev.step) {
+        const first = list.find(e => e.status === "step_started");
+        const task = first && first.step !== ev.step ? scRunTask(env.session) : null;
+        for (const lane of task ? sc.byTask.get(task) || [] : []) if (lane.step === ev.step) scFeed(lane, { agent: lane.id, ts_ms: env.ts_ms, event: { type: "_looped", step: ev.step } });
+      }
+      scDirty();
+    } else if (ev.type === "handoff" && scIsRun(ev.to)) {
+      const from = sc.lanes.get(ev.from), lane = scLane(ev.to);
+      lane.step = ev.step;
+      lane.stepN[ev.step] = (lane.stepN[ev.step] || 0) + 1;
+      scFeed(lane, { agent: ev.to, ts_ms: env.ts_ms, event: { type: "_handoff", from: ev.from, step: ev.step, n: lane.stepN[ev.step], summary: from ? from.last : "" } });
+    }
+    return;
+  }
+  if (!scIsRun(env.agent) || ev.type === "usage") return;
+  scFeed(scLane(env.agent), env);
+}
+function scFeed(lane, env) {
+  lane.events.push(env);
+  scTrack(lane, env);
+  if (lane.dom) { scDraw(lane, env, Date.now() - (env.ts_ms || 0) < 20000); scLaneHead(lane); scLiveRow(lane); }
+  scDirty();
+}
+function scCount(patch) {
+  let add = 0, del = 0;
+  for (const line of String(patch || "").split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) add++;
+    else if (line.startsWith("-") && !line.startsWith("---")) del++;
+  }
+  return { add, del };
+}
+function scTrack(lane, env) {
+  const ev = env.event;
+  switch (ev.type) {
+    case "message":
+      if (ev.role === "user") { lane.busy = true; lane.doneReason = ""; }
+      else if (ev.text && ev.text.trim()) { lane.last = ev.text; lane.ticker = ev.text; }
+      break;
+    case "thinking": lane.busy = true; lane.ticker = ev.text; break;
+    case "tool_call": lane.busy = true; lane.running.set(ev.id, { name: ev.name, input: ev.input, ts: env.ts_ms }); lane.ticker = scToolLine(ev.name, ev.input); break;
+    case "tool_result": lane.running.delete(ev.id); break;
+    case "done": lane.busy = false; lane.running.clear(); lane.doneReason = ev.reason || ""; break;
+    case "diff": {
+      const files = sc.files.get(lane.task) || new Map();
+      const c = scCount(ev.patch), old = files.get(ev.path) || { add: 0, del: 0 };
+      files.set(ev.path, { add: old.add + c.add, del: old.del + c.del });
+      sc.files.set(lane.task, files);
+      break;
+    }
+  }
+  if (ev.type[0] !== "_") lane.lastTs = env.ts_ms || Date.now();
+}
+
+function scToolLine(name, input) {
+  if (input && typeof input === "object") {
+    if (typeof input.command === "string") return input.command.split("\n")[0];
+    if (Array.isArray(input.command)) return input.command.join(" ");
+    const s = input.file_path ?? input.path ?? input.pattern ?? input.url ?? input.query ?? input.description;
+    if (typeof s === "string") return name + " · " + s;
+  }
+  return name + (input && typeof input === "string" ? " · " + input : "");
+}
+function scResLine(output, err) {
+  const line = String(output || "").split("\n").map(s => s.trim()).find(Boolean) || "";
+  if (err) return "ошибка" + (line ? ": " + clip(line, 90) : "");
+  return line ? clip(line, 110) : "готово";
+}
+function scFileIcon(path) {
+  const ext = String(path).split(".").pop().toLowerCase();
+  return ext === "md" ? "md" : ext === "py" ? "py" : ["xlsx", "xls", "csv"].includes(ext) ? "excel" : "text";
+}
+function scBase(path) { return String(path).split(/[\\/]/).pop(); }
+function scStepName(step, n) {
+  const names = { plan: "План", do: "Исполнение", review: "Ревью", fix: "Исправление" };
+  return (names[step] || step) + (n > 1 ? " " + n : "");
+}
+function scTag(cls, iconName, text) { const t = el("span", "sc-tag sc-" + cls); t.append(scG(iconName, 13), el("span", "", text)); return t; }
+
+// Minimal markdown for agents' answers: paragraphs, lists, headings, code, `inline` and **bold**. Text only.
+function scInline(node, text) {
+  const re = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let at = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > at) node.append(text.slice(at, m.index));
+    node.append(m[0][0] === "`" ? el("code", "", m[0].slice(1, -1)) : el("b", "", m[0].slice(2, -2)));
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) node.append(text.slice(at));
+}
+function scText(text) {
+  const box = el("div", "sc-txt");
+  const lines = String(text).replace(/\r/g, "").split("\n");
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const last = (lines[lines.length - 1] || "").trim().replace(/^\*+|\*+$/g, "");
+  if (/^VERDICT:\s*APPROVED$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", "Одобрено")); }
+  else if (/^PLAN:\s*DONE$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", "Разобрался, править не нужно")); }
+  let list = null, para = null, pre = null;
+  for (const raw of lines) {
+    if (/^\s*```/.test(raw)) { if (pre) pre = null; else { pre = el("pre", "sc-code"); box.append(pre); list = para = null; } continue; }
+    if (pre) { pre.textContent += (pre.textContent ? "\n" : "") + raw; continue; }
+    const line = raw.trimEnd();
+    // A blank line ends a paragraph but not a list: "1. …", blank, "2. …" stay one list.
+    if (!line.trim()) { para = null; continue; }
+    const item = line.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/);
+    if (item) {
+      const ordered = item[1] !== undefined;
+      if (!list || list.ordered !== ordered) { list = el(ordered ? "ol" : "ul"); list.ordered = ordered; if (ordered) list.start = +item[1]; box.append(list); para = null; }
+      const li = el("li"); scInline(li, item[2]); list.append(li);
+      continue;
+    }
+    list = null;
+    const head = line.match(/^#{1,6}\s+(.*)$/);
+    if (head) { const p = el("p", "sc-h"); scInline(p, head[1]); box.append(p); list = para = null; continue; }
+    if (!para) { para = el("p"); box.append(para); list = null; } else para.append(document.createElement("br"));
+    scInline(para, line);
+  }
+  return String(text).length > 1600 ? scClampable(box) : box;
+}
+function scClampable(node) {
+  node.classList.add("sc-clamp");
+  const more = el("button", "sc-link sc-more", "Показать полностью"); more.type = "button";
+  more.onclick = () => { const open = node.classList.toggle("sc-clamp"); more.textContent = open ? "Показать полностью" : "Свернуть"; };
+  const wrap = el("div"); wrap.append(node, more);
+  return wrap;
+}
+
+// ---- Lane DOM ----
+function scDom(lane) {
+  if (lane.dom) return lane.dom;
+  const pane = el("section", "sc-pane");
+  const tab = el("div", "sc-tab");
+  const ic = el("span", "sc-tabic"), name = el("b"), role = el("span", "sc-role"), state = el("span", "sc-state");
+  tab.append(ic, name, role, el("span", "sc-sp"), state);
+  const log = el("div", "sc-log");
+  log.setAttribute("aria-live", "off");
+  const live = el("div", "sc-liverow");
+  live.append(el("span", "sc-shimmer", "Думает…"), el("span", "sc-sec"));
+  const form = el("form", "sc-cmp"), box = el("div", "sc-cmp-box"), ta = el("textarea");
+  ta.rows = 1;
+  const row = el("div", "sc-cmp-row"), access = el("span", "sc-pill"), model = el("span", "sc-pill sc-model");
+  const stop = el("button", "sc-send sc-stop"); stop.type = "button"; stop.append(scG("sq")); stop.title = "Остановить задачу";
+  stop.setAttribute("aria-label", "Остановить задачу");
+  const send = el("button", "sc-send"); send.type = "submit"; send.append(scG("up")); send.setAttribute("aria-label", "Отправить");
+  row.append(access, el("span", "sc-sp"), model, stop, send);
+  box.append(ta, row);
+  const hint = el("div", "sc-hint");
+  form.append(box, hint);
+  pane.append(tab, log, form);
+  const d = lane.dom = { pane, ic, name, role, state, log, live, ta, access, model, stop, send, hint, cur: null, tools: new Map(), perms: new Map(), notes: new Map(), lastTs: 0, prompts: 0, busy: false, lastTxt: null, handoff: null, sticky: true, hintError: "" };
+  log.addEventListener("scroll", () => { d.sticky = log.scrollTop + log.clientHeight >= log.scrollHeight - 60; });
+  const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; };
+  ta.addEventListener("input", grow);
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const text = ta.value.trim();
+    if (!text) { ta.focus(); return; }
+    send.disabled = true; d.hintError = "";
+    try { await post("/api/agent/note", { agent: lane.id, text }); ta.value = ""; grow(); }
+    catch (err) { d.hintError = "Не отправлено: " + err.message; }
+    finally { send.disabled = false; scLaneHead(lane); }
+  };
+  stop.onclick = async () => {
+    const task = taskCards.get(lane.task);
+    if (!task) return;
+    stop.disabled = true;
+    try { await post(taskPath(task, "/stop"), {}); scToast("Задача остановлена. Её можно вернуть с запиской или запустить ещё раз."); }
+    catch (err) { d.hintError = "Не остановлено: " + err.message; scLaneHead(lane); }
+    finally { stop.disabled = false; }
+  };
+  for (const env of lane.events) scDraw(lane, env, false);
+  scLaneHead(lane);
+  return d;
+}
+function scPush(lane, node) {
+  const d = lane.dom;
+  d.log.insertBefore(node, d.live.isConnected ? d.live : null);
+  scStick(lane);
+}
+function scStick(lane, force) {
+  const d = lane.dom;
+  if (!d || (!force && !d.sticky)) return;
+  d.log.scrollTop = d.log.scrollHeight;
+  requestAnimationFrame(() => { if (force || d.sticky) d.log.scrollTop = d.log.scrollHeight; });
+}
+function scGroup(lane, kind, t0) {
+  const d = lane.dom;
+  if (d.cur && d.cur.kind === kind) return d.cur;
+  scClose(lane);
+  const det = el("details", "sc-fold"), sum = el("summary"), label = el("span"), body = el("div", "sc-fold-b");
+  sum.append(label, scG("chev", 14, "sc-chev"));
+  det.append(sum, body);
+  const g = d.cur = { kind, det, label, body, t0, t1: t0, n: 0, open: true, auto: false };
+  sum.addEventListener("click", () => { g.auto = false; });
+  scPush(lane, det);
+  return g;
+}
+function scClose(lane) {
+  const d = lane.dom, g = d.cur;
+  if (!g) return;
+  d.cur = null; g.open = false;
+  scGroupLabel(g, false);
+  if (g.auto) { g.det.open = false; g.det.classList.remove("sc-livefold"); }
+  if (g.typing) g.typing();
+}
+function scGroupLabel(g, liveNow) {
+  if (g.kind === "think") { g.label.className = ""; g.label.textContent = "Думал " + scSecs(g.t1 - g.t0); return; }
+  const n = g.n + " " + scPlural(g.n, "команда", "команды", "команд");
+  if (g.open && liveNow) { g.label.className = "sc-shimmer"; g.label.textContent = "Работает · " + n; }
+  else { g.label.className = ""; g.label.textContent = "Работал " + scSecs(g.t1 - g.t0) + " · " + n; }
+}
+// Thinking that arrives live is typed out, then folds away when the agent acts.
+function scType(g, p, text) {
+  if (scReduce.matches || text.length < 24) { scInline(p, text); return; }
+  const plain = text.replace(/\*\*([^*]+)\*\*/g, "$1");
+  const caret = el("span", "sc-caret"), step = Math.max(2, Math.ceil(plain.length / 160));
+  let at = 0, timer = 0;
+  const finish = () => { clearTimeout(timer); p.replaceChildren(); scInline(p, text); g.typing = null; };
+  g.typing = finish;
+  const tick = () => {
+    at = Math.min(plain.length, at + step);
+    p.textContent = plain.slice(0, at); p.append(caret);
+    if (at >= plain.length) { finish(); return; }
+    timer = setTimeout(tick, 16);
+  };
+  tick();
+}
+function scBrief(lane, h, text) {
+  const b = el("div", "sc-in"), from = el("div", "sc-from");
+  let body;
+  if (h) {
+    const fl = sc.lanes.get(h.from);
+    const who = fl ? scName(fl) : String(h.from).split(":")[1];
+    const label = { review: "Результат ", fix: "Замечания ", do: "План " }[h.step] || "От ";
+    from.append(scAgentIcon(fl, 13), el("span", "", label + who));
+    body = h.summary || text;
+  } else {
+    from.append(scG("orch", 13), el("span", "", "Бриф от оркестратора"));
+    const task = taskCards.get(lane.task);
+    body = task ? task.title + (task.description && task.description.trim() !== task.title ? "\n\n" + task.description.trim() : "") : text;
+  }
+  const t = el("div", "sc-in-t", clip(body.trim(), 4000));
+  b.append(from, t);
+  if (body.length > 360 || body.split("\n").length > 7) t.classList.add("sc-clamp");
+  const full = el("button", "sc-link sc-more", "Весь запрос"); full.type = "button";
+  const pre = el("pre", "sc-pre"); pre.hidden = true;
+  full.onclick = () => {
+    if (!pre.textContent) pre.textContent = text;
+    pre.hidden = !pre.hidden; t.hidden = !pre.hidden;
+    full.textContent = pre.hidden ? "Весь запрос" : "Свернуть";
+  };
+  b.append(full, pre);
+  return b;
+}
+function scChange(path, patch) {
+  const lines = String(patch || "").split("\n"), c = scCount(patch);
+  const created = /^--- (\/dev\/null|a\/dev\/null)/m.test(patch) || /^new file/m.test(patch);
+  const card = el("div", "sc-change"), head = el("div", "sc-change-h"), nm = el("span", "sc-nm");
+  const counts = el("small"); counts.append(el("span", "sc-plus", "+" + c.add), " ", el("span", "sc-minus", "−" + c.del));
+  const title = el("b", "", (created ? "Создан " : "Изменён ") + scBase(path)); title.title = path;
+  nm.append(title, counts);
+  const toggle = el("button", "sc-btn", "Скрыть изменения"); toggle.type = "button";
+  head.append(scImg(scFileIcon(path), 18), nm, toggle);
+  const diff = el("div", "sc-diff");
+  let shown = 0;
+  for (const line of lines) {
+    if (/^(diff |index |--- |\+\+\+ )/.test(line)) continue;
+    if (shown++ > 400) { diff.append(el("div", "sc-hk", "… ещё " + (lines.length - 400) + " строк")); break; }
+    if (line.startsWith("@@")) diff.append(el("div", "sc-hk", line));
+    else if (line.startsWith("+")) diff.append(el("div", "sc-a", line.slice(1)));
+    else if (line.startsWith("-")) diff.append(el("div", "sc-d", line.slice(1)));
+    else if (line) diff.append(el("div", "sc-c", line[0] === " " ? line.slice(1) : line));
+  }
+  const set = open => { diff.hidden = !open; toggle.textContent = open ? "Скрыть изменения" : "Показать изменения"; };
+  set(c.add + c.del <= 24);
+  toggle.onclick = () => set(diff.hidden);
+  card.append(head, diff);
+  return card;
+}
+const SC_NOTE = { queued_busy: "дойдёт после текущего шага", queued_idle: "уйдёт с его следующим шагом", delivered: "дошло", dropped: "не дошло: шаг этого агента уже не наступит" };
+function scDraw(lane, env, live) {
+  const d = lane.dom, ev = env.event, ts = env.ts_ms || Date.now();
+  const prevTs = d.lastTs || ts;
+  if (ev.type[0] !== "_") d.lastTs = ts;
+  switch (ev.type) {
+    case "_handoff": d.handoff = ev; return;
+    case "_looped": if (d.lastTxt) d.lastTxt.prepend(scTag("back", "undo", "Вернул на исправление")); return;
+    case "message": {
+      scClose(lane);
+      if (ev.role === "user") {
+        d.busy = true;
+        if (ev.text.startsWith(SC_FOLLOWUP)) return;
+        let text = ev.text;
+        if (text.startsWith(SC_QUEUED)) { const cut = text.indexOf("\n\n---\n\n"); if (cut > 0) text = text.slice(cut + 7); }
+        const h = d.handoff; d.handoff = null; d.prompts++;
+        if (d.prompts > 1) scPush(lane, el("div", "sc-round", h ? scStepName(h.step, h.n) : "новый круг"));
+        scPush(lane, scBrief(lane, h, text));
+      } else if (ev.text && ev.text.trim()) {
+        const node = scText(ev.text);
+        d.lastTxt = node.classList.contains("sc-txt") ? node : node.firstChild;
+        scPush(lane, node);
+      }
+      return;
+    }
+    case "thinking": {
+      const text = String(ev.text || "").trim();
+      if (!text) return;
+      const fresh = !(d.cur && d.cur.kind === "think");
+      const g = scGroup(lane, "think", prevTs);
+      g.t1 = ts;
+      if (g.typing) g.typing();
+      for (const [i, chunk] of text.split(/\n{2,}/).entries()) {
+        const p = el("p"); g.body.append(p);
+        if (live && i === 0) scType(g, p, chunk); else scInline(p, chunk);
+      }
+      if (live && fresh) { g.auto = true; g.det.open = true; g.det.classList.add("sc-livefold"); }
+      scGroupLabel(g, live);
+      scStick(lane);
+      return;
+    }
+    case "tool_call": {
+      const g = scGroup(lane, "work", ts);
+      g.n++; g.t1 = ts;
+      const row = el("details", "sc-cmd"), s = el("summary");
+      const res = el("span", "sc-res", "…");
+      s.append(el("code", "", scToolLine(ev.name, ev.input)), res);
+      row.append(s);
+      const t = { row, res, input: ev.input, output: null, err: false, pre: null };
+      row.addEventListener("toggle", () => {
+        if (!row.open || t.pre) return;
+        t.pre = el("pre", "sc-pre", fmtInput(t.input) + (t.output != null ? "\n\n→ " + clip(t.output, 8000) : ""));
+        row.append(t.pre);
+      });
+      d.tools.set(ev.id, t);
+      g.body.append(row);
+      scGroupLabel(g, live);
+      scStick(lane);
+      return;
+    }
+    case "tool_result": {
+      const t = d.tools.get(ev.id);
+      if (t) {
+        t.output = ev.output || ""; t.err = !!ev.is_error;
+        t.res.textContent = scResLine(ev.output, ev.is_error);
+        t.row.classList.toggle("sc-err", t.err);
+        if (t.pre) t.pre.textContent = fmtInput(t.input) + "\n\n→ " + clip(t.output, 8000);
+      }
+      if (d.cur && d.cur.kind === "work") { d.cur.t1 = ts; scGroupLabel(d.cur, live); }
+      return;
+    }
+    case "diff": scClose(lane); scPush(lane, scChange(ev.path, ev.patch)); return;
+    // Department agents run in smart mode: the guard decides. Only a refusal is worth a line.
+    case "permission_request": d.perms.set(ev.id, ev); return;
+    case "permission_resolved": {
+      const req = d.perms.get(ev.id); d.perms.delete(ev.id);
+      if (!ev.allow) {
+        scClose(lane);
+        const why = req && req.guard ? req.guard.reason : "";
+        scPush(lane, el("div", "sc-quiet", "Защита не пустила" + (req ? " " + req.tool : "") + (why ? ": " + why : "")));
+      }
+      return;
+    }
+    case "done": {
+      scClose(lane); d.busy = false;
+      const r = String(ev.reason || "");
+      if (r && !["success", "completed", "end_turn", "stop"].includes(r)) scPush(lane, el("div", "sc-round sc-bad", r.startsWith("interrupted") ? (r.includes("restart") ? "прервано: сервер перезапускался" : "остановлен") : r));
+      return;
+    }
+    case "error": scClose(lane); scPush(lane, el("div", "sc-errline", ev.message)); return;
+    case "note": {
+      let n = d.notes.get(ev.id);
+      if (!n) {
+        const b = el("div", "sc-in sc-own"), from = el("div", "sc-from");
+        b.append(from, el("div", "sc-in-t", ev.text));
+        n = { b, from, busy: d.busy };
+        d.notes.set(ev.id, n);
+        scClose(lane);
+        scPush(lane, b);
+      }
+      const key = ev.status === "queued" ? (n.busy ? "queued_busy" : "queued_idle") : ev.status;
+      n.from.replaceChildren(scG("user", 13), el("span", "", "Вы · " + (SC_NOTE[key] || ev.status)));
+      n.b.classList.toggle("sc-dropped", ev.status === "dropped");
+      return;
+    }
+  }
+}
+function scLaneState(lane) {
+  const task = taskCards.get(lane.task), state = task && task.work ? task.work.state : "";
+  if (state === "running") {
+    if (lane.busy) return lane.running.size ? ["sc-live", "работает"] : ["sc-live", "думает"];
+    return ["", lane.events.some(e => e.event.type === "message") ? "ждёт своего шага" : "ещё не начал"];
+  }
+  if (lane.doneReason.startsWith("interrupted") || state === "stuck") return ["sc-bad", "остановлен"];
+  if (["review", "done"].includes(state)) return ["sc-ok", "закончил"];
+  return ["", workStates[state] || ""];
+}
+function scLaneHead(lane) {
+  const d = lane.dom;
+  if (!d) return;
+  const m = scMember(lane), name = scName(lane), kind = scKind(lane);
+  if (d.icKind !== kind) { d.icKind = kind; d.ic.replaceChildren(scAgentIcon(lane, 18)); }
+  d.name.textContent = name;
+  d.role.textContent = scRole(lane);
+  const [cls, text] = scLaneState(lane);
+  d.state.className = "sc-state" + (cls ? " " + cls : "");
+  d.state.textContent = text;
+  d.ta.placeholder = "Скажи " + name + "…";
+  d.ta.setAttribute("aria-label", "Сообщение " + name);
+  let access = "", write = false, ic = "shield";
+  if (m) {
+    if (m.mode === "bypass") { access = "Без ограничений"; write = true; }
+    else if (m.kind === "codex" && /read/.test(String(m.sandbox || ""))) { access = "Только чтение"; ic = "eye"; }
+    else if (m.kind === "codex") { access = "Запись в папке задачи"; write = true; }
+    else access = { ask: "Спрашивает разрешения", auto: "Сам решает", smart: "Под защитой" }[m.mode] || "Под защитой";
+  }
+  const label = scModelLabel(m), pills = [access, write, ic, label, m && m.effort].join("|");
+  if (d.pills !== pills) {
+    d.pills = pills;
+    d.access.className = "sc-pill" + (write ? " sc-write" : "");
+    d.access.replaceChildren(...(access ? [scG(ic), el("span", "", access)] : []));
+    d.model.replaceChildren(...(label ? [el("b", "", label), el("span", "", SC_EFFORT[m.effort] || m.effort || "")] : []));
+  }
+  const running = scRunning(lane.task);
+  d.stop.hidden = !(running && lane.busy);
+  d.ta.disabled = !running;
+  d.send.disabled = !running;
+  d.hint.className = "sc-hint" + (d.hintError ? " sc-bad" : "");
+  d.hint.textContent = d.hintError || (!running ? "Задача не идёт: писать агенту можно, пока она в работе. Вернуть её с запиской можно в карточке справа."
+    : lane.busy ? name + " работает. Сообщение дойдёт после текущего шага."
+    : name + " ждёт своего шага. Сообщение уйдёт вместе с ним.");
+}
+function scLiveRow(lane) {
+  const d = lane.dom;
+  if (!d) return;
+  const on = scRunning(lane.task) && lane.busy;
+  if (on !== d.live.isConnected) { if (on) { d.log.append(d.live); scStick(lane); } else d.live.remove(); }
+  if (on) {
+    const tools = [...lane.running.values()], tool = tools[tools.length - 1];
+    d.live.firstChild.textContent = tool ? "Выполняет " + clip(scToolLine(tool.name, tool.input), 60) + "…" : "Думает…";
+    d.live.lastChild.textContent = scSecs(Date.now() - (tool ? tool.ts : lane.lastTs));
+  }
+  if (d.cur && d.cur.kind === "work") scGroupLabel(d.cur, on);
+}
+
+// ---- Chrome: sidebar, bar, steps, panes, card, board ----
+function scTasks() { return [...taskCards.values()].filter(t => t.work && t.status !== "archived"); }
+const SC_ORDER = { running: 0, waiting: 1, review: 2, stuck: 3, queued: 4, done: 5, cancelled: 6 };
+function scWaitLabel(task) {
+  const w = task.work;
+  if (w.state === "waiting") return w.proposal ? "новый отдел" : "вопрос";
+  return w.state === "review" ? "приёмка" : w.state === "stuck" ? "застряла" : "";
+}
+function scItem(task, inWaits) {
+  const a = el("a", "sc-si" + (inWaits ? "" : " sc-sub") + (task.work.state === "done" ? " sc-done" : ""));
+  a.href = "#task=" + encodeURIComponent(task.id);
+  if (sc.mode === "scene" && sc.task === task.id) a.setAttribute("aria-current", "page");
+  const w = task.work;
+  if (inWaits) { const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot")); a.append(lead); }
+  a.append(el("span", "sc-t", task.title));
+  a.title = task.title;
+  if (inWaits) a.append(el("small", "", scWaitLabel(task)));
+  else if (w.state === "running") { const s = el("span", "sc-spin"); s.setAttribute("aria-label", "идёт"); a.append(s); }
+  else if (ownerWaits(w)) { const s = el("span", "sc-dot"); s.setAttribute("aria-label", "ждёт вас"); a.append(s); }
+  else if (w.state === "queued" || w.state === "waiting") { const s = scG("clock", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", workStates[w.state]); s.removeAttribute("aria-hidden"); a.append(s); }
+  else if (w.state === "review") { const s = scG("eye", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", "проверяет оркестратор"); s.removeAttribute("aria-hidden"); a.append(s); }
+  else if (w.state === "stuck") a.append(el("small", "sc-bad", "застряла"));
+  else a.append(el("small", "", scWhen(task.updated_ms)));
+  a.addEventListener("click", () => $("#scene").classList.remove("sc-showside"));
+  return a;
+}
+function scSide() {
+  const nodes = [], tasks = scTasks();
+  const waits = tasks.filter(t => ownerWaits(t.work)).sort((a, b) => b.updated_ms - a.updated_ms);
+  nodes.push(el("div", "sc-sec", "Ждёт вас"));
+  if (!waits.length && !homeData.proposals.length) nodes.push(el("div", "sc-si sc-quiet", "Ничего не ждёт вашего решения"));
+  for (const t of waits) nodes.push(scItem(t, true));
+  if (homeData.proposals.length) {
+    const a = el("a", "sc-si"); a.href = "#";
+    const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot"));
+    a.append(lead, el("span", "sc-t", "Правила отделов"), el("small", "", String(homeData.proposals.length)));
+    a.onclick = e => { e.preventDefault(); setView("home"); };
+    nodes.push(a);
+  }
+  nodes.push(el("div", "sc-sec", "Отделы"));
+  const depts = homeData.departments.map(d => ({ id: d.id, title: d.title }));
+  for (const t of tasks) if (!depts.some(d => d.id === t.work.department)) depts.push({ id: t.work.department, title: t.work.department });
+  for (const dept of depts) {
+    const mine = tasks.filter(t => t.work.department === dept.id);
+    const active = mine.filter(t => !["done", "cancelled"].includes(t.work.state)).sort((a, b) => (SC_ORDER[a.work.state] - SC_ORDER[b.work.state]) || b.updated_ms - a.updated_ms);
+    const done = mine.filter(t => t.work.state === "done").sort((a, b) => b.updated_ms - a.updated_ms);
+    const head = el("div", "sc-si");
+    const lead = el("span", "sc-lead"); lead.append(scG("folder"));
+    head.append(lead, el("span", "sc-t", dept.title), el("small", "", active.length ? String(active.length) : ""));
+    nodes.push(head);
+    const open = sc.more.has(dept.id), keep = active.length ? 1 : 2;
+    for (const t of active) nodes.push(scItem(t, false));
+    for (const t of open ? done.slice(0, 30) : done.slice(0, keep)) nodes.push(scItem(t, false));
+    if (done.length > keep) {
+      const more = el("a", "sc-si sc-sub sc-done"); more.href = "#";
+      more.append(el("span", "sc-t", open ? "Свернуть" : "Ещё готовых: " + (done.length - keep)));
+      more.onclick = e => { e.preventDefault(); if (open) sc.more.delete(dept.id); else sc.more.add(dept.id); scSide(); };
+      nodes.push(more);
+    }
+  }
+  const list = $("#sc-list"), top = list.scrollTop;
+  list.replaceChildren(...nodes);
+  list.scrollTop = top;
+  $("#sc-newlink").toggleAttribute("aria-current", sc.mode === "new");
+  // Month spend and the sum of the departments' month limits.
+  const usage = $("#sc-usage");
+  if (homeData.spend) {
+    const limit = homeData.departments.reduce((s, d) => s + (d.limits && d.limits.month_usd || 0), 0);
+    const total = homeData.spend.total_usd || 0;
+    const month = new Date().toLocaleString("ru", { month: "long" });
+    const line = el("div"); line.append(el("span", "", "Расход за " + month), el("b", "", money(total) + (limit ? " из " + money(limit) : "")));
+    const nodesU = [line];
+    if (limit) { const meter = el("span", "sc-meter" + (total > limit ? " sc-over" : "")); const i = el("i"); i.style.width = Math.min(100, total / limit * 100) + "%"; meter.append(i); nodesU.push(meter); }
+    usage.replaceChildren(...nodesU);
+  } else usage.replaceChildren();
+}
+function sceneConn(state, text) {
+  const dot = $("#sc-conn");
+  if (!dot) return;
+  dot.className = "sc-conn" + (state === "on" ? " sc-on" : state === "bad" ? " sc-off" : "");
+  $("#sc-conn-text").textContent = state === "on" ? "Сервер на связи" : text;
+}
+function scWaitCount() { return scTasks().filter(t => ownerWaits(t.work)).length; }
+function scBar(task) {
+  const crumb = $("#sc-crumb"), title = $("#sc-title");
+  if (sc.mode === "board") { crumb.textContent = "Доска /"; title.textContent = "Все задачи"; }
+  else if (sc.mode === "new" || !task) { crumb.textContent = ""; title.textContent = "Новая задача"; }
+  else { const d = scDept(task.work.department); crumb.textContent = (d ? d.title : task.work.department) + " /"; title.textContent = task.title; }
+  for (const b of document.querySelectorAll("[data-sc-mode]")) b.setAttribute("aria-pressed", String(b.dataset.scMode === (sc.mode === "new" ? "scene" : sc.mode)));
+  const n = scWaitCount(), badge = $("#sc-wait-n");
+  badge.hidden = !n; badge.textContent = String(n);
+  document.title = (n ? "(" + n + ") " : "") + (task && sc.mode === "scene" ? task.title + " · " : "") + "agentsflow";
+}
+function scStepItems(task) {
+  const w = task.work, items = [], count = {};
+  const reviews = (w.runs || []).reduce((s, r) => s + (sc.wf.get(r.id) || []).filter(e => e.status === "step_started" && e.step === "review").length, 0);
+  (w.runs || []).forEach((run, i) => {
+    if (i > 0) items.push({ cls: "back", icon: "undo", text: "Новый круг", back: true });
+    const evs = sc.wf.get(run.id) || [];
+    const first = evs.find(e => e.status === "step_started");
+    let cur = null;
+    for (const e of evs) {
+      if (e.status === "step_started") {
+        const n = count[e.step] = (count[e.step] || 0) + 1;
+        // "Ревью 1 · вернул", "Ревью 2" once there were several; other steps get a number from the second time.
+        cur = { step: e.step, cls: "now", text: scStepName(e.step, e.step === "review" ? (reviews > 1 ? n : 0) : n) };
+        items.push(cur);
+      } else if (e.status === "step_done" && cur && cur.step === e.step) cur.cls = "done";
+      else if (e.status === "looped" && first && first.step !== e.step) {
+        const it = [...items].reverse().find(x => x.step === e.step);
+        if (it) { it.cls = "back"; it.text += " · вернул"; it.back = true; }
+      } else if (e.status === "failed" && cur && cur.cls === "now") { cur.cls = "bad"; cur.text += e.detail ? " · " + clip(e.detail, 40) : ""; }
+    }
+    if (w.state !== "running" && cur && cur.cls === "now") cur.cls = "bad";
+  });
+  const owner = ownerWaits(w);
+  const tail = {
+    queued: { cls: "wait", text: "В очереди" }, waiting: { cls: "wait", text: w.proposal ? "Ждёт решения о новом отделе" : "Ждёт ответа" },
+    running: { cls: "next", text: w.risk === "external" ? "Приёмка вами" : "Приёмка оркестратором" },
+    review: { cls: "wait", text: owner ? "Приёмка · ждёт вас" : "Приёмка оркестратором" },
+    stuck: { cls: "bad", text: "Застряла" + (w.stuck_reason ? ": " + clip(w.stuck_reason, 60) : "") },
+    done: { cls: "done", text: "Принято" }, cancelled: { cls: "bad", text: "Отменена" },
+  }[w.state];
+  if (tail) items.push(tail);
+  return items;
+}
+function scSteps(task) {
+  const nav = $("#sc-steps");
+  if (!task) { nav.replaceChildren(); return; }
+  const nodes = [];
+  const items = scStepItems(task);
+  items.forEach((it, i) => {
+    // The dashed line leads away from a step that sent the work back.
+    if (i) nodes.push(el("span", "sc-ln" + (items[i - 1].back ? " sc-back" : "")));
+    const st = el("span", "sc-st sc-" + it.cls);
+    const mark = { done: "check", back: "undo", bad: "x" }[it.cls];
+    st.append(mark ? scG(mark) : el("span", "sc-ring"), el("span", "", it.text));
+    nodes.push(st);
+  });
+  nav.replaceChildren(...nodes);
+  const now = nav.querySelector(".sc-now, .sc-wait");
+  if (now) nav.scrollLeft = Math.max(0, now.offsetLeft - nav.clientWidth / 2);
+}
+function scEmpty(task) {
+  const box = el("div", "sc-empty");
+  if (!task) {
+    box.append(el("h2", "", tasksLoaded ? "Задач пока нет" : "Загрузка…"));
+    if (tasksLoaded) { box.append(el("p", "sc-para", "Напишите оркестратору, что сделать: он разберёт сообщение на задачи и раздаст их отделам.")); const b = el("a", "sc-btn sc-primary", "Новая задача"); b.href = "#new"; box.append(el("div"), b); }
+    return box;
+  }
+  const w = task.work, d = scDept(w.department);
+  box.append(el("h2", "", task.title));
+  const line = { queued: "Ждёт свободного места в отделе «" + (d ? d.title : w.department) + "»" + (d ? ": сейчас идёт " + d.running + " из " + d.max_parallel : "") + ".",
+    waiting: w.proposal ? "Оркестратор предлагает новый отдел для этой задачи. Решение в карточке справа." : (w.questions || []).some(q => q.answer == null) ? "Отдел ждёт ответа на вопросы. Ответить можно в карточке справа." : "Ждёт другую задачу." }[w.state]
+    || (workStates[w.state] || w.state) + ". Агенты этой задачи ещё ничего не писали.";
+  box.append(el("p", "sc-para", line));
+  if (task.description && task.description.trim()) { const p = el("p", "sc-para", task.description.trim()); box.append(p); }
+  return box;
+}
+function scPanes(task) {
+  const box = $("#sc-panes"), sw = $("#sc-switch");
+  const lanes = task ? sc.byTask.get(task.id) || [] : [];
+  const sig = (task ? task.id : "-") + "|" + lanes.map(l => l.id).join(",") + (lanes.length ? "" : "|" + (task ? task.updated_ms : tasksLoaded));
+  if (box.dataset.sig !== sig) {
+    box.dataset.sig = sig;
+    if (!lanes.length) { box.replaceChildren(scEmpty(task)); box.style.setProperty("--n", "1"); }
+    else {
+      box.replaceChildren(...lanes.map(l => scDom(l).pane));
+      box.style.setProperty("--n", String(lanes.length));
+      box.classList.toggle("sc-one", lanes.length === 1);
+      for (const l of lanes) { l.dom.sticky = true; scStick(l, true); }
+    }
+  }
+  let show = task && sc.show.get(task.id);
+  if (!lanes.some(l => l.id === show)) { const busy = lanes.filter(l => l.busy); show = (busy[busy.length - 1] || lanes[lanes.length - 1] || {}).id; }
+  if (lanes.length > 1) {
+    const seg = el("span", "sc-seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Агент");
+    for (const l of lanes) {
+      const b = el("button", "", scName(l) + " · " + scRole(l)); b.type = "button";
+      b.setAttribute("aria-pressed", String(l.id === show));
+      b.onclick = () => { sc.show.set(task.id, l.id); scPanes(task); scStick(l, true); };
+      seg.append(b);
+    }
+    sw.replaceChildren(seg); sw.hidden = false;
+  } else { sw.replaceChildren(); sw.hidden = true; }
+  for (const l of lanes) { l.dom.pane.classList.toggle("sc-on", l.id === show); scLaneHead(l); scLiveRow(l); }
+}
+
+function scAct(label, cls, iconName, run, errBox) {
+  const b = el("button", "sc-btn" + (cls ? " " + cls : "")); b.type = "button";
+  if (iconName) b.append(scG(iconName));
+  b.append(el("span", "", label));
+  b.onclick = async () => {
+    b.disabled = true; errBox.textContent = "";
+    try { await run(); refreshHome(); } catch (err) { errBox.textContent = err.message; } finally { b.disabled = false; }
+  };
+  return b;
+}
+function scInfoRow(iconName, text, small) {
+  const r = el("div", "sc-row");
+  r.append(scG(iconName), el("span", "sc-t", text));
+  if (small) r.append(el("small", "", small));
+  r.title = text + (small ? " · " + small : "");
+  return r;
+}
+function scMeter(part, whole) {
+  const m = el("span", "sc-meter" + (whole && part > whole ? " sc-over" : "")), i = el("i");
+  i.style.width = (whole ? Math.min(100, part / whole * 100) : 0) + "%";
+  m.append(i);
+  return m;
+}
+async function scStopAndReturn(task, text) {
+  await post(taskPath(task, "/stop"), {});
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 400));
+    const t = taskCards.get(task.id);
+    if (t && t.work && t.work.state !== "running") break;
+  }
+  await post(taskPath(task, "/return"), { text });
+}
+function scNoteForm(label, button, run, errBox) {
+  const form = el("form", "sc-note"), id = "sc-note-" + Math.random().toString(36).slice(2, 8);
+  const l = el("label", "", label); l.htmlFor = id;
+  const ta = el("textarea"); ta.id = id; ta.placeholder = "Что поменять";
+  const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
+  const cancel = el("button", "sc-btn", "Отмена"); cancel.type = "button";
+  const btns = el("div", "sc-btns"); btns.append(send, cancel);
+  form.append(l, ta, btns);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    if (!ta.value.trim()) { ta.focus(); return; }
+    send.disabled = true; errBox.textContent = "";
+    try { await run(ta.value.trim()); ta.value = ""; form.hidden = true; refreshHome(); } catch (err) { errBox.textContent = err.message; } finally { send.disabled = false; }
+  };
+  cancel.onclick = () => { form.hidden = true; };
+  return { form, ta };
+}
+function scInfo(task) {
+  const info = $("#sc-info");
+  if (!task) { info.replaceChildren(); sc.infoSig = ""; return; }
+  const w = task.work, d = scDept(w.department);
+  const files = sc.files.get(task.id);
+  const sig = [task.id, task.updated_ms, files ? files.size : 0, d ? d.running + "/" + d.month_spent_usd : ""].join("|");
+  const active = document.activeElement;
+  const typing = active && info.contains(active) && active.tagName === "TEXTAREA";
+  if (sig === sc.infoSig || typing || info.querySelector(".sc-note:not([hidden]) textarea:not(:placeholder-shown)")) return;
+  sc.infoSig = sig;
+  const nodes = [];
+  const head = el("div", "sc-ih"); head.append(el("span", "", "Задача " + task.id), el("small", "", scWhen(task.created_ms)));
+  nodes.push(head, scInfoRow("folder", d ? d.title : w.department, "отдел"));
+  nodes.push(w.risk === "external" ? scInfoRow("globe", "Уйдёт наружу", "принимаете вы") : scInfoRow("orch", "Внутренняя", w.owner_review ? "принимаете вы" : "принимает оркестратор"));
+  const src = { owner: ["user", "От вас"], orchestrator: ["orch", "От оркестратора"], schedule: ["cal", "По расписанию"] }[w.source] || ["run", w.source ? "Заказ отдела " + w.source : "Источник неизвестен"];
+  nodes.push(scInfoRow(src[0], src[1], w.parent ? "для " + w.parent : ""));
+  nodes.push(scInfoRow("clock", workStates[w.state] || w.state, w.returns ? "возвратов " + w.returns : ""));
+
+  const repo = w.repo || (d && d.repos && d.repos[0]);
+  nodes.push(el("div", "sc-ih", "Окружение"));
+  if (repo) nodes.push(scInfoRow("folder", scBase(repo) + " · " + String(repo).replace(/[\\/][^\\/]*$/, ""), d && d.worktree ? "копия на ветке" : "репозиторий"));
+  nodes.push(scInfoRow("run", "runs/" + task.id, "папка запуска"));
+
+  const budget = w.budget_usd || (d && d.limits ? d.limits.task_usd : 0);
+  const bh = el("div", "sc-ih"); bh.append(el("span", "", "Бюджет"), el("small", "", money(w.cost_usd) + (budget ? " из " + money(budget) : "")));
+  const bm = el("div", "sc-mrow"); const bl = el("div");
+  bl.append(el("small", "", tokens(w.input_tokens) + " → " + tokens(w.output_tokens) + " токенов"), el("small", "", budget ? Math.round(w.cost_usd / budget * 100) + " %" : ""));
+  bm.append(scMeter(w.cost_usd, budget), bl);
+  nodes.push(bh, bm);
+  const allRuns = w.runs || [], run = allRuns[allRuns.length - 1];
+  if (run) {
+    const limit = d && d.limits ? d.limits.timeout_mins * 60000 : 0;
+    const th = el("div", "sc-ih"); const small = el("small"); small.id = "sc-elapsed";
+    th.append(el("span", "", w.state === "running" ? "Время" : "Последний круг"), small);
+    const tm = el("div", "sc-mrow"); const meter = scMeter(0, 1); meter.id = "sc-tmeter"; tm.append(meter);
+    meter.dataset.start = run.started_ms; meter.dataset.end = run.finished_ms || ""; meter.dataset.limit = limit;
+    nodes.push(th, tm);
+  }
+  if ((w.questions || []).length) {
+    nodes.push(el("div", "sc-ih", "Вопросы"));
+    const list = el("ol", "sc-qs");
+    for (const q of w.questions) { const li = el("li", "", q.text); if (q.answer != null) li.append(el("small", "", "Ответ: " + q.answer)); list.append(li); }
+    nodes.push(list);
+  }
+  if (w.proposal) nodes.push(el("div", "sc-ih", "Новый отдел"), el("p", "sc-para", "«" + w.proposal.title + "» (" + w.proposal.id + "): " + w.proposal.description));
+  if (w.stuck_reason && w.state === "stuck") nodes.push(el("p", "sc-para sc-bad", "Причина: " + w.stuck_reason));
+  if (w.result_summary) {
+    nodes.push(el("div", "sc-ih", "Результат"));
+    const summary = scText(clip(w.result_summary, 900)); summary.classList.add("sc-para"); nodes.push(summary);
+    const full = el("pre", "sc-pre"); full.hidden = true;
+    const show = el("button", "sc-link", "Весь результат"); show.type = "button";
+    show.onclick = async () => {
+      if (!full.hidden) { full.hidden = true; show.textContent = "Весь результат"; return; }
+      try { full.textContent = (await getJson(taskPath(task, "/result"))).text; full.hidden = false; show.textContent = "Свернуть"; } catch (err) { errBox.textContent = err.message; }
+    };
+    nodes.push(show, full);
+  }
+  const fileRows = [];
+  for (const path of [...(w.attachments || [])]) fileRows.push([path, "вложение"]);
+  if (w.result_path) fileRows.push([w.result_path, "результат"]);
+  if (files) for (const [path, c] of files) fileRows.push([path, c]);
+  if (fileRows.length) {
+    nodes.push(el("div", "sc-ih", "Файлы"));
+    for (const [path, note] of fileRows.slice(0, 14)) {
+      const r = el("div", "sc-row"); r.title = path;
+      r.append(scImg(scFileIcon(path), 16), el("span", "sc-t", scBase(path)));
+      if (typeof note === "string") r.append(el("small", "", note));
+      else { const s = el("small"); s.append(el("span", "sc-plus", "+" + note.add), " ", el("span", "sc-minus", "−" + note.del)); r.append(s); }
+      nodes.push(r);
+    }
+  }
+
+  const errBox = el("div", "sc-err-t"); errBox.setAttribute("role", "alert");
+  const acts = el("div", "sc-acts");
+  const back = (label, run) => {
+    const { form, ta } = scNoteForm(label, "Вернуть в работу", run, errBox); form.hidden = true;
+    const open = el("button", "sc-btn"); open.type = "button"; open.append(scG("undo"), el("span", "", "Вернуть с запиской"));
+    open.onclick = () => { form.hidden = !form.hidden; if (!form.hidden) ta.focus(); };
+    acts.append(open, form);
+  };
+  if (w.state === "running") {
+    back("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", text => scStopAndReturn(task, text));
+    acts.append(scAct("Остановить задачу", "sc-danger", "sq", () => post(taskPath(task, "/stop"), {}), errBox));
+  } else if (w.state === "review") {
+    acts.append(scAct(w.risk === "external" ? "Принять и выпустить" : "Принять", "sc-primary", "check", () => patchTask(task.id, { status: "done" }), errBox));
+    acts.append(scAct("Ещё круг", "", "run", () => post(taskPath(task, "/retry"), {}), errBox));
+    back("Замечание отделу. Задача начнёт новый круг с ним в брифе.", text => post(taskPath(task, "/return"), { text }));
+  } else if (w.state === "stuck") {
+    acts.append(scAct("Ещё круг", "sc-primary", "run", () => post(taskPath(task, "/retry"), {}), errBox));
+    back("Что поменять в новом круге.", text => post(taskPath(task, "/return"), { text }));
+    acts.append(scAct("Принять как есть", "", "check", () => patchTask(task.id, { status: "done" }), errBox));
+    acts.append(scAct("Закрыть", "sc-danger", "x", () => patchTask(task.id, { status: "archived" }), errBox));
+  } else if (w.state === "waiting" && w.proposal) {
+    acts.append(scAct("Создать отдел", "sc-primary", "check", () => post(taskPath(task, "/proposal"), { create: true }), errBox));
+    acts.append(scAct("В общий отдел", "", "folder", () => post(taskPath(task, "/proposal"), { create: false }), errBox));
+  } else if (w.state === "waiting" && (w.questions || []).some(q => q.answer == null)) {
+    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", "Ответить", text => post(taskPath(task, "/answer"), { text }), errBox);
+    form.querySelector("textarea").placeholder = "Ответ";
+    form.querySelector(".sc-btns .sc-btn:last-child").remove();
+    acts.append(form);
+  } else if (w.state === "done") {
+    back("Что доделать. Задача начнёт новый круг с этим в брифе.", text => post(taskPath(task, "/return"), { text }));
+  }
+  if (acts.childNodes.length) nodes.push(el("div", "sc-divider"), acts);
+  nodes.push(errBox);
+  info.replaceChildren(...nodes);
+  scTickInfo();
+}
+function scTickInfo() {
+  const meter = $("#sc-tmeter"), label = $("#sc-elapsed");
+  if (!meter || !label) return;
+  const start = +meter.dataset.start, end = +meter.dataset.end || Date.now(), limit = +meter.dataset.limit;
+  const spent = Math.max(0, end - start);
+  label.textContent = scSecs(spent) + (limit ? " из " + Math.round(limit / 60000) + " мин" : "");
+  meter.firstChild.style.width = (limit ? Math.min(100, spent / limit * 100) : 0) + "%";
+  meter.classList.toggle("sc-over", !!limit && spent > limit);
+}
+
+function scDialog(title, label, button, needText, run) {
+  const dlg = $("#sc-dlg");
+  const form = el("form", "sc-note"); form.setAttribute("role", "dialog"); form.setAttribute("aria-modal", "true");
+  const h = el("h3", "", title); h.id = "sc-dlg-h"; form.setAttribute("aria-labelledby", h.id);
+  form.append(h);
+  let ta = null;
+  if (label) form.append(el("label", "", label));
+  if (needText) { ta = el("textarea"); ta.placeholder = "Что поменять"; ta.setAttribute("aria-label", label || title); form.append(ta); }
+  const err = el("div", "sc-err-t");
+  const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
+  const cancel = el("button", "sc-btn", "Отмена"); cancel.type = "button";
+  const btns = el("div", "sc-btns"); btns.append(send, cancel);
+  form.append(btns, err);
+  const close = () => { dlg.hidden = true; dlg.replaceChildren(); };
+  cancel.onclick = close;
+  dlg.onclick = e => { if (e.target === dlg) close(); };
+  form.onkeydown = e => { if (e.key === "Escape") close(); };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    if (ta && !ta.value.trim()) { ta.focus(); return; }
+    send.disabled = true; err.textContent = "";
+    try { await run(ta ? ta.value.trim() : ""); close(); refreshHome(); } catch (x) { err.textContent = x.message; send.disabled = false; }
+  };
+  dlg.replaceChildren(form); dlg.hidden = false;
+  (ta || send).focus();
+}
+function scColumn(task) {
+  const w = task.work;
+  if (ownerWaits(w)) return "wait";
+  if (w.state === "running" || w.state === "review") return "run";
+  if (w.state === "done") return "done";
+  return "queue";
+}
+function scDrop(task, to) {
+  const w = task.work, from = scColumn(task);
+  if (from === to) return;
+  if (to === "queue" && w.state === "running")
+    return scDialog("Вернуть задачу в очередь", "Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", "Вернуть в работу", true, text => scStopAndReturn(task, text));
+  if (to === "queue" && ["review", "stuck", "done"].includes(w.state))
+    return scDialog("Вернуть задачу в работу", "Записка отделу. Задача начнёт новый круг с ней в брифе.", "Вернуть в работу", true, text => post(taskPath(task, "/return"), { text }));
+  if (to === "done" && ["review", "stuck"].includes(w.state))
+    return scDialog(w.risk === "external" ? "Принять и выпустить?" : "Принять результат?", w.risk === "external" ? "Результат уйдёт наружу: пост, письмо или изменение в чужой системе." : "", "Принять", false, () => patchTask(task.id, { status: "done" }));
+  scToast(w.state === "running" ? "Задача ещё идёт. Остановить её или вернуть с запиской можно перетаскиванием в очередь." : "Так перенести нельзя.");
+}
+function scBoard() {
+  if (sc.dragging) return;
+  const root = $("#sc-board"), tasks = scTasks();
+  const cols = { queue: ["В очереди", []], run: ["В работе", []], wait: ["Ждёт вас", []], done: ["Готово", []] };
+  for (const t of tasks) if (t.work.state !== "cancelled") cols[scColumn(t)][1].push(t);
+  cols.done[1] = cols.done[1].sort((a, b) => b.updated_ms - a.updated_ms).slice(0, 12);
+  const grid = el("div", "sc-cols");
+  for (const [key, [label, list]] of Object.entries(cols)) {
+    const col = el("section", "sc-col"); col.dataset.col = key;
+    const h = el("div", "sc-col-h"); h.append(el("span", "", label), el("small", "", String(list.length)));
+    if (key === "wait" && list.length) h.append(el("span", "sc-dot"));
+    col.append(h);
+    if (!list.length) col.append(el("div", "sc-col-empty", key === "wait" ? "Ничего не ждёт вас" : "Пусто"));
+    for (const t of list.sort((a, b) => key === "done" ? 0 : (SC_ORDER[a.work.state] - SC_ORDER[b.work.state]) || b.updated_ms - a.updated_ms)) col.append(scCard(t));
+    col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("sc-drop"); });
+    col.addEventListener("dragleave", e => { if (!col.contains(e.relatedTarget)) col.classList.remove("sc-drop"); });
+    col.addEventListener("drop", e => {
+      e.preventDefault(); col.classList.remove("sc-drop");
+      const task = taskCards.get(e.dataTransfer.getData("text/plain") || sc.dragging);
+      sc.dragging = null;
+      if (task) scDrop(task, key);
+    });
+    grid.append(col);
+  }
+  root.replaceChildren(grid);
+}
+function scCard(task) {
+  const w = task.work, d = scDept(w.department);
+  const card = el("article", "sc-card" + (w.state === "running" ? " sc-live" : ""));
+  card.draggable = true; card.dataset.id = task.id; card.tabIndex = 0;
+  card.title = "Открыть сцену задачи";
+  card.append(el("div", "sc-card-t", task.title));
+  const meta = el("div", "sc-card-m");
+  meta.append(el("span", "", d ? d.title : w.department));
+  const items = scStepItems(task), now = items.filter(i => i.cls === "now").pop();
+  meta.append(el("span", "", w.state === "running" && now ? now.text : ownerWaits(w) ? scWaitLabel(task) : workStates[w.state] || w.state));
+  const budget = w.budget_usd || (d && d.limits ? d.limits.task_usd : 0);
+  if (w.cost_usd || w.state !== "queued") meta.append(el("span", "", money(w.cost_usd) + (budget && w.state === "running" ? " из " + money(budget) : "")));
+  if (w.risk === "external" && w.state !== "done") meta.append(el("span", "", "наружу"));
+  card.append(meta);
+  const lanes = sc.byTask.get(task.id) || [];
+  if (w.state === "running" && lanes.length) {
+    const busy = lanes.filter(l => l.busy).pop() || lanes[lanes.length - 1];
+    const tick = el("div", "sc-ticker"); tick.append(el("b", "", scName(busy) + ": "), clip(String(busy.ticker || "…").replace(/\s+/g, " ").trim(), 150));
+    const who = el("div", "sc-card-who");
+    lanes.forEach((l, i) => { if (i) who.append(el("span", "", "·")); who.append(scAgentIcon(l, 14), el("span", "", scLaneState(l)[1])); });
+    card.append(tick, who);
+  }
+  const btns = el("div", "sc-btns"), errBox = el("div", "sc-err-t");
+  if (w.state === "review" && ownerWaits(w)) btns.append(scAct("Принять", "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  else if (w.state === "stuck") btns.append(scAct("Ещё круг", "sc-primary", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? "Решить" : "Ответить"); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
+  if (btns.childNodes.length) card.append(btns, errBox);
+  const open = () => { location.hash = "#task=" + encodeURIComponent(task.id); };
+  card.addEventListener("click", e => { if (!e.target.closest("button, a")) open(); });
+  card.addEventListener("keydown", e => { if (e.key === "Enter" && e.target === card) open(); });
+  card.addEventListener("dragstart", e => { sc.dragging = task.id; e.dataTransfer.setData("text/plain", task.id); e.dataTransfer.effectAllowed = "move"; card.classList.add("sc-dragging"); });
+  card.addEventListener("dragend", () => { card.classList.remove("sc-dragging"); setTimeout(() => { sc.dragging = null; scDirty(); }, 0); for (const c of document.querySelectorAll(".sc-col")) c.classList.remove("sc-drop"); });
+  return card;
+}
+function scNew() {
+  const root = $("#sc-new");
+  if (root.firstChild) return;
+  const box = el("form", "sc-newbox");
+  const ta = el("textarea"); ta.id = "sc-new-text";
+  ta.placeholder = "Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…";
+  ta.setAttribute("aria-label", "Сообщение оркестратору");
+  const send = el("button", "sc-btn sc-primary", "Отправить оркестратору"); send.type = "submit";
+  const status = el("span", "sc-hint"); status.setAttribute("aria-live", "polite");
+  const btns = el("div", "sc-btns"); btns.append(send, status);
+  box.append(el("h2", "", "Что сделать?"), el("p", "", "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева."), ta, btns);
+  box.onsubmit = async e => {
+    e.preventDefault();
+    if (!ta.value.trim()) { ta.focus(); return; }
+    send.disabled = true; status.className = "sc-hint"; status.textContent = "";
+    try { await post("/api/orchestrator", { text: ta.value }); ta.value = ""; status.textContent = "Принято. Задачи появятся слева, ответ придёт в почту и Telegram."; }
+    catch (err) { status.className = "sc-hint sc-bad"; status.textContent = "Ошибка: " + err.message; }
+    finally { send.disabled = false; }
+  };
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) box.requestSubmit(); });
+  root.replaceChildren(box);
+}
+function scPick() {
+  const tasks = scTasks().sort((a, b) => b.updated_ms - a.updated_ms);
+  return (tasks.find(t => t.work.state === "running") || tasks.find(t => ownerWaits(t.work)) || tasks[0] || {}).id || null;
+}
+function scRender() {
+  clearTimeout(sc.timerRender); sc.timerRender = 0;
+  const root = $("#scene");
+  if (root.hidden) return;
+  if (sc.mode === "scene" && (!sc.task || !taskCards.has(sc.task)) && tasksLoaded) {
+    const pick = scPick();
+    if (pick) { sc.task = pick; history.replaceState(null, "", location.pathname + location.search + "#task=" + encodeURIComponent(pick)); }
+  }
+  root.dataset.mode = sc.mode;
+  const task = sc.mode === "scene" && sc.task ? taskCards.get(sc.task) || null : null;
+  scSide(); scBar(task);
+  if (sc.mode === "scene") { scSteps(task); scPanes(task); scInfo(task); }
+  else if (sc.mode === "board") scBoard();
+  else scNew();
+}
+function scDirty() {
+  if (!sc.timerRender && !$("#scene").hidden) sc.timerRender = setTimeout(scRender, 150);
+}
+function scFromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h === "board") sc.mode = "board";
+  else if (h === "new") sc.mode = "new";
+  else { sc.mode = "scene"; if (h.startsWith("task=")) sc.task = h.slice(5); }
+  sc.infoSig = "";
+  scRender();
+  if (sc.mode === "scene") { const lanes = sc.byTask.get(sc.task) || []; for (const l of lanes) if (l.dom) scStick(l, true); }
+}
+function openScene() {
+  try { const t = localStorage.getItem("agentsflow.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (_) {}
+  sceneConn(es && es.readyState === 1 ? "on" : "", $("#conn-text").textContent);
+  scFromHash();
+  refreshHome();
+}
+window.addEventListener("hashchange", () => { if (activeView === "scene") scFromHash(); });
+for (const b of document.querySelectorAll("[data-sc-mode]")) b.onclick = () => {
+  location.hash = b.dataset.scMode === "board" ? "#board" : sc.task ? "#task=" + encodeURIComponent(sc.task) : "#";
+};
+$("#sc-theme").onclick = () => {
+  const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("agentsflow.theme", r.dataset.theme); } catch (_) {}
+};
+$("#sc-classic").onclick = () => setView("home");
+$("#sc-menu").onclick = () => $("#scene").classList.toggle("sc-showside");
+$("#sc-close-side").onclick = () => $("#scene").classList.remove("sc-showside");
+$("#sc-panel").onclick = () => {
+  const root = $("#scene");
+  if (innerWidth <= 1240) root.classList.toggle("sc-showinfo"); else root.classList.toggle("sc-noinfo");
+};
+setInterval(() => {
+  if ($("#scene").hidden) return;
+  sc.ticks++;
+  for (const l of sc.byTask.get(sc.task) || []) if (l.dom) scLiveRow(l);
+  scTickInfo();
+  if (sc.ticks % 20 === 0) refreshHome();
+}, 1000);
+
 buildOrch();
 let savedView = "overview", viewSaved = false;
-try { if (["home", "overview", "chat", "dash", "board"].includes(localStorage.getItem("agentsflow.view"))) { savedView = localStorage.getItem("agentsflow.view"); viewSaved = true; } } catch (_) {}
-// The departments view exists only in --home mode; until the state says so, start on the overview.
-setView(savedView === "home" ? "overview" : savedView);
-if (savedView === "home") viewSaved = false;
+try { if (["scene", "home", "overview", "chat", "dash", "board"].includes(localStorage.getItem("agentsflow.view"))) { savedView = localStorage.getItem("agentsflow.view"); viewSaved = true; } } catch (_) {}
+// The scene and the departments view exist only in --home mode; until the state says so, start on the overview.
+const homeOnly = savedView === "home" || savedView === "scene";
+setView(homeOnly ? "overview" : savedView);
+if (homeOnly) viewSaved = false;
 loadWorkflows();
 async function refreshState() {
   const ready = await loadState();

@@ -10,6 +10,18 @@ use std::rc::Rc;
 /// Agents do not inherit this variable of the gateway.
 pub const TELEGRAM_TOKEN_VAR: &str = "AGENTSFLOW_TELEGRAM_TOKEN";
 
+/// `AGENTSFLOW_THINKING=off` stops asking the CLIs for thinking summaries:
+/// Claude's `--thinking-display` is an undocumented flag, and a CLI that
+/// drops it would refuse to start.
+pub const THINKING_VAR: &str = "AGENTSFLOW_THINKING";
+
+pub fn show_thinking() -> bool {
+    !matches!(
+        std::env::var(THINKING_VAR).as_deref().map(str::trim),
+        Ok("off" | "0" | "false" | "no")
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct MailConfig {
     pub url: String,

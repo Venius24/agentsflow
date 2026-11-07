@@ -13,7 +13,8 @@ use std::{
 
 use agentsflow_adapters::{Agent, Interrupter};
 use agentsflow_events::{
-    AgentId, Envelope, Event, Role, TaskSnapshot, TaskStatus, WorkInfo, WorkState, WorkflowStatus,
+    AgentId, Envelope, Event, NoteStatus, Role, TaskSnapshot, TaskStatus, WorkInfo, WorkState,
+    WorkflowStatus,
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,8 @@ struct Data {
     resolution_origins: HashMap<u64, ResolutionOrigin>,
     /// Board file of `serve --home`: the board outlives the bounded event history.
     board: Option<std::path::PathBuf>,
+    /// The owner's notes to agents of running tasks, waiting for their next prompt.
+    notes: HashMap<AgentId, Vec<(String, String)>>,
 }
 
 #[derive(Clone, Copy)]
@@ -378,6 +381,8 @@ fn mail_state(history: &VecDeque<Envelope>) -> (Vec<MailMsg>, HashSet<String>) {
 }
 
 const HISTORY_LIMIT: usize = 5000;
+/// Session of the owner's note events.
+const NOTE_SESSION: &str = "owner";
 
 struct LogWriter {
     tx: Option<std::sync::mpsc::Sender<Envelope>>,
@@ -437,9 +442,18 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentId, String, Event)> {
     let mut permissions: Vec<(AgentId, String, String)> = Vec::new();
     let mut turns: Vec<(AgentId, String, bool)> = Vec::new();
     let mut workflows: Vec<(String, String)> = Vec::new();
+    let mut notes: Vec<(AgentId, String, String)> = Vec::new();
     for envelope in history {
         let agent = envelope.agent.clone();
         match &envelope.event {
+            Event::Note {
+                id, text, status, ..
+            } => {
+                notes.retain(|(_, open, _)| open != id);
+                if *status == NoteStatus::Queued {
+                    notes.push((agent.clone(), id.clone(), text.clone()));
+                }
+            }
             Event::PermissionRequest { id, .. } => {
                 permissions.push((agent.clone(), envelope.session.clone(), id.clone()));
             }
@@ -454,7 +468,10 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentId, String, Event)> {
             _ => {}
         }
         if agent != AgentId::orchestrator()
-            && !matches!(envelope.event, Event::Mail { .. } | Event::MailRead { .. })
+            && !matches!(
+                envelope.event,
+                Event::Mail { .. } | Event::MailRead { .. } | Event::Note { .. }
+            )
         {
             let done = matches!(envelope.event, Event::Done { .. });
             match turns.iter_mut().find(|(known, _, _)| *known == agent) {
@@ -464,6 +481,14 @@ fn interrupted(history: &VecDeque<Envelope>) -> Vec<(AgentId, String, Event)> {
         }
     }
     let mut closers = Vec::new();
+    for (agent, id, text) in notes {
+        let event = Event::Note {
+            id,
+            text,
+            status: NoteStatus::Dropped,
+        };
+        closers.push((agent, NOTE_SESSION.to_owned(), event));
+    }
     for (agent, session, id) in permissions {
         let event = Event::PermissionResolved {
             id,
@@ -526,6 +551,7 @@ impl Hub {
                     stats: Statistics::default(),
                     resolution_origins: HashMap::new(),
                     board: None,
+                    notes: HashMap::new(),
                 }),
                 tx,
                 log: None,
@@ -605,6 +631,7 @@ impl Hub {
                     stats,
                     resolution_origins: HashMap::new(),
                     board: None,
+                    notes: HashMap::new(),
                 }),
                 tx,
                 log: Some(LogWriter::start(path)),
@@ -618,6 +645,43 @@ impl Hub {
     pub fn publish(&self, agent: AgentId, session: &str, event: Event) {
         let mut data = self.inner.data.lock().unwrap();
         self.publish_locked(&mut data, agent, session, event);
+    }
+    /// Queues the owner's note for `agent`; returns the note id.
+    pub fn queue_note(&self, agent: AgentId, text: String) -> String {
+        let id = Uuid::new_v4().simple().to_string()[..8].to_owned();
+        let mut data = self.inner.data.lock().unwrap();
+        data.notes
+            .entry(agent.clone())
+            .or_default()
+            .push((id.clone(), text.clone()));
+        let event = Event::Note {
+            id: id.clone(),
+            text,
+            status: NoteStatus::Queued,
+        };
+        self.publish_locked(&mut data, agent, NOTE_SESSION, event);
+        id
+    }
+    /// Takes the notes waiting for `agent` and marks them delivered.
+    pub fn take_notes(&self, agent: &AgentId) -> Vec<String> {
+        self.close_notes(agent, NoteStatus::Delivered)
+    }
+    /// The agent will not take another turn: its waiting notes are dropped.
+    pub fn drop_notes(&self, agent: &AgentId) {
+        self.close_notes(agent, NoteStatus::Dropped);
+    }
+    fn close_notes(&self, agent: &AgentId, status: NoteStatus) -> Vec<String> {
+        let mut data = self.inner.data.lock().unwrap();
+        let notes = data.notes.remove(agent).unwrap_or_default();
+        for (id, text) in &notes {
+            let event = Event::Note {
+                id: id.clone(),
+                text: text.clone(),
+                status,
+            };
+            self.publish_locked(&mut data, agent.clone(), NOTE_SESSION, event);
+        }
+        notes.into_iter().map(|(_, text)| text).collect()
     }
     pub fn uptime_s(&self) -> u64 {
         self.inner.started.elapsed().as_secs()
@@ -1751,6 +1815,28 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn notes_are_taken_once_and_dropped_on_restart() {
+        let hub = Hub::new();
+        let agent = AgentId::from("pr:writer:t1");
+        hub.queue_note(agent.clone(), "one".into());
+        hub.queue_note(agent.clone(), "two".into());
+        assert_eq!(
+            hub.take_notes(&agent),
+            vec!["one".to_owned(), "two".to_owned()]
+        );
+        assert!(hub.take_notes(&agent).is_empty());
+        hub.queue_note(agent.clone(), "late".into());
+        let history: VecDeque<Envelope> = hub.subscribe().0.into();
+        let closers = interrupted(&history);
+        assert_eq!(closers.len(), 1, "a note is not an unfinished turn");
+        assert!(
+            matches!(&closers[0].2, Event::Note { text, status: NoteStatus::Dropped, .. } if text == "late")
+        );
+        hub.drop_notes(&agent);
+        assert!(hub.take_notes(&agent).is_empty());
+    }
     #[test]
     fn statistics_count_and_replay() {
         use super::*;

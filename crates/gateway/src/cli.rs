@@ -42,6 +42,8 @@ pub fn format_event(agent: &str, event: &Event) -> String {
             ..
         } => format!("[rule:{status:?}] {target}: {}", truncate(text)),
         Event::Message { text, .. } => format!("{agent}> {text}"),
+        Event::Thinking { text } => format!("[thinking] {}", truncate(text)),
+        Event::Note { text, status, .. } => format!("[note:{status:?}] {}", truncate(text)),
         Event::ToolCall { name, input, .. } => {
             format!("[tool] {name} {}", truncate(&input.to_string()))
         }

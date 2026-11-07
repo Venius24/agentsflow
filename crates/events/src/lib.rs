@@ -255,6 +255,11 @@ pub enum Event {
         text: String,
         delta: bool,
     },
+    /// What the agent thought before acting: Claude's thinking summary or
+    /// Codex's reasoning summary. Shown apart from messages, never sent on.
+    Thinking {
+        text: String,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -312,6 +317,22 @@ pub enum Event {
     Error {
         message: String,
     },
+    /// The owner wrote to an agent of a running department task. The note
+    /// waits for the end of the agent's turn and goes in with its next prompt.
+    Note {
+        id: String,
+        text: String,
+        status: NoteStatus,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteStatus {
+    Queued,
+    Delivered,
+    /// The run ended (or the server restarted) before the agent took another turn.
+    Dropped,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -383,6 +404,9 @@ mod tests {
                 text: "hello".into(),
                 delta: true,
             },
+            Event::Thinking {
+                text: "plan".into(),
+            },
             Event::ToolCall {
                 id: "1".into(),
                 name: "read".into(),
@@ -440,6 +464,11 @@ mod tests {
             },
             Event::Error {
                 message: "failed".into(),
+            },
+            Event::Note {
+                id: "n1".into(),
+                text: "check".into(),
+                status: NoteStatus::Queued,
             },
         ];
         for event in events {

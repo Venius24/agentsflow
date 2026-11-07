@@ -30,6 +30,11 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
                     text: text.text.clone(),
                     delta: false,
                 }],
+                ContentBlock::Thinking(thinking) if !thinking.thinking.trim().is_empty() => {
+                    vec![Event::Thinking {
+                        text: thinking.thinking.trim().to_owned(),
+                    }]
+                }
                 ContentBlock::ToolUse(tool) => {
                     let mut events = vec![Event::ToolCall {
                         id: tool.id.clone(),
@@ -245,6 +250,10 @@ impl ClaudeSession {
         if let Some(effort) = opts.effort {
             command.arg("--effort").arg(effort);
         }
+        if crate::show_thinking() {
+            // Without it the CLI sends thinking blocks with the text left out.
+            command.arg("--thinking-display").arg("summarized");
+        }
         // The bot's token is not the agent's business.
         command.env_remove(crate::TELEGRAM_TOKEN_VAR);
         let mut child = command.spawn()?;
@@ -458,6 +467,28 @@ mod tests {
                     id: "t1".into(),
                     name: "Write".into(),
                     input: json!({"path":"a"})
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn thinking_summary_and_redacted_thinking() {
+        assert_eq!(
+            map(assistant(json!([
+                {"type":"thinking","thinking":"Checking the step rule.
+            ","signature":"s"},
+                {"type":"thinking","thinking":"","signature":"s"},
+                {"type":"text","text":"done"}
+            ]))),
+            vec![
+                Event::Thinking {
+                    text: "Checking the step rule.".into()
+                },
+                Event::Message {
+                    role: Role::Assistant,
+                    text: "done".into(),
+                    delta: false
                 },
             ]
         );

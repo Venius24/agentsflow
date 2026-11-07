@@ -737,17 +737,69 @@ async fn run_step(
         .agents
         .get(&agent)
         .with_context(|| format!("agent {} is disabled", step.agent))?;
+    // Notes the owner wrote while the agent waited go in with this prompt.
+    let notes = context.hub.take_notes(&agent);
+    let prompt = if notes.is_empty() {
+        prompt
+    } else {
+        format!(
+            "Сообщение хозяина, пришло, пока ты ждал своей очереди:
+{}
+
+---
+
+{prompt}",
+            notes.join(
+                "
+
+"
+            )
+        )
+    };
+    let mut output = prompt_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
+    // Notes that came during the turn reach the agent right after it, so the
+    // step's answer (and a reviewer's verdict) already takes them into account.
+    for _ in 0..MAX_NOTE_TURNS {
+        let notes = context.hub.take_notes(&agent);
+        if notes.is_empty() {
+            break;
+        }
+        let prompt = format!(
+            "Хозяин написал, пока ты работал:
+{}
+
+Учти это. Если это меняет результат, поправь его. Ответь заново целиком, в том виде, которого требовал прошлый запрос, включая последнюю строку с вердиктом, если она была нужна.",
+            notes.join("
+
+")
+        );
+        output = prompt_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
+    }
+    Ok(StepOutcome { output, agent })
+}
+
+/// Follow-up turns for the owner's notes within one step.
+const MAX_NOTE_TURNS: usize = 3;
+
+async fn prompt_turn(
+    context: &RunContext<'_>,
+    actor: &Actor,
+    agent: &AgentId,
+    name: &str,
+    prompt: String,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<String> {
     let (_, mut events) = context.hub.subscribe();
     tokio::select! {
         biased;
         _ = stop.wait_for(|stopped| *stopped) => bail!("stopped"),
         result = actor.prompt(prompt) => {
-            result.map_err(|error| anyhow::anyhow!("agent {}: {error:?}", step.agent))?;
+            result.map_err(|error| anyhow::anyhow!("agent {name}: {error:?}"))?;
         }
     }
-    let output = wait_turn(&mut events, &agent, stop).await?;
+    let output = wait_turn(&mut events, agent, stop).await?;
     wait_idle(actor, stop).await?;
-    Ok(StepOutcome { output, agent })
+    Ok(output)
 }
 
 async fn execute_steps(
@@ -1453,6 +1505,126 @@ mod tests {
             }
         });
         (actor, task, saved)
+    }
+
+    /// Writes the owner's note into the hub while its first turn runs.
+    struct NoteDuringTurn {
+        hub: Hub,
+        id: AgentId,
+        inner: Fake,
+    }
+    impl Agent for NoteDuringTurn {
+        async fn send(&mut self, prompt: &str) -> Result<()> {
+            if self.inner.prompts.lock().unwrap().is_empty() {
+                self.hub.queue_note(self.id.clone(), "late note".into());
+            }
+            self.inner.send(prompt).await
+        }
+        async fn next_events(&mut self) -> Result<Vec<Event>> {
+            self.inner.next_events().await
+        }
+        async fn respond(&mut self, id: &str, allow: bool) -> Result<()> {
+            self.inner.respond(id, allow).await
+        }
+        async fn shutdown(self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn owner_notes_reach_the_agent() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (main, main_task, main_prompts) =
+                    fake(&hub, AgentId::from("main"), &["did it"], false);
+                let rev_prompts = Arc::new(Mutex::new(Vec::new()));
+                let (rev, rev_task) = {
+                    let (hub2, saved) = (hub.clone(), rev_prompts.clone());
+                    crate::hub::spawn(hub.clone(), AgentId::from("rev"), true, move || {
+                        let (hub, prompts) = (hub2.clone(), saved.clone());
+                        async move {
+                            Ok(NoteDuringTurn {
+                                hub,
+                                id: AgentId::from("rev"),
+                                inner: Fake {
+                                    replies: Arc::new(Mutex::new(VecDeque::from([
+                                        "first".to_owned(),
+                                        "second
+VERDICT"
+                                            .to_owned(),
+                                    ]))),
+                                    prompts,
+                                    never: false,
+                                },
+                            })
+                        }
+                    })
+                };
+                let agents = HashMap::from([
+                    (AgentId::from("main"), main.clone()),
+                    (AgentId::from("rev"), rev.clone()),
+                ]);
+                let spec = Spec::parse(
+                    "name='n'
+[[step]]
+id='do'
+agent='main'
+prompt='{task}'
+[[step]]
+id='review'
+agent='rev'
+prompt='check {prev.output}'
+until='VERDICT'
+",
+                )
+                .unwrap();
+                hub.queue_note(AgentId::from("main"), "early note".into());
+                let (_tx, stop) = watch::channel(false);
+                let (result, history) =
+                    execute_traced(&hub, &agents, &spec, "task", "id", stop).await;
+                assert_eq!(result, Ok(()));
+                let main_prompts = main_prompts.lock().unwrap().clone();
+                assert_eq!(main_prompts.len(), 1);
+                assert!(
+                    main_prompts[0].contains("early note") && main_prompts[0].ends_with("task")
+                );
+                let rev_prompts = rev_prompts.lock().unwrap().clone();
+                assert_eq!(rev_prompts.len(), 2, "{rev_prompts:?}");
+                assert!(rev_prompts[1].contains("late note"));
+                assert_eq!(
+                    history.last().unwrap().output,
+                    "second
+VERDICT"
+                );
+                let statuses: Vec<_> = hub
+                    .subscribe()
+                    .0
+                    .into_iter()
+                    .filter_map(|e| match e.event {
+                        Event::Note { text, status, .. } => {
+                            Some((e.agent.to_string(), text, status))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                use agentsflow_events::NoteStatus::*;
+                assert_eq!(
+                    statuses,
+                    vec![
+                        ("main".into(), "early note".into(), Queued),
+                        ("main".into(), "early note".into(), Delivered),
+                        ("rev".into(), "late note".into(), Queued),
+                        ("rev".into(), "late note".into(), Delivered),
+                    ]
+                );
+                for actor in [main, rev] {
+                    actor.shutdown().await;
+                }
+                let _ = main_task.await;
+                let _ = rev_task.await;
+            })
+            .await;
     }
 
     #[tokio::test]

@@ -33,13 +33,15 @@ pub(super) async fn departments(State(state): State<AppState>) -> Response {
                 .team
                 .members
                 .iter()
-                .map(|m| json!({"id":m.id,"kind":m.kind,"model":m.model,"roles":m.roles,"title":m.title,"mode":m.mode}))
+                .map(|m| json!({"id":m.id,"kind":m.kind,"model":m.model,"effort":m.effort,"roles":m.roles,"title":m.title,"mode":m.mode,"sandbox":m.sandbox}))
                 .collect();
             json!({
                 "id": dept.id,
                 "title": dept.title,
                 "description": dept.description,
                 "default_risk": dept.default_risk,
+                "repos": dept.repos,
+                "worktree": dept.worktree,
                 "max_parallel": dept.max_parallel,
                 "schedules": dept.schedules.iter().map(|s| json!({"cron":s.cron,"title":s.title})).collect::<Vec<_>>(),
                 "limits": {
@@ -305,6 +307,31 @@ pub(super) async fn owner_return(
     match runs.owner_return(&id, &input.text) {
         Ok(task) => Json(json!({"task":task})).into_response(),
         Err(error) => bad_request(error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AgentNote {
+    agent: String,
+    text: String,
+}
+
+/// The owner writes to an agent of a running task.
+pub(super) async fn agent_note(
+    State(state): State<AppState>,
+    input: Result<Json<AgentNote>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Ok(Json(input)) = input else {
+        return bad_request("invalid note".into());
+    };
+    match runs.note(&input.agent, &input.text) {
+        Ok(id) => Json(json!({"id":id})).into_response(),
+        Err(error) => (StatusCode::CONFLICT, Json(json!({"error":error}))).into_response(),
     }
 }
 

@@ -52,6 +52,29 @@ pub fn map_message(message: &ServerMessage) -> Vec<Event> {
                     text: text.clone(),
                     delta: false,
                 }],
+                ThreadItemPayload::Reasoning {
+                    summary, content, ..
+                } => {
+                    let parts = summary
+                        .as_ref()
+                        .filter(|parts| parts.iter().any(|part| !part.trim().is_empty()))
+                        .or(content.as_ref());
+                    let text = parts
+                        .map(|parts| {
+                            parts.join(
+                                "
+",
+                            )
+                        })
+                        .unwrap_or_default();
+                    if text.trim().is_empty() {
+                        vec![]
+                    } else {
+                        vec![Event::Thinking {
+                            text: text.trim().to_owned(),
+                        }]
+                    }
+                }
                 ThreadItemPayload::CommandExecution {
                     id,
                     aggregated_output,
@@ -281,6 +304,11 @@ impl CodexSession {
             .env(crate::TELEGRAM_TOKEN_VAR, "");
         if let Some(effort) = opts.effort {
             builder = builder.config_override("model_reasoning_effort", json!(effort).to_string());
+        }
+        if crate::show_thinking() {
+            // Reasoning summaries are what the page shows as the agent's thinking.
+            builder =
+                builder.config_override("model_reasoning_summary", json!("detailed").to_string());
         }
         if let Some(mail) = opts.mail {
             let exe = mail
@@ -523,6 +551,34 @@ mod tests {
             }]
         );
         assert!(map(json!({"method":"item/agentMessage/delta", "params":{"threadId":"t", "turnId":"v", "itemId":"i", "delta":"x"}})).is_empty());
+    }
+    #[test]
+    fn reasoning_summary_is_thinking() {
+        assert_eq!(
+            item(
+                "item/completed",
+                json!({"type":"reasoning", "id":"r", "summary":["**Checking rules**", "**Comparing stock**"]})
+            ),
+            vec![Event::Thinking {
+                text: "**Checking rules**
+**Comparing stock**"
+                    .into()
+            }]
+        );
+        assert_eq!(
+            item(
+                "item/completed",
+                json!({"type":"reasoning", "id":"r", "summary":[], "content":["raw"]})
+            ),
+            vec![Event::Thinking { text: "raw".into() }]
+        );
+        assert!(
+            item(
+                "item/completed",
+                json!({"type":"reasoning", "id":"r", "summary":[" "]})
+            )
+            .is_empty()
+        );
     }
     #[test]
     fn command_start_and_results() {

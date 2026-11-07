@@ -94,7 +94,9 @@ mode = "bypass"
 
 Каждое событие — `Envelope { session, agent, seq, ts_ms, event }`, где `agent` — ID участника или `orchestrator`. Варианты `event` (поле `type`):
 
-`message` · `tool_call` · `tool_result` · `diff` · `permission_request` · `permission_resolved` · `done` · `error` · `handoff` · `workflow`
+`message` · `thinking` · `tool_call` · `tool_result` · `diff` · `permission_request` · `permission_resolved` · `done` · `error` · `handoff` · `workflow` · `note`
+
+`thinking` — что агент обдумал перед действием. Claude присылает краткий пересказ своих мыслей (флаг CLI `--thinking-display summarized`), Codex — заголовки рассуждений (`model_reasoning_summary = "detailed"`). Мысли приходят, только когда модель решила подумать: на простой задаче их может не быть. `AGENTSFLOW_THINKING=off` перестаёт их запрашивать; это нужно, если новая версия Claude CLI откажется от недокументированного флага. `note` — записка хозяина агенту отдела и её судьба: `queued`, `delivered`, `dropped`.
 
 Диффы Codex приходят из его `fileChange`; для Claude патч синтезируется из `Write`/`Edit`/`MultiEdit` и показывается раньше запроса разрешения.
 
