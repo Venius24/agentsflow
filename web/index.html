@@ -1495,7 +1495,8 @@ async function loadState() {
       homeMode = true;
       $('[data-view-button="home"]').hidden = false;
       $('[data-view-button="scene"]').hidden = false;
-      if (!viewSaved) setView("scene"); else refreshHome();
+      // The scene is the start page in home mode; the classic views stay one click away.
+      setView("scene");
     }
     for (const a of team) {
       const pane = panes[a.id] || (buildPane(a), panes[a.id]);
