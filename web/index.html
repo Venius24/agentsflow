@@ -297,14 +297,14 @@
     --accent: #ff5b2e; --accent-ink: #1a1a1a; --accent-soft: rgba(255, 91, 46, .13);
     --bubble: #2a2a2a; --own: #3a2219; --own-line: #5b3020;
     --ok: #4cc38a; --ok-soft: rgba(76, 195, 138, .12); --bad: #f07272; --bad-soft: rgba(240, 114, 114, .12); --warn: #e0a640;
-    --ink-filter: invert(1); color-scheme: dark; } }
+    --ink-filter: invert(1); --lift-filter: brightness(2.1) saturate(.7); color-scheme: dark; } }
   :root[data-theme="dark"] .sc {
     --bg: #181818; --side: #1f1f1f; --panel: #1c1c1c; --raised: #262626; --hover: #2b2b2b;
     --line: #2c2c2c; --line-2: #3b3b3b; --ink: #ececec; --ink-2: #c6c6c6; --muted: #8e8e8e;
     --accent: #ff5b2e; --accent-ink: #1a1a1a; --accent-soft: rgba(255, 91, 46, .13);
     --bubble: #2a2a2a; --own: #3a2219; --own-line: #5b3020;
     --ok: #4cc38a; --ok-soft: rgba(76, 195, 138, .12); --bad: #f07272; --bad-soft: rgba(240, 114, 114, .12); --warn: #e0a640;
-    --ink-filter: invert(1); color-scheme: dark;
+    --ink-filter: invert(1); --lift-filter: brightness(2.1) saturate(.7); color-scheme: dark;
   }
   .sc { position: fixed; inset: 0; z-index: 5; display: grid; grid-template-columns: 264px minmax(0, 1fr) 272px; background: var(--bg); color: var(--ink); font: 400 14px/1.55 var(--font); -webkit-font-smoothing: antialiased; font-variant-numeric: normal; }
   .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"] { grid-template-columns: 264px minmax(0, 1fr) 0; }
@@ -320,6 +320,7 @@
   .sc-g { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: none; }
   .sc-icon { display: block; flex: none; }
   .sc-ink { filter: var(--ink-filter); }
+  .sc-lift { filter: var(--lift-filter, none); }
   .sc-sp { flex: 1; }
   .sc .sc-btn { height: 32px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: transparent; color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: 500 13px/1 var(--font); cursor: pointer; white-space: nowrap; transition: background .15s, border-color .15s, transform .08s, opacity .15s; }
   .sc .sc-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--line-2); }
@@ -651,6 +652,61 @@
   .sc-newfield-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 4px 8px 8px; font-size: 12.5px; color: var(--muted); }
   .sc-note .sc-atts { padding: 2px 0; }
   @media (prefers-reduced-motion: reduce) { .sc-att-up::before { animation: none; width: 100%; opacity: .5; } .sc-att.sc-dl:hover { transform: none; } }
+  /* Result: a tab beside the agents, the result as a document and as a file. */
+  .sc[data-mode="scene"] .sc-view-scene { grid-template-rows: auto auto auto minmax(0, 1fr); }
+  .sc-view-scene > .sc-steps { grid-row: 1; }
+  .sc-view-scene > .sc-switch { grid-row: 2; }
+  .sc-view-scene > .sc-rtabs { grid-row: 3; }
+  .sc-view-scene > .sc-panes, .sc-view-scene > .sc-result { grid-row: 4; }
+  .sc-rtabs { display: flex; gap: 4px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .sc-rtabs[hidden] { display: none; }
+  .sc .sc-rtabs button { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--muted); font: 500 13px/1 var(--font); cursor: pointer; transition: color .15s ease, border-color .15s ease; }
+  .sc .sc-rtabs button:hover { color: var(--ink); }
+  .sc .sc-rtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .sc-rtabs .sc-g { width: 15px; height: 15px; }
+  .sc-rtabs small { color: var(--muted); font-weight: 400; }
+  .sc-result { overflow: auto; min-height: 0; padding: 28px 24px 48px; }
+  .sc-result[hidden] { display: none; }
+  .sc-docwrap { max-width: 900px; margin: 0 auto; display: grid; gap: 18px; }
+  .sc-doc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .sc-doc-file { position: relative; display: flex; align-items: center; gap: 12px; min-width: 0; padding: 10px 14px 10px 12px; border: 1px solid var(--own-line); border-radius: var(--r-md); background: var(--own); color: var(--ink); text-decoration: none; transition: transform .15s ease, border-color .15s ease; }
+  .sc-doc-file:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .sc-doc-file b { display: block; font-size: 13.5px; }
+  .sc-doc-file small { display: block; font-size: 12px; color: var(--muted); }
+  .sc-doc-file .sc-g { width: 16px; height: 16px; color: var(--muted); margin-left: 6px; }
+  .sc-doc-meta { font-size: 12.5px; color: var(--muted); }
+  .sc-doc-files { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sc-doc-files .sc-att { width: 150px; }
+  .sc-doc { font-size: 15px; line-height: 1.7; color: var(--ink); overflow-wrap: anywhere; border-top: 1px solid var(--line); padding-top: 18px; }
+  .sc-doc > :first-child { margin-top: 0; }
+  .sc-doc h1, .sc-doc h2, .sc-doc h3, .sc-doc h4 { line-height: 1.3; letter-spacing: -.01em; margin: 1.5em 0 .5em; }
+  .sc-doc h1 { font-size: 24px; } .sc-doc h2 { font-size: 19px; } .sc-doc h3 { font-size: 16px; } .sc-doc h4 { font-size: 15px; }
+  .sc-doc p, .sc-doc ul, .sc-doc ol, .sc-doc blockquote, .sc-doc pre, .sc-doc .sc-tablewrap { margin: 0 0 .9em; }
+  .sc-doc ul, .sc-doc ol { padding-left: 22px; }
+  .sc-doc li + li { margin-top: 4px; }
+  .sc-doc li.sc-li2 { margin-left: 20px; }
+  .sc-doc code { font: 13px/1.4 var(--mono); background: var(--raised); border-radius: 5px; padding: 1px 5px; }
+  .sc-doc pre { background: var(--raised); border-radius: var(--r-sm); padding: 12px 14px; overflow-x: auto; font: 12.5px/1.5 var(--mono); white-space: pre; }
+  .sc-doc blockquote { border-left: 3px solid var(--line-2); padding-left: 12px; color: var(--ink-2); }
+  .sc-doc hr { border: 0; border-top: 1px solid var(--line); margin: 1.4em 0; }
+  .sc-doc a { color: var(--accent); }
+  .sc-tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+  .sc-doc table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 1.45; }
+  .sc-doc th, .sc-doc td { text-align: left; vertical-align: top; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .sc-doc th { background: var(--raised); font-weight: 600; white-space: nowrap; position: sticky; top: 0; }
+  .sc-doc tbody tr:last-child td { border-bottom: 0; }
+  .sc-doc tbody tr:hover td { background: var(--hover); }
+  .sc-doc td:first-child { white-space: nowrap; }
+  .sc-doc-empty { color: var(--muted); font-size: 14px; }
+  /* Unread results: brighter title and a "новое" mark until the owner opens the task. */
+  .sc-si { position: relative; }
+  .sc-si.sc-unread { color: var(--ink); font-weight: 600; }
+  .sc-si.sc-sub.sc-unread::before { content: ""; position: absolute; left: 17px; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--accent); }
+  .sc-new { flex: none; font: 600 10.5px/1 var(--font); color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 4px 7px; }
+  .sc-card.sc-unread { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .sc-card.sc-unread .sc-card-t { font-weight: 650; }
+  @media (max-width: 880px) { .sc-result { padding: 18px 16px 32px; } .sc-doc-files .sc-att { width: calc(50% - 4px); } }
+  @media (prefers-reduced-motion: reduce) { .sc-doc-file:hover { transform: none; } }
 </style>
 </head>
 <body>
@@ -713,6 +769,8 @@
     <symbol id="sci-home" viewBox="0 0 24 24"><path d="M4 21V9l8-5 8 5v12"/><path d="M9 21v-6h6v6"/></symbol>
     <symbol id="sci-clip" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.8-8.8a3.7 3.7 0 0 1 5.2 5.2l-8.8 8.8a1.8 1.8 0 0 1-2.6-2.6l8.1-8.1"/></symbol>
     <symbol id="sci-down" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></symbol>
+    <symbol id="sci-doc" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+    <symbol id="sci-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
     <symbol id="sci-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></symbol>
   </svg>
 
@@ -751,7 +809,9 @@
     <div class="sc-view sc-view-scene">
       <nav class="sc-steps" id="sc-steps" aria-label="Ход задачи"></nav>
       <div class="sc-switch" id="sc-switch"></div>
+      <div class="sc-rtabs" id="sc-rtabs" role="tablist" aria-label="Итог или работа агентов" hidden></div>
       <div class="sc-panes" id="sc-panes"></div>
+      <div class="sc-result" id="sc-result" hidden></div>
     </div>
     <div class="sc-view sc-view-board" id="sc-board"></div>
     <div class="sc-view sc-view-new" id="sc-new"></div>
@@ -2343,7 +2403,7 @@ const SC_QUEUED = "Сообщение хозяина, пришло, пока т�
 const sc = {
   mode: "scene", task: null, lanes: new Map(), byTask: new Map(), wf: new Map(), files: new Map(),
   show: new Map(), more: new Set(), timer: 0, ticks: 0, dragging: null, infoSig: "", emptySig: "", note: null,
-  taskFiles: new Map(), filesKey: new Map(),
+  taskFiles: new Map(), filesKey: new Map(), rview: new Map(), resultText: new Map(), resultLoading: new Set(), seenTicks: 0, seenTask: null,
 };
 const scReduce = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -2354,7 +2414,7 @@ function scG(name, size, cls) {
   return s;
 }
 function scImg(name, size) {
-  const img = el("img", "sc-icon" + (name === "openai" ? " sc-ink" : ""));
+  const img = el("img", "sc-icon" + (name === "openai" ? " sc-ink" : name === "md" ? " sc-lift" : ""));
   img.src = SC_IMG[name]; img.alt = ""; img.width = img.height = size || 16;
   return img;
 }
@@ -2908,14 +2968,16 @@ function scWaitLabel(task) {
   return w.state === "review" ? "приёмка" : w.state === "stuck" ? "застряла" : "";
 }
 function scItem(task, inWaits) {
-  const a = el("a", "sc-si" + (inWaits ? "" : " sc-sub") + (task.work.state === "done" ? " sc-done" : ""));
+  const unread = scUnread(task);
+  const a = el("a", "sc-si" + (inWaits ? "" : " sc-sub") + (task.work.state === "done" && !unread ? " sc-done" : "") + (unread ? " sc-unread" : ""));
   a.href = "#task=" + encodeURIComponent(task.id);
   if (sc.mode === "scene" && sc.task === task.id) a.setAttribute("aria-current", "page");
   const w = task.work;
   if (inWaits) { const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot")); a.append(lead); }
   a.append(el("span", "sc-t", task.title));
   a.title = task.title;
-  if (inWaits) a.append(el("small", "", scWaitLabel(task)));
+  if (inWaits) a.append(unread ? el("span", "sc-new", "новое") : el("small", "", scWaitLabel(task)));
+  else if (unread) a.append(el("span", "sc-new", "новое"));
   else if (w.state === "running") { const s = el("span", "sc-spin"); s.setAttribute("aria-label", "идёт"); a.append(s); }
   else if (ownerWaits(w)) { const s = el("span", "sc-dot"); s.setAttribute("aria-label", "ждёт вас"); a.append(s); }
   else if (w.state === "queued" || w.state === "waiting") { const s = scG("clock", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", workStates[w.state]); s.removeAttribute("aria-hidden"); a.append(s); }
@@ -2951,10 +3013,11 @@ function scSide() {
     nodes.push(head);
     const open = sc.more.has(dept.id), keep = active.length ? 1 : 2;
     for (const t of active) nodes.push(scItem(t, false));
-    for (const t of open ? done.slice(0, 30) : done.slice(0, keep)) nodes.push(scItem(t, false));
-    if (done.length > keep) {
+    const shown = open ? done.slice(0, 30) : done.filter((t, i) => i < keep || scUnread(t));
+    for (const t of shown) nodes.push(scItem(t, false));
+    if (open ? done.length > keep : done.length > shown.length) {
       const more = el("a", "sc-si sc-sub sc-done"); more.href = "#";
-      more.append(el("span", "sc-t", open ? "Свернуть" : "Ещё готовых: " + (done.length - keep)));
+      more.append(el("span", "sc-t", open ? "Свернуть" : "Ещё готовых: " + (done.length - shown.length)));
       more.onclick = e => { e.preventDefault(); if (open) sc.more.delete(dept.id); else sc.more.add(dept.id); scSide(); };
       nodes.push(more);
     }
@@ -3203,14 +3266,12 @@ function scInfo(task) {
   if (w.stuck_reason && w.state === "stuck") nodes.push(el("p", "sc-para sc-bad", "Причина: " + w.stuck_reason));
   if (w.result_summary) {
     nodes.push(el("div", "sc-ih", "Результат"));
-    const summary = scText(clip(w.result_summary, 900)); summary.classList.add("sc-para"); nodes.push(summary);
-    const full = el("pre", "sc-pre"); full.hidden = true;
-    const show = el("button", "sc-link", "Весь результат"); show.type = "button";
-    show.onclick = async () => {
-      if (!full.hidden) { full.hidden = true; show.textContent = "Весь результат"; return; }
-      try { full.textContent = (await getJson(taskPath(task, "/result"))).text; full.hidden = false; show.textContent = "Свернуть"; } catch (err) { errBox.textContent = err.message; }
-    };
-    nodes.push(show, full);
+    // Tables do not fit the card: it shows the lead, the center shows the whole result.
+    const lead = w.result_summary.split("\n"), cut = lead.findIndex(l => /^\s*\|/.test(l));
+    const summary = scText(clip((cut < 0 ? lead : lead.slice(0, cut)).join("\n").trim(), 900)); summary.classList.add("sc-para"); nodes.push(summary);
+    const show = el("button", "sc-link", "Открыть итог целиком"); show.type = "button";
+    show.onclick = () => { sc.rview.set(task.id, "result"); sc.mode = "scene"; scRender(); $("#sc-result").scrollTop = 0; $("#scene").classList.remove("sc-showinfo"); };
+    nodes.push(show);
   }
   const taskFiles = sc.taskFiles.get(task.id) || [];
   const fh = el("div", "sc-ih"); fh.append(el("span", "", "Файлы" + (taskFiles.length ? " · " + taskFiles.length : "")));
@@ -3356,11 +3417,12 @@ function scBoard() {
 }
 function scCard(task) {
   const w = task.work, d = scDept(w.department);
-  const card = el("article", "sc-card" + (w.state === "running" ? " sc-live" : ""));
+  const card = el("article", "sc-card" + (w.state === "running" ? " sc-live" : "") + (scUnread(task) ? " sc-unread" : ""));
   card.draggable = true; card.dataset.id = task.id; card.tabIndex = 0;
   card.title = "Открыть сцену задачи";
   card.append(el("div", "sc-card-t", task.title));
   const meta = el("div", "sc-card-m");
+  if (scUnread(task)) meta.append(el("span", "sc-new", "новое"));
   meta.append(el("span", "", d ? d.title : w.department));
   const items = scStepItems(task), now = items.filter(i => i.cls === "now").pop();
   meta.append(el("span", "", w.state === "running" && now ? now.text : ownerWaits(w) ? scWaitLabel(task) : workStates[w.state] || w.state));
@@ -3435,7 +3497,7 @@ function scRender() {
   root.dataset.mode = sc.mode;
   const task = sc.mode === "scene" && sc.task ? taskCards.get(sc.task) || null : null;
   scSide(); scBar(task);
-  if (sc.mode === "scene") { scSteps(task); scPanes(task); scInfo(task); }
+  if (sc.mode === "scene") { scSteps(task); scPanes(task); scResultTabs(task); scInfo(task); }
   else if (sc.mode === "board") scBoard();
   else scNew();
 }
@@ -3480,6 +3542,11 @@ setInterval(() => {
   for (const l of sc.byTask.get(sc.task) || []) if (l.dom) scLiveRow(l);
   scTickInfo();
   if (sc.ticks % 20 === 0) refreshHome();
+  const open = sc.mode === "scene" && sc.task && taskCards.get(sc.task);
+  if (open && scUnread(open) && document.visibilityState === "visible" && document.hasFocus()) {
+    if (sc.seenTask !== open.id) { sc.seenTask = open.id; sc.seenTicks = 0; }
+    if (++sc.seenTicks >= 2) scMarkSeen(open);
+  } else sc.seenTask = null;
   if (sc.ticks % 8 === 0) { const t = taskCards.get(sc.task); if (t && t.work && t.work.state === "running") scLoadFiles(t, true); }
 }, 1000);
 
@@ -3639,6 +3706,179 @@ async function scAttachToTask(task, files) {
   scLoadFiles(task, true);
 }
 scDropZone($("#sc-info"), files => { const task = taskCards.get(sc.task); if (task) scAttachToTask(task, files); else scToast("Сначала выберите задачу слева"); });
+
+// Unread results. A finished task stays marked until the owner has looked at it
+// for two seconds; what finished more than a day before the first visit counts as read.
+const SC_SEEN_KEY = "agentsflow.seen";
+let scSeen = {};
+try { scSeen = JSON.parse(localStorage.getItem(SC_SEEN_KEY) || "{}") || {}; } catch (_) {}
+if (!scSeen._since) { scSeen._since = Date.now() - 86400000; scSaveSeen(); }
+function scSaveSeen() {
+  const ids = Object.keys(scSeen).filter(k => k !== "_since");
+  if (ids.length > 400) for (const id of ids.sort((a, b) => scSeen[a] - scSeen[b]).slice(0, ids.length - 400)) delete scSeen[id];
+  try { localStorage.setItem(SC_SEEN_KEY, JSON.stringify(scSeen)); } catch (_) {}
+}
+function scFinished(task) {
+  const runs = task.work.runs || [], run = runs[runs.length - 1];
+  return (run && run.finished_ms) || task.updated_ms;
+}
+function scUnread(task) {
+  const w = task && task.work;
+  if (!w || !(w.result_path || w.result_summary)) return false;
+  if (!(w.state === "done" || (w.state === "review" && ownerWaits(w)))) return false;
+  const t = scFinished(task);
+  return t > scSeen._since && t > (scSeen[task.id] || 0);
+}
+function scMarkSeen(task) {
+  if (!scUnread(task)) return;
+  scSeen[task.id] = scFinished(task);
+  scSaveSeen();
+  scDirty();
+}
+
+// Markdown of a result, safely as DOM: headings, paragraphs, lists, tables, code, quotes, links.
+function scInlineDoc(node, text) {
+  const re = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|(?<![\w*])\*[^*\s][^*]*\*(?!\w)|https?:\/\/[^\s)<>|]+)/g;
+  let at = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > at) node.append(text.slice(at, m.index));
+    const s = m[0];
+    if (s[0] === "`") node.append(el("code", "", s.slice(1, -1)));
+    else if (s.startsWith("**")) { const b = el("b"); scInlineDoc(b, s.slice(2, -2)); node.append(b); }
+    else if (s[0] === "[") {
+      const parts = /^\[([^\]]+)\]\((.+)\)$/.exec(s);
+      const a = el("a", "", parts[1]); a.href = parts[2]; a.target = "_blank"; a.rel = "noopener noreferrer"; node.append(a);
+    } else if (s[0] === "*") node.append(el("i", "", s.slice(1, -1)));
+    else { const a = el("a", "", s); a.href = s; a.target = "_blank"; a.rel = "noopener noreferrer"; node.append(a); }
+    at = m.index + s.length;
+  }
+  if (at < text.length) node.append(text.slice(at));
+}
+function scDoc(md) {
+  const doc = el("article", "sc-doc");
+  const lines = String(md || "").replace(/\r/g, "").split("\n");
+  const rowRe = /^\s*\|.*\|\s*$/, sepRe = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+  const cells = line => line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  let para = null, list = null, i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
+    if (/^\s*```/.test(line)) {
+      const buf = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) buf.push(lines[i]);
+      i++;
+      doc.append(el("pre", "", buf.join("\n"))); para = list = null; continue;
+    }
+    if (!line.trim()) { para = list = null; i++; continue; }
+    if (rowRe.test(line) && sepRe.test(lines[i + 1] || "")) {
+      const wrap = el("div", "sc-tablewrap"), table = el("table"), head = el("tr"), body = el("tbody");
+      for (const c of cells(line)) { const th = el("th"); scInlineDoc(th, c); head.append(th); }
+      const thead = el("thead"); thead.append(head);
+      for (i += 2; i < lines.length && rowRe.test(lines[i]); i++) {
+        const tr = el("tr");
+        for (const c of cells(lines[i])) { const td = el("td"); scInlineDoc(td, c); tr.append(td); }
+        body.append(tr);
+      }
+      table.append(thead, body); wrap.append(table); doc.append(wrap); para = list = null; continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { const n = el("h" + Math.min(4, h[1].length)); scInlineDoc(n, h[2].replace(/\s+#+$/, "")); doc.append(n); para = list = null; i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { doc.append(el("hr")); para = list = null; i++; continue; }
+    if (/^\s*>/.test(line)) { const q = el("blockquote"); scInlineDoc(q, line.replace(/^\s*>\s?/, "")); doc.append(q); para = list = null; i++; continue; }
+    const item = line.match(/^(\s*)(?:[-*•]|(\d+)[.)])\s+(.*)$/);
+    if (item) {
+      const ordered = item[2] !== undefined;
+      if (!list || list.ordered !== ordered) { list = el(ordered ? "ol" : "ul"); list.ordered = ordered; if (ordered) list.start = +item[2]; doc.append(list); }
+      const li = el("li", item[1].length >= 2 ? "sc-li2" : ""); scInlineDoc(li, item[3]); list.append(li);
+      para = null; i++; continue;
+    }
+    if (!para) { para = el("p"); doc.append(para); list = null; } else para.append(document.createElement("br"));
+    scInlineDoc(para, line); i++;
+  }
+  return doc;
+}
+
+// Tabs "Итог" / "Как работали": a finished task opens on its result.
+function scHasResult(task) { return !!(task && task.work && (task.work.result_path || task.work.result_summary)); }
+function scResultView(task) {
+  if (!scHasResult(task)) return "agents";
+  const chosen = sc.rview.get(task.id);
+  if (chosen) return chosen;
+  const s = task.work.state;
+  return s === "done" || s === "review" || s === "stuck" ? "result" : "agents";
+}
+function scResultTabs(task) {
+  const tabs = $("#sc-rtabs"), panes = $("#sc-panes"), res = $("#sc-result");
+  const has = scHasResult(task), view = scResultView(task);
+  tabs.hidden = !has;
+  panes.hidden = view === "result";
+  res.hidden = view !== "result";
+  if (has) {
+    const lanes = sc.byTask.get(task.id) || [];
+    const tab = (id, icon, label, note) => {
+      const b = el("button"); b.type = "button"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(view === id));
+      b.append(scG(icon), el("span", "", label)); if (note) b.append(el("small", "", note));
+      b.onclick = () => { sc.rview.set(task.id, id); scRender(); if (id === "agents") for (const l of lanes) if (l.dom) scStick(l, true); };
+      return b;
+    };
+    const sig = task.id + "|" + view + "|" + lanes.length;
+    if (tabs.dataset.sig !== sig) {
+      tabs.dataset.sig = sig;
+      tabs.replaceChildren(tab("result", "doc", "Итог"), tab("agents", "orch", "Как работали", lanes.length ? String(lanes.length) : ""));
+    }
+  }
+  if (view === "result") scResult(task);
+}
+function scResult(task) {
+  const box = $("#sc-result"), w = task.work;
+  const files = sc.taskFiles.get(task.id) || [];
+  const cached = sc.resultText.get(task.id);
+  const key = task.id + "|" + task.updated_ms;
+  if (w.result_path && (!cached || cached.key !== key) && !sc.resultLoading.has(key)) {
+    sc.resultLoading.add(key);
+    getJson(taskPath(task, "/result"))
+      .then(data => { sc.resultText.set(task.id, { key, text: data.text }); })
+      .catch(() => { sc.resultText.set(task.id, { key, text: null }); })
+      .finally(() => { sc.resultLoading.delete(key); box.dataset.sig = ""; scDirty(); });
+  }
+  const text = cached && cached.text != null ? cached.text : w.result_summary || "";
+  const sig = key + "|" + (cached ? cached.key + (cached.text || "").length : "-") + "|" + JSON.stringify(files);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const wrap = el("div", "sc-docwrap");
+  const head = el("div", "sc-doc-head");
+  const resultFile = files.find(f => f.kind === "result");
+  if (resultFile) {
+    const chip = el("a", "sc-doc-file"); chip.href = scFileUrl(task, resultFile.path); chip.download = "result.md";
+    chip.title = "Скачать итог файлом";
+    const t = el("div"); t.append(el("b", "", "result.md"), el("small", "", "Итог · " + scSize(resultFile.size) + " · скачать"));
+    chip.append(scImg("md", 22), t, scG("down"));
+    head.append(chip);
+  }
+  const d = scDept(w.department), runsN = (w.runs || []).length;
+  head.append(el("span", "sc-doc-meta", [d ? d.title : w.department, workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN ? runsN + " " + scPlural(runsN, "круг", "круга", "кругов") : ""].filter(Boolean).join(" · ")));
+  head.append(el("span", "sc-sp"));
+  if (text) {
+    const copy = el("button", "sc-btn"); copy.type = "button"; copy.append(scG("copy"), el("span", "", "Копировать"));
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(text); scToast("Итог скопирован"); } catch (_) { scToast("Не удалось скопировать"); } };
+    head.append(copy);
+  }
+  if (resultFile) {
+    const open = el("a", "sc-btn"); open.href = scFileUrl(task, resultFile.path, true); open.target = "_blank"; open.rel = "noopener";
+    open.append(scG("eye"), el("span", "", "Как текст")); head.append(open);
+  }
+  wrap.append(head);
+  const others = files.filter(f => f.kind !== "result");
+  if (others.length) {
+    const row = el("div", "sc-doc-files");
+    for (const f of others) row.append(scFileTile(task, f));
+    wrap.append(row);
+  }
+  wrap.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? "Итог не найден." : "Загружаю итог…"));
+  const top = box.dataset.task === task.id ? box.scrollTop : 0;
+  box.dataset.task = task.id;
+  box.replaceChildren(wrap);
+  box.scrollTop = top;
+}
 
 buildOrch();
 let savedView = "overview", viewSaved = false;

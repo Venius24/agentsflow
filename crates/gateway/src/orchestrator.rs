@@ -617,6 +617,17 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                 }
                 out.push_str("\n## Результат\n\n");
                 out.push_str(&short(&result_text(home, work), RESULT_LIMIT));
+                let files = handed_files(home, id, work);
+                if !files.is_empty() {
+                    out.push_str(
+                        "\n\n## Файлы задачи\n\nВсе задачи, которые ты создашь на этой приёмке, \
+                         получат эти файлы во входных данных; в постановке называй файл по имени:\n",
+                    );
+                    for (path, size) in files {
+                        let name = path.rsplit('/').next().unwrap_or(&path);
+                        out.push_str(&format!("- {name} ({} КБ)\n", size.div_ceil(1024)));
+                    }
+                }
                 out.push_str(&format!(
                     "\n\nПрими (accept), верни (return_task) или отдай хозяину (send_to_owner) задачу `{}`.\n",
                     task.id
@@ -839,6 +850,31 @@ fn parse_plan(text: &str) -> Result<Plan, String> {
     })
 }
 
+/// Files a reviewed task hands to the tasks made on its review: the owner's
+/// attachments, the result and what the run left in `artifacts/`, without
+/// the browser's logs. Paths are relative to the home.
+fn handed_files(home: &Home, id: &str, work: &agentsflow_events::WorkInfo) -> Vec<(String, u64)> {
+    let mut files: Vec<(String, u64)> = work
+        .attachments
+        .iter()
+        .filter_map(|file| {
+            let meta = std::fs::metadata(home.root.join(file)).ok()?;
+            meta.is_file().then(|| (file.clone(), meta.len()))
+        })
+        .collect();
+    if let Some(dept) = home.departments.get(&work.department) {
+        for entry in crate::telegram::files::TaskFiles::read(&dept.run_dir(id)).entries {
+            if entry.name.starts_with("browser/") {
+                continue;
+            }
+            if let Ok(relative) = entry.path.strip_prefix(&home.root) {
+                files.push((relative.to_string_lossy().replace('\\', "/"), entry.size));
+            }
+        }
+    }
+    files
+}
+
 /// Applies the plan: proposals and new tasks first (in order, so keys
 /// resolve), then decisions. Returns a line per action for the owner.
 fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
@@ -871,7 +907,17 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
     };
     let attachments = match trigger {
         Trigger::Owner(_, files) | Trigger::Request { files, .. } => files.clone(),
-        _ => Vec::new(),
+        Trigger::Review(id) => runs
+            .hub()
+            .task(id)
+            .and_then(|task| task.work)
+            .map(|work| {
+                handed_files(&runs.home(), id, &work)
+                    .into_iter()
+                    .map(|(path, _)| path)
+                    .collect()
+            })
+            .unwrap_or_default(),
     };
     let mut attached = false;
     let mut ordered: Vec<String> = Vec::new();
@@ -1032,7 +1078,7 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
             runs.kick();
         }
     }
-    if !attachments.is_empty() && !attached {
+    if !attachments.is_empty() && !attached && !matches!(trigger, Trigger::Review(_)) {
         report.push(
             "📎 Задач из сообщения не вышло, файлы никуда не ушли: пришлите их с задачей".into(),
         );
@@ -1213,6 +1259,65 @@ mod tests {
         assert!(text.contains("- цены.xlsx"));
         assert!(!text.contains(".agentsflow/inbox"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tasks_made_on_a_review_get_the_reviewed_task_files() {
+        with_orchestrator("{}", async |_, runs, hub, dir| {
+            let done = runs
+                .create(
+                    AgentId::from(FROM),
+                    NewWork {
+                        title: "Проверка Kaspi".into(),
+                        text: "x".into(),
+                        department: "general".into(),
+                        risk: None,
+                        depends_on: vec![],
+                        budget_usd: None,
+                        parent: None,
+                        source: "owner".into(),
+                        questions: vec![],
+                        proposal: None,
+                        small: false,
+                        attachments: vec![".agentsflow/inbox/ab12/пул.xlsx".into()],
+                    },
+                )
+                .unwrap();
+            std::fs::create_dir_all(dir.join(".agentsflow/inbox/ab12")).unwrap();
+            std::fs::write(dir.join(".agentsflow/inbox/ab12/пул.xlsx"), b"pool").unwrap();
+            let run = runs.home().departments["general"].run_dir(&done.id);
+            std::fs::create_dir_all(run.join("artifacts/browser")).unwrap();
+            std::fs::write(run.join("result.md"), b"# done").unwrap();
+            std::fs::write(run.join("artifacts/проверка.xlsx"), b"checked").unwrap();
+            std::fs::write(run.join("artifacts/browser/console.log"), b"noise").unwrap();
+            let action: Action = serde_json::from_str(
+                r#"{"type":"create_task","title":"BuyShark","text":"сверь с проверка.xlsx","department":"general"}"#,
+            )
+            .unwrap();
+            let report = apply(&runs, &Trigger::Review(done.id.clone()), vec![action]);
+            let made = hub
+                .tasks(false)
+                .into_iter()
+                .find(|task| task.title == "BuyShark")
+                .unwrap_or_else(|| panic!("{report:?}"));
+            let base = format!("departments/general/runs/{}", done.id);
+            assert_eq!(
+                made.work.unwrap().attachments,
+                vec![
+                    ".agentsflow/inbox/ab12/пул.xlsx".to_owned(),
+                    format!("{base}/result.md"),
+                    format!("{base}/artifacts/проверка.xlsx"),
+                ]
+            );
+            let text = prompt(
+                &runs.home(),
+                &hub.tasks(false),
+                &Trigger::Review(done.id.clone()),
+            );
+            assert!(text.contains("## Файлы задачи"), "{text}");
+            assert!(text.contains("- проверка.xlsx (1 КБ)"), "{text}");
+            assert!(!text.contains("console.log"), "{text}");
+        });
     }
 
     #[test]
