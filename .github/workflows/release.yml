@@ -1,0 +1,177 @@
+name: Release
+
+# Push a tag `vX.Y.Z` to build and publish a GitHub release.
+# The tag must match `version` in [workspace.package] of Cargo.toml.
+# Run it by hand (Actions > Release > Run workflow) for a dry run: it builds
+# and packages everything and keeps the files as workflow artifacts for 7
+# days, but publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the workspace version and compare it with the tag
+        id: version
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=$(awk '
+            /^\[/ { in_pkg = ($0 == "[workspace.package]") }
+            in_pkg && /^version[[:space:]]*=/ { split($0, a, "\""); print a[2]; exit }
+          ' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error file=Cargo.toml::Could not find version under [workspace.package]."
+            exit 1
+          fi
+          if [ "$EVENT" = "push" ] && [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::Tag '$REF_NAME' does not match the Cargo workspace version '$version' (expected tag 'v$version'). Bump version in Cargo.toml, commit, then tag again."
+            exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Workspace version: $version (event: $EVENT, ref: $REF_NAME)"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on Ubuntu 22.04 on purpose: the binary links glibc
+          # dynamically, and an older build host keeps it runnable on older
+          # distributions.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            smoke: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            smoke: true
+          # Apple silicon runner; the Intel binary is cross-compiled and is
+          # not run here.
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            smoke: true
+          - os: macos-14
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            smoke: false
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p agentsflow-gateway --target ${{ matrix.target }}
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: |
+          set -eu
+          exe=target/${{ matrix.target }}/release/agentsflow
+          [ -f "$exe.exe" ] && exe="$exe.exe"
+          "$exe" --version
+      - name: Package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE: ${{ matrix.archive }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          COPYFILE_DISABLE: "1"
+        run: |
+          set -eu
+          name="agentsflow-$TARGET"
+          mkdir -p "dist/$name"
+          exe=agentsflow
+          [ "$ARCHIVE" = zip ] && exe=agentsflow.exe
+          cp "target/$TARGET/release/$exe" "dist/$name/"
+          cp LICENSE README.md README.en.md "dist/$name/"
+          printf '%s\n' "$VERSION" > "dist/$name/VERSION"
+          cd dist
+          if [ "$ARCHIVE" = zip ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+            file="$name.zip"
+          else
+            tar -czf "$name.tar.gz" "$name"
+            file="$name.tar.gz"
+          fi
+          rm -rf "$name"
+          # "<sha256>  <file>", the format `sha256sum -c` reads.
+          if command -v sha256sum > /dev/null 2>&1; then
+            sha256sum "$file" > "$file.sha256"
+          else
+            shasum -a 256 "$file" > "$file.sha256"
+          fi
+          cat "$file.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/agentsflow-*.tar.gz
+            dist/agentsflow-*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: [meta, build]
+    # Only a pushed tag publishes; a manual run stops after the build.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Combine checksums
+        working-directory: dist
+        run: |
+          set -eu
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          rm ./*.sha256
+          sha256sum -c SHA256SUMS
+          ls -l
+      - name: Create the release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          set -eu
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-run of the same tag: replace the files, keep the notes.
+            gh release upload "$TAG" --clobber agentsflow-* SHA256SUMS
+          else
+            flags=""
+            [ "$PRERELEASE" = true ] && flags="--prerelease"
+            gh release create "$TAG" $flags --verify-tag --title "$TAG" --generate-notes agentsflow-* SHA256SUMS
+          fi
