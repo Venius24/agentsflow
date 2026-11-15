@@ -109,7 +109,7 @@ async fn live_turn<A: Agent>(label: &str, mut agent: A) -> Line {
         loop {
             for event in agent.next_events().await? {
                 match event {
-                    Event::Message { .. } => said = true,
+                    Event::Message { delta: false, .. } => said = true,
                     Event::Usage { .. } => usage = true,
                     Event::PermissionRequest { id, .. } => agent.respond(&id, false).await?,
                     Event::Error { message } => anyhow::bail!("ошибка агента: {message}"),

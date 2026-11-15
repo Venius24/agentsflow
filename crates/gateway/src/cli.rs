@@ -23,6 +23,7 @@ fn truncate(text: &str) -> String {
 
 pub fn format_event(agent: &str, event: &Event) -> String {
     match event {
+        Event::StreamDelta { .. } | Event::StreamEnd { .. } => String::new(),
         Event::Usage {
             input_tokens,
             output_tokens,
@@ -102,6 +103,9 @@ fn agent_label(agent: &agentsflow_events::AgentId) -> &str {
 }
 
 fn print_flow_event(envelope: &agentsflow_events::Envelope) {
+    if envelope.event.is_transient() {
+        return;
+    }
     let label = agent_label(&envelope.agent);
     let formatted = format_event(label, &envelope.event);
     if matches!(
@@ -213,6 +217,9 @@ async fn drive_turn<A: Agent>(session: &mut A, agent: &str, prompt: &str, yes: b
     loop {
         let events = session.next_events().await?;
         for event in &events {
+            if event.is_transient() {
+                continue;
+            }
             if let Event::PermissionRequest { id, .. } = event {
                 let allow = if yes {
                     println!("{} [auto-allowed]", format_event(agent, event));

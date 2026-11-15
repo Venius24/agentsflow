@@ -25,6 +25,13 @@ pub const GITHUB_TOKEN_VARS: [&str; 4] = [
 /// drops it would refuse to start.
 pub const THINKING_VAR: &str = "AGENTSFLOW_THINKING";
 
+pub fn stream_enabled() -> bool {
+    !matches!(
+        std::env::var("AGENTSFLOW_STREAM").as_deref().map(str::trim),
+        Ok("off" | "0" | "false" | "no")
+    )
+}
+
 pub fn show_thinking() -> bool {
     !matches!(
         std::env::var(THINKING_VAR).as_deref().map(str::trim),

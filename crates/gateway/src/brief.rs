@@ -27,6 +27,7 @@ pub struct Input {
     pub result: std::path::PathBuf,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     dept: &Department,
     task: &TaskSnapshot,

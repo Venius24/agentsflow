@@ -296,6 +296,17 @@ pub enum Event {
     Thinking {
         text: String,
     },
+    /// Live-only text fragment, identified within an agent session.
+    StreamDelta {
+        block_id: String,
+        thinking: bool,
+        text: String,
+    },
+    /// Associates the next completed message or thinking event with a draft.
+    StreamEnd {
+        block_id: String,
+        thinking: bool,
+    },
     ToolCall {
         id: String,
         name: String,
@@ -360,6 +371,16 @@ pub enum Event {
         text: String,
         status: NoteStatus,
     },
+}
+
+impl Event {
+    /// Transient events share the preceding durable sequence and never enter history.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::StreamDelta { .. } | Self::StreamEnd { .. } | Self::Message { delta: true, .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -250,7 +250,9 @@ next = "end"
     fn the_reviewer_becomes_the_mentor_and_briefs_the_doer_first() {
         let dept = Department::parse(SAMPLE, Path::new("pr")).unwrap();
         let fable = preset("fable-low").unwrap();
-        let plan = dept.run_plan_with("t1", RunKind::Full, Some(fable)).unwrap();
+        let plan = dept
+            .run_plan_with("t1", RunKind::Full, Some(fable))
+            .unwrap();
         let mentor = plan.team.get(&AgentId::from("pr:critic:t1")).unwrap();
         assert_eq!(mentor.kind, AgentKind::Claude);
         assert_eq!(mentor.model.as_deref(), Some("claude-fable-5-2"));

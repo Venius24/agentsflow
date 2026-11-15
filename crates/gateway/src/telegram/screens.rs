@@ -104,7 +104,7 @@ fn event_line(event: &Event) -> Option<String> {
         Event::Message {
             role: Role::User,
             text,
-            ..
+            delta: false,
         } => format!("💬 вы: {}", clip(text, 140)),
         Event::Message {
             role: Role::Assistant,
@@ -1323,9 +1323,12 @@ impl Bridge {
         let current = crate::mentor::load(&runs.home().root);
         let mut text = String::new();
         if !flash.is_empty() {
-            text.push_str(&format!("{}
+            text.push_str(&format!(
+                "{}
 
-", self.safe(flash, 300)));
+",
+                self.safe(flash, 300)
+            ));
         }
         text.push_str(&format!(
             "<b>🧭 Наставник: {}</b>

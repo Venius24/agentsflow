@@ -34,6 +34,7 @@ struct Inner {
     seq: AtomicU64,
     data: Mutex<Data>,
     tx: broadcast::Sender<Envelope>,
+    live_tx: broadcast::Sender<Envelope>,
     log: Option<LogWriter>,
 }
 struct Data {
@@ -536,6 +537,7 @@ fn compact(path: &Path, history: &VecDeque<Envelope>) -> std::io::Result<()> {
 impl Hub {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1024);
+        let (live_tx, _) = broadcast::channel(4096);
         Self {
             inner: Arc::new(Inner {
                 admission: Arc::new(Mutex::new(false)),
@@ -554,6 +556,7 @@ impl Hub {
                     notes: HashMap::new(),
                 }),
                 tx,
+                live_tx,
                 log: None,
             }),
         }
@@ -616,6 +619,7 @@ impl Hub {
             }
         }
         let (tx, _) = broadcast::channel(1024);
+        let (live_tx, _) = broadcast::channel(4096);
         let hub = Self {
             inner: Arc::new(Inner {
                 admission: Arc::new(Mutex::new(false)),
@@ -634,6 +638,7 @@ impl Hub {
                     notes: HashMap::new(),
                 }),
                 tx,
+                live_tx,
                 log: Some(LogWriter::start(path)),
             }),
         };
@@ -711,6 +716,17 @@ impl Hub {
             .copied()
     }
     fn publish_locked(&self, data: &mut Data, agent: AgentId, session: &str, event: Event) -> u64 {
+        if event.is_transient() {
+            let seq = self.inner.seq.load(Ordering::Relaxed);
+            let _ = self.inner.live_tx.send(Envelope {
+                session: session.into(),
+                agent,
+                seq,
+                ts_ms: now_ms(),
+                event,
+            });
+            return seq;
+        }
         let envelope = Envelope {
             session: session.into(),
             agent,
@@ -735,6 +751,7 @@ impl Hub {
             }
         }
         let seq = envelope.seq;
+        let _ = self.inner.live_tx.send(envelope.clone());
         let _ = self.inner.tx.send(envelope);
         seq
     }
@@ -1258,6 +1275,11 @@ impl Hub {
     pub fn subscribe(&self) -> (Vec<Envelope>, broadcast::Receiver<Envelope>) {
         let data = self.inner.data.lock().unwrap();
         let rx = self.inner.tx.subscribe();
+        (data.history.iter().cloned().collect(), rx)
+    }
+    pub fn subscribe_live(&self) -> (Vec<Envelope>, broadcast::Receiver<Envelope>) {
+        let data = self.inner.data.lock().unwrap();
+        let rx = self.inner.live_tx.subscribe();
         (data.history.iter().cloned().collect(), rx)
     }
 }
@@ -1815,6 +1837,47 @@ async fn run_actor<A, F, Fut>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn transient_events_are_live_only_and_do_not_advance_sequence() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("agentsflow-stream-{}.jsonl", Uuid::new_v4()));
+        {
+            let hub = Hub::with_log(&path);
+            let agent = AgentId::from("a");
+            let (_, mut live) = hub.subscribe_live();
+            hub.publish(
+                agent.clone(),
+                "s",
+                Event::StreamDelta {
+                    block_id: "b".into(),
+                    thinking: false,
+                    text: "part".into(),
+                },
+            );
+            assert!(matches!(
+                live.try_recv().unwrap().event,
+                Event::StreamDelta { .. }
+            ));
+            assert!(hub.subscribe().0.is_empty());
+            hub.publish(
+                agent,
+                "s",
+                Event::Message {
+                    role: Role::Assistant,
+                    text: "whole".into(),
+                    delta: false,
+                },
+            );
+            let history = hub.subscribe().0;
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].seq, 1);
+        }
+        let lines = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(lines.lines().count(), 1);
+        assert!(!lines.contains("stream_delta"));
+        let _ = std::fs::remove_file(path);
+    }
 
     #[test]
     fn notes_are_taken_once_and_dropped_on_restart() {

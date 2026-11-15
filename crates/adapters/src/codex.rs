@@ -14,6 +14,20 @@ use tokio::sync::mpsc;
 
 pub fn map_message(message: &ServerMessage) -> Vec<Event> {
     match message {
+        ServerMessage::Notification(Notification::AgentMessageDelta(delta)) => {
+            vec![Event::StreamDelta {
+                block_id: delta.item_id.clone(),
+                thinking: false,
+                text: delta.delta.clone(),
+            }]
+        }
+        ServerMessage::Notification(Notification::ReasoningDelta(delta)) => {
+            vec![Event::StreamDelta {
+                block_id: delta.item_id.clone(),
+                thinking: true,
+                text: delta.delta.clone(),
+            }]
+        }
         ServerMessage::Notification(Notification::ItemStarted(item)) => match &item.item.payload {
             ThreadItemPayload::CommandExecution {
                 id, command, cwd, ..
@@ -267,6 +281,7 @@ pub struct CodexSession {
     usage_baseline: (u64, u64),
     /// The latest running totals reported during the current turn.
     usage_latest: Option<(u64, u64)>,
+    summary_indices: HashMap<String, i64>,
 }
 
 /// The tokens one turn spent: the difference of the running thread totals
@@ -372,6 +387,7 @@ impl CodexSession {
             interrupt_rx,
             usage_baseline: (0, 0),
             usage_latest: None,
+            summary_indices: HashMap::new(),
         })
     }
 
@@ -437,7 +453,39 @@ impl CodexSession {
             self.pending.insert(key, id.clone());
         }
         let mut events = map_message(&message);
+        if let ServerMessage::Notification(Notification::ReasoningDelta(delta)) = &message {
+            let previous = self
+                .summary_indices
+                .insert(delta.item_id.clone(), delta.summary_index);
+            if previous.is_some_and(|index| index != delta.summary_index) {
+                if let Some(Event::StreamDelta { text, .. }) = events.first_mut() {
+                    text.insert(0, '\n');
+                }
+            }
+        }
+        if !crate::stream_enabled() {
+            events.retain(|event| !matches!(event, Event::StreamDelta { .. }));
+        } else if let ServerMessage::Notification(Notification::ItemCompleted(item)) = &message {
+            let end = match &item.item.payload {
+                ThreadItemPayload::AgentMessage { id, .. } => Some((id, false)),
+                ThreadItemPayload::Reasoning { id, .. } => Some((id, true)),
+                _ => None,
+            };
+            if let Some((id, thinking)) = end.filter(|_| !events.is_empty()) {
+                if thinking {
+                    self.summary_indices.remove(id);
+                }
+                events.insert(
+                    0,
+                    Event::StreamEnd {
+                        block_id: id.clone(),
+                        thinking,
+                    },
+                );
+            }
+        }
         if turn_done {
+            self.summary_indices.clear();
             let usage = turn_usage(&mut self.usage_baseline, self.usage_latest.take());
             if let Some(usage) = usage {
                 let at = events
@@ -553,7 +601,26 @@ mod tests {
                 delta: false
             }]
         );
-        assert!(map(json!({"method":"item/agentMessage/delta", "params":{"threadId":"t", "turnId":"v", "itemId":"i", "delta":"x"}})).is_empty());
+        assert_eq!(
+            map(
+                json!({"method":"item/agentMessage/delta", "params":{"threadId":"t", "turnId":"v", "itemId":"i", "delta":"x"}})
+            ),
+            vec![Event::StreamDelta {
+                block_id: "i".into(),
+                thinking: false,
+                text: "x".into()
+            }]
+        );
+        assert_eq!(
+            map(
+                json!({"method":"item/reasoning/summaryTextDelta", "params":{"threadId":"t", "turnId":"v", "itemId":"r", "summaryIndex":0, "delta":"why"}})
+            ),
+            vec![Event::StreamDelta {
+                block_id: "r".into(),
+                thinking: true,
+                text: "why".into()
+            }]
+        );
     }
     #[test]
     fn reasoning_summary_is_thinking() {

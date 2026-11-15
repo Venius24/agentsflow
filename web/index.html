@@ -1176,7 +1176,76 @@ function permButtons(agent, ev, fail) {
   return { row, allow, deny };
 }
 
+const streamDrafts = new Map(), streamEnds = new Map();
+function streamKey(env, id, thinking) { return JSON.stringify([env.session, env.agent, id, thinking]); }
+function streamOwner(env, thinking) { return JSON.stringify([env.session, env.agent, thinking]); }
+function streamNode(draft, scene) {
+  const node = el("div", scene ? "sc-txt" : "msg assistant");
+  if (draft.thinking) {
+    const fold = el("details", scene ? "sc-fold" : "tool");
+    const body = el("pre"); fold.open = true;
+    fold.append(el("summary", "", "Думал"), body);
+    node.append(fold); return { node, body };
+  }
+  return { node, body: node };
+}
+function streamMount(draft) {
+  if (!draft.classic && !(homeMode && draft.agent.includes(":")) && draft.agent !== "orchestrator") {
+    draft.classic = streamNode(draft, false);
+    push(ensurePane(draft.agent), draft.classic.node);
+  }
+  const lane = sc.lanes.get(draft.agent);
+  if (!draft.scene && lane && lane.dom) {
+    draft.scene = streamNode(draft, true);
+    scPush(lane, draft.scene.node);
+  }
+}
+function streamUpdate(env) {
+  const ev = env.event, key = streamKey(env, ev.block_id, ev.thinking);
+  let draft = streamDrafts.get(key);
+  if (!draft) {
+    draft = { agent: env.agent, thinking: ev.thinking, text: "", classic: null, scene: null, pending: false, closed: false };
+    streamDrafts.set(key, draft);
+    if (scIsRun(env.agent)) scLane(env.agent);
+  }
+  draft.text += ev.text;
+  if (!draft.pending) {
+    draft.pending = true;
+    requestAnimationFrame(() => {
+      draft.pending = false;
+      if (draft.closed) return;
+      streamMount(draft);
+      if (draft.classic) draft.classic.body.textContent = draft.text;
+      if (draft.scene) draft.scene.body.textContent = draft.text;
+    });
+  }
+}
+function streamFinish(env) {
+  const thinking = env.event.type === "thinking";
+  if (!thinking && !(env.event.type === "message" && env.event.role === "assistant")) return;
+  const owner = streamOwner(env, thinking), key = streamEnds.get(owner);
+  if (!key) return;
+  streamEnds.delete(owner);
+  const draft = streamDrafts.get(key);
+  if (!draft) return;
+  draft.closed = true;
+  env.streamed = true;
+  if (draft.classic) draft.classic.node.remove();
+  if (draft.scene) draft.scene.node.remove();
+  streamDrafts.delete(key);
+}
 function handle(env) {
+  if (env.event.type === "stream_delta") { streamUpdate(env); return; }
+  if (env.event.type === "stream_end") { streamEnds.set(streamOwner(env, env.event.thinking), streamKey(env, env.event.block_id, env.event.thinking)); return; }
+  streamFinish(env);
+  if (env.event.type === "done") {
+    for (const [key, draft] of streamDrafts) if (draft.agent === env.agent) {
+      draft.closed = true;
+      if (draft.classic) draft.classic.node.remove();
+      if (draft.scene) draft.scene.node.remove();
+      streamDrafts.delete(key);
+    }
+  }
   sceneEvent(env);
   if (env.event.type === "usage") return;
   recordViewEvent(env);
@@ -1190,6 +1259,11 @@ function handle(env) {
   const p = ensurePane(env.agent);
   const ev = env.event;
   switch (ev.type) {
+    case "thinking": {
+      const d = el("details", "tool");
+      d.append(el("summary", "", "Думал"), el("pre", "", ev.text));
+      push(p, d); break;
+    }
     case "message": {
       if (ev.role === "user") { p.busy = true; }
       const m = el("div", "msg " + (ev.role === "user" ? "user" : "assistant"));
@@ -1636,10 +1710,16 @@ function connect() {
   es.onmessage = (e) => {
     let env;
     try { env = JSON.parse(e.data); } catch (_) { return; }
-    if (typeof env.seq === "number") { if (env.seq <= lastSeq) return; lastSeq = env.seq; }
+    if (typeof env.seq === "number" && env.event.type !== "stream_delta" && env.event.type !== "stream_end") { if (env.seq <= lastSeq) return; lastSeq = env.seq; }
     handle(env);
   };
   es.onerror = () => {
+    for (const draft of streamDrafts.values()) {
+      draft.closed = true;
+      if (draft.classic) draft.classic.node.remove();
+      if (draft.scene) draft.scene.node.remove();
+    }
+    streamDrafts.clear(); streamEnds.clear();
     if (es.readyState === EventSource.CLOSED) setConn("bad", "отключено (проверьте токен)");
     else setConn("", "переподключение…");
   };
@@ -2773,6 +2853,7 @@ function scDom(lane) {
     finally { stop.disabled = false; }
   };
   for (const env of lane.events) scDraw(lane, env, false);
+  for (const draft of streamDrafts.values()) if (draft.agent === lane.id && !draft.closed) { streamMount(draft); if (draft.scene) draft.scene.body.textContent = draft.text; }
   scLaneHead(lane);
   return d;
 }
@@ -2915,7 +2996,7 @@ function scDraw(lane, env, live) {
       if (g.typing) g.typing();
       for (const [i, chunk] of text.split(/\n{2,}/).entries()) {
         const p = el("p"); g.body.append(p);
-        if (live && i === 0) scType(g, p, chunk); else scInline(p, chunk);
+        if (live && !env.streamed && i === 0) scType(g, p, chunk); else scInline(p, chunk);
       }
       if (live && fresh) { g.auto = true; g.det.open = true; g.det.classList.add("sc-livefold"); }
       scGroupLabel(g, live);

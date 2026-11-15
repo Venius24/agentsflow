@@ -1349,7 +1349,11 @@ impl Engine {
     }
 
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Cmd>) {
+        // Durable events drive the engine (spend, task changes); the live
+        // channel is read only for signs of life, so a burst of text
+        // fragments can make it lag without losing a durable event.
         let (_, mut events) = self.hub.subscribe();
+        let (_, mut live) = self.hub.subscribe_live();
         let mut tick = tokio::time::interval(Duration::from_secs(30));
         let mut watch_tick = tokio::time::interval(self.env.stall_clock().1);
         self.schedule();
@@ -1387,6 +1391,16 @@ impl Engine {
                         }
                     }
                     Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                },
+                fragment = live.recv() => match fragment {
+                    Ok(envelope) => {
+                        if envelope.event.is_transient() {
+                            self.observe(&envelope);
+                        }
+                        continue;
+                    }
+                    Err(RecvError::Lagged(_)) => continue,
                     Err(RecvError::Closed) => break,
                 },
                 _ = tick.tick() => {}

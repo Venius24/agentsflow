@@ -176,6 +176,42 @@ pub struct ClaudeSession {
     stdin: mpsc::UnboundedSender<String>,
     lines: Lines,
     pending: HashMap<String, Value>,
+    stream_message: String,
+    stream_blocks: Vec<(String, bool)>,
+}
+
+fn partial_frame(frame: &Value, message_id: &mut String) -> Option<Vec<Event>> {
+    if frame.get("type")?.as_str()? != "stream_event" {
+        return None;
+    }
+    let event = frame.get("event")?;
+    if event.get("type").and_then(Value::as_str) == Some("message_start") {
+        *message_id = event
+            .pointer("/message/id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+    }
+    let mut result = Vec::new();
+    if event.get("type").and_then(Value::as_str) == Some("content_block_delta") {
+        let index = event.get("index").and_then(Value::as_u64);
+        let delta = event.get("delta");
+        if let (Some(index), Some(delta)) = (index, delta) {
+            let (thinking, text) = match delta.get("type").and_then(Value::as_str) {
+                Some("text_delta") => (false, delta.get("text").and_then(Value::as_str)),
+                Some("thinking_delta") => (true, delta.get("thinking").and_then(Value::as_str)),
+                _ => (false, None),
+            };
+            if let Some(text) = text.filter(|_| !message_id.is_empty()) {
+                result.push(Event::StreamDelta {
+                    block_id: format!("{message_id}:{index}"),
+                    thinking,
+                    text: text.to_owned(),
+                });
+            }
+        }
+    }
+    Some(result)
 }
 
 fn enqueue(stdin: &mpsc::UnboundedSender<String>, line: String) -> Result<()> {
@@ -240,6 +276,9 @@ impl ClaudeSession {
             builder = builder.working_directory(cwd);
         }
         let mut command = builder.build_command()?;
+        if crate::stream_enabled() {
+            command.arg("--include-partial-messages");
+        }
         configure_bypass(&mut command, opts.bypass);
         for dir in &opts.add_dirs {
             command.arg("--add-dir").arg(dir);
@@ -302,6 +341,8 @@ impl ClaudeSession {
             stdin,
             lines,
             pending: HashMap::new(),
+            stream_message: String::new(),
+            stream_blocks: Vec::new(),
         };
         if let Err(error) = session.initialize().await {
             let _ = session.shutdown().await;
@@ -341,7 +382,27 @@ impl ClaudeSession {
     }
 
     pub async fn next_events(&mut self) -> Result<Vec<Event>> {
-        let output = parse_line(&next_line(&mut self.lines).await?)?;
+        let line = next_line(&mut self.lines).await?;
+        let frame: Value = serde_json::from_str(&line)?;
+        if let Some(events) = partial_frame(&frame, &mut self.stream_message) {
+            for event in &events {
+                if let Event::StreamDelta {
+                    block_id, thinking, ..
+                } = event
+                {
+                    let entry = (block_id.clone(), *thinking);
+                    if !self.stream_blocks.contains(&entry) {
+                        self.stream_blocks.push(entry);
+                    }
+                }
+            }
+            return Ok(if crate::stream_enabled() {
+                events
+            } else {
+                vec![]
+            });
+        }
+        let output = parse_line(&line)?;
         if let ClaudeOutput::ControlRequest(request) = &output {
             if let ControlRequestPayload::CanUseTool(tool) = &request.request {
                 self.pending
@@ -350,6 +411,55 @@ impl ClaudeSession {
         }
         if let ClaudeOutput::ControlCancelRequest(request) = &output {
             self.pending.remove(&request.request_id);
+        }
+        if crate::stream_enabled() {
+            if let ClaudeOutput::Assistant(message) = &output {
+                let id = frame
+                    .pointer("/message/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let mut events = Vec::new();
+                for (index, block) in message.message.content.iter().enumerate() {
+                    let mapped = match block {
+                        ContentBlock::Text(text) => Some((
+                            false,
+                            Event::Message {
+                                role: Role::Assistant,
+                                text: text.text.clone(),
+                                delta: false,
+                            },
+                        )),
+                        ContentBlock::Thinking(thinking)
+                            if !thinking.thinking.trim().is_empty() =>
+                        {
+                            Some((
+                                true,
+                                Event::Thinking {
+                                    text: thinking.thinking.trim().to_owned(),
+                                },
+                            ))
+                        }
+                        _ => None,
+                    };
+                    if let Some((thinking, event)) = mapped {
+                        let prefix = format!("{id}:");
+                        let pos = self.stream_blocks.iter().position(|(block, kind)| {
+                            *kind == thinking && block.starts_with(&prefix)
+                        });
+                        let block_id = pos
+                            .map(|pos| self.stream_blocks.remove(pos).0)
+                            .unwrap_or_else(|| format!("{id}:{index}"));
+                        events.push(Event::StreamEnd { block_id, thinking });
+                        events.push(event);
+                    } else {
+                        // Map non-text blocks by reusing the ordinary mapper below.
+                        let mut single = message.clone();
+                        single.message.content = vec![block.clone()];
+                        events.extend(map_output(&ClaudeOutput::Assistant(single)));
+                    }
+                }
+                return Ok(events);
+            }
         }
         Ok(map_output(&output))
     }
@@ -451,6 +561,40 @@ mod tests {
 
     fn assistant(content: Value) -> Value {
         json!({"type":"assistant", "session_id":"s1", "message":{"id":"m1", "role":"assistant", "model":"haiku", "content":content}})
+    }
+
+    #[test]
+    fn partial_text_and_thinking_frames() {
+        let mut id = String::new();
+        assert_eq!(
+            partial_frame(
+                &json!({"type":"stream_event","session_id":"s","event":{"type":"message_start","message":{"id":"m1"}}}),
+                &mut id
+            ),
+            Some(vec![])
+        );
+        assert_eq!(
+            partial_frame(
+                &json!({"type":"stream_event","session_id":"s","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello"}}}),
+                &mut id
+            ),
+            Some(vec![Event::StreamDelta {
+                block_id: "m1:1".into(),
+                thinking: false,
+                text: "hello".into()
+            }])
+        );
+        assert_eq!(
+            partial_frame(
+                &json!({"type":"stream_event","session_id":"s","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"why"}}}),
+                &mut id
+            ),
+            Some(vec![Event::StreamDelta {
+                block_id: "m1:0".into(),
+                thinking: true,
+                text: "why".into()
+            }])
+        );
     }
 
     #[test]

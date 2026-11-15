@@ -397,12 +397,16 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../../../web/index.html"))
 }
 fn sse_event(envelope: agentsflow_events::Envelope) -> std::result::Result<SseEvent, Infallible> {
-    Ok(SseEvent::default()
-        .id(envelope.seq.to_string())
-        .data(serde_json::to_string(&envelope).expect("event serializes")))
+    let event =
+        SseEvent::default().data(serde_json::to_string(&envelope).expect("event serializes"));
+    Ok(if envelope.event.is_transient() {
+        event
+    } else {
+        event.id(envelope.seq.to_string())
+    })
 }
 async fn events(State(state): State<AppState>) -> impl IntoResponse {
-    let (snapshot, receiver) = state.hub.subscribe();
+    let (snapshot, receiver) = state.hub.subscribe_live();
     let live = stream::unfold(
         (receiver, state.shutdown),
         |(mut receiver, mut shutdown)| async move {

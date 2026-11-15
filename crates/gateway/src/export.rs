@@ -8,6 +8,9 @@ const TOOL_OUTPUT_LIMIT: usize = 1500;
 pub fn render_jsonl(events: &[Envelope]) -> String {
     let mut out = String::new();
     for envelope in events {
+        if envelope.event.is_transient() {
+            continue;
+        }
         out.push_str(&serde_json::to_string(envelope).expect("event serializes"));
         out.push('\n');
     }
@@ -93,7 +96,12 @@ fn render_event(envelope: &Envelope) -> Option<String> {
     let agent = agent_name(&envelope.agent);
     let mut out = String::new();
     match &envelope.event {
-        Event::Task { .. } | Event::Usage { .. } | Event::Rule { .. } => return None,
+        Event::Task { .. }
+        | Event::Usage { .. }
+        | Event::Rule { .. }
+        | Event::StreamDelta { .. }
+        | Event::StreamEnd { .. }
+        | Event::Message { delta: true, .. } => return None,
         Event::Message { role, text, .. } => {
             let role = match role {
                 Role::User => "user",

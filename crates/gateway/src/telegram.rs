@@ -451,6 +451,9 @@ impl Bridge {
         }
     }
     fn handle_event(&mut self, envelope: Envelope) -> Vec<(i64, i64, String)> {
+        if envelope.event.is_transient() {
+            return Vec::new();
+        }
         let agent = envelope.agent;
         let mut edits = Vec::new();
         self.track_workflow(&envelope.event);
@@ -2126,6 +2129,7 @@ fn replays_at_start(event: &Event) -> bool {
         Event::PermissionRequest { .. }
         | Event::Message {
             role: Role::Assistant,
+            delta: false,
             ..
         } => true,
         Event::Mail { from, to, .. } => {

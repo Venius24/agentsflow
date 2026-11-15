@@ -613,7 +613,7 @@ async fn wait_turn(
             Event::Message {
                 role: Role::Assistant,
                 text,
-                ..
+                delta: false,
             } => output = text,
             Event::Error { message } => last_error = Some(message),
             Event::Done { reason } => {
@@ -1516,6 +1516,36 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("has not run")
+        );
+    }
+
+    #[tokio::test]
+    async fn step_output_ignores_message_deltas() {
+        let hub = Hub::new();
+        let agent = AgentId::from("codex");
+        let (_, mut events) = hub.subscribe_live();
+        let (_stop_tx, mut stop) = watch::channel(false);
+        for (text, delta) in [("complete", false), ("partial", true)] {
+            hub.publish(
+                agent.clone(),
+                "test",
+                Event::Message {
+                    role: Role::Assistant,
+                    text: text.into(),
+                    delta,
+                },
+            );
+        }
+        hub.publish(
+            agent.clone(),
+            "test",
+            Event::Done {
+                reason: "completed".into(),
+            },
+        );
+        assert_eq!(
+            wait_turn(&mut events, &agent, &mut stop).await.unwrap(),
+            "complete"
         );
     }
 

@@ -143,7 +143,12 @@ pub fn harvest(
 /// A fact an agent of a department with repositories wants in the owner's
 /// own memory of the project: kept as a proposal with the `share-` prefix,
 /// it reaches that memory only on the owner's approval.
-pub fn harvest_share(dept_id: &str, dept_dir: &Path, task: &str, run_dir: &Path) -> Result<Option<Proposal>> {
+pub fn harvest_share(
+    dept_id: &str,
+    dept_dir: &Path,
+    task: &str,
+    run_dir: &Path,
+) -> Result<Option<Proposal>> {
     match take(&run_dir.join(crate::projectmem::SHARE_FILE)) {
         Some(text) => {
             let base = format!("{}{task}", crate::projectmem::SHARE_PREFIX);
@@ -288,7 +293,12 @@ pub fn reject(home: &Home, target: &str, id: &str) -> Result<()> {
         .create(true)
         .append(true)
         .open(memory.join(REJECTED))?;
-    writeln!(file, "- {}: {}", today(home.config.offset_minutes()), first_line(&text, 300))?;
+    writeln!(
+        file,
+        "- {}: {}",
+        today(home.config.offset_minutes()),
+        first_line(&text, 300)
+    )?;
     std::fs::remove_file(path)?;
     Ok(())
 }
