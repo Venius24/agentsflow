@@ -73,11 +73,11 @@ jobs:
             smoke: true
           # Apple silicon runner; the Intel binary is cross-compiled and is
           # not run here.
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
             smoke: true
-          - os: macos-14
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
             smoke: false
