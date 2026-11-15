@@ -957,6 +957,210 @@ const urlLanguage = new URLSearchParams(location.search).get("lang");
 const language = urlLanguage === "ru" || urlLanguage === "en" ? urlLanguage : savedLanguage === "ru" || savedLanguage === "en" ? savedLanguage : /^ru\b/i.test(navigator.language || "") ? "ru" : "en";
 document.documentElement.lang = language;
 const translations = {
+  " · весь файл": " · whole file",
+  " (удалённая строка)": " (deleted line)",
+  " · строка без номера": " · unnumbered line",
+  ", правка ": ", change ",
+  "Убрать все": "Remove all",
+  "Точно убрать все?": "Remove all?",
+  "Отправляю…": "Sending…",
+  "Отправлено.": "Sent.",
+  "Замечаний нет": "No comments",
+  "Замечаний: ": "Comments: ",
+  "Отправить можно, пока задача идёт или ждёт вашей приёмки.": "You can send while the task is running or awaiting your acceptance.",
+  "Нажмите номер строки или «Замечание к файлу», чтобы написать.": "Select a line number or “Comment on file” to write a comment.",
+  "Изменить": "Edit",
+  "Убрать": "Remove",
+  "Замечание: ": "Comment: ",
+  "Что не так и как надо": "What is wrong and how to fix it",
+  "Ctrl+Enter — добавить, Esc — отмена": "Ctrl+Enter to add, Esc to cancel",
+  "Текст правки не поместился в 2 МБ.": "Change text exceeds the 2 MB limit.",
+  "Текста правки нет.": "No change text.",
+  "Правка ": "Change ",
+  ", добавлена": ", added",
+  ", удалена": ", deleted",
+  "В ветке задачи нет отличий от базы.": "The task branch has no changes against the base.",
+  "Агенты пока не меняли файлы.": "Agents have not changed files yet.",
+  "Уйдёт запиской агенту ": "Will be sent as a note to ",
+  ": он получит её после текущего хода и ответит заново.": "; the agent will receive it after its current turn and answer again.",
+  "Задача начнёт новый круг, замечания будут в её брифе.": "The task will start a new round with the comments in its brief.",
+  "Загружаю правки…": "Loading changes…",
+  "Правки не загрузились: ": "Could not load changes: ",
+  "Правки · ": "Changes · ",
+  "Правки агента: ": "Agent changes: ",
+  "Правки агента: пока нет": "Agent changes: none yet",
+  "Уйдёт агенту ": "Will be sent to ",
+  " обычным заданием. Если он занят, дождитесь конца хода.": " as a normal task. If the agent is busy, wait for the turn to finish.",
+  "не удалось загрузить команду": "could not load team",
+  "Новый файл": "New file",
+  "Правка без номеров строк": "Change without line numbers",
+  "Двоичный файл, содержимое не показано.": "Binary file, content not shown.",
+  "Нет перевода строки в конце файла": "No newline at end of file",
+  "Источник: git, ветка ": "Source: git, branch ",
+  "задачи": "task",
+  " против ": " against ",
+  "базы": "base",
+  ". Видно только закоммиченное.": ". Only committed changes are shown.",
+  "Источник: лента агентов. Каждая правка отдельно и по порядку; номера строк есть, только если их дал агент. Правка, которую потом отклонили или откатили, здесь тоже видна.": "Source: agent feed. Changes appear separately and in order; line numbers appear only when the agent supplied them. Rejected or reverted changes also appear here.",
+  "Показано не всё: правки больше 2 МБ, у файлов без текста стоит «не весь».": "Not all text is shown: changes exceed 2 MB, and files without text are marked incomplete.",
+  "новый": "new",
+  "удалён": "deleted",
+  "двоичный": "binary",
+  "не весь": "incomplete",
+  "Итог": "Result",
+  "Как работали": "Work history",
+  "Агенты": "Agents",
+  "Таблица": "Spreadsheet",
+  "Изображение": "Image",
+  "Код": "Code",
+  "Файл": "File",
+  "Документ": "Document",
+  "Заказ отдела": "Department order",
+  "Итог не найден.": "Result not found.",
+  "Загружаю итог…": "Loading result…",
+  "Копировать ответ": "Copy answer",
+  "Не удалось скопировать": "Could not copy",
+  "Скачать ответ файлом": "Download answer as a file",
+  "Как работали агенты": "How agents worked",
+  "от вас": "from you",
+  "итог": "result",
+  "от отдела": "from department",
+  " Б": " B",
+  " КБ": " KB",
+  " МБ": " MB",
+  "ФАЙЛ": "FILE",
+  "больше 50 МБ": "over 50 MB",
+  "загрузка…": "uploading…",
+  "Убрать ": "Remove ",
+  "Не больше 20 файлов в одном сообщении": "At most 20 files per message",
+  "Итог задачи": "Task result",
+  "Скачать ": "Download ",
+  "Открыть ": "Open ",
+  "Открыть": "Open",
+  "Загружаю ": "Uploading ",
+  "Не приложил: ": "Could not attach: ",
+  "Не загрузились: ": "Upload failed: ",
+  "Приложено к задаче. Отдел получит файлы в следующем круге": "Attached to the task. The department will receive the files in the next round",
+  "; агенту прямо сейчас — скрепкой в его записке.": "; to send them to the agent now, attach them to its note.",
+  "Сначала выберите задачу слева": "First select a task on the left",
+  "Наставник выключен": "Mentor off",
+  "Наставник: ": "Mentor: ",
+  ". Со следующей задачи": ". Applies to the next task",
+  "Не сохранилось: ": "Could not save: ",
+  "Модель наставника": "Mentor model",
+  "Сильная модель пишет постановку исполнителю и сама проверяет результат. Действует на задачи, запущенные после выбора.": "A strong model writes the brief and reviews the result. Applies to tasks started after the choice.",
+  "Кто наставник": "Mentor model",
+  "Вернуть задачу в очередь": "Return task to queue",
+  "Вернуть задачу в работу": "Return task to work",
+  "Записка отделу. Задача начнёт новый круг с ней в брифе.": "Note to the department. The task will start a new round with it in the brief.",
+  "Принять и выпустить?": "Accept and release?",
+  "Принять результат?": "Accept result?",
+  "Результат уйдёт наружу: пост, письмо или изменение в чужой системе.": "The result will leave this system: a post, message, or change in another system.",
+  "Задача ещё идёт. Остановить её или вернуть с запиской можно перетаскиванием в очередь.": "The task is still running. Stop it or return it with a note by dragging it to the queue.",
+  "Так перенести нельзя.": "Cannot move it there.",
+  "Ничего не ждёт вас": "Nothing needs your decision",
+  "Пусто": "Empty",
+  "Открыть сцену задачи": "Open task scene",
+  "наружу": "external",
+  "Решить": "Decide",
+  "Отправить оркестратору": "Send to orchestrator",
+  "Приложить файлы": "Attach files",
+  "или перетащите их сюда, можно вставить из буфера": "or drop them here, or paste from the clipboard",
+  "Что сделать?": "What needs doing?",
+  "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева.": "The orchestrator will split your message into tasks, assign them to departments, and ask if anything is missing. Tasks will appear on the left.",
+  "Принято. Задачи появятся слева, ответ придёт в почту и Telegram.": "Received. Tasks will appear on the left; the answer will arrive by mail and Telegram.",
+  "Задача ": "Task ",
+  "отдел": "department",
+  "Уйдёт наружу": "External",
+  "Внутренняя": "Internal",
+  "принимаете вы": "accepted by you",
+  "принимает оркестратор": "accepted by orchestrator",
+  "От вас": "From you",
+  "От оркестратора": "From orchestrator",
+  "По расписанию": "Scheduled",
+  "Заказ отдела ": "Order from department ",
+  "Источник неизвестен": "Unknown source",
+  "для ": "for ",
+  "возвратов ": "returns ",
+  "Молчит ": "Silent for ",
+  "признаков жизни нет": "no sign of life",
+  "Окружение": "Environment",
+  "копия на ветке": "branch copy",
+  "репозиторий": "repository",
+  "папка запуска": "run folder",
+  "Бюджет": "Budget",
+  "Время": "Time",
+  "Последний круг": "Last round",
+  "Вопросы": "Questions",
+  "Ответ: ": "Answer: ",
+  "Новый отдел": "New department",
+  "Результат": "Result",
+  "Открыть итог целиком": "Open full result",
+  "Приложить": "Attach",
+  "Перетащите файлы сюда или нажмите, чтобы выбрать. Отдел получит их в следующем круге.": "Drop files here or select them. The department will receive them in the next round.",
+  "Изменения в коде": "Code changes",
+  "Вернуть с запиской": "Return with a note",
+  "Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.": "Note to the department. The task will stop and start a new round with it in the brief.",
+  "Принять и выпустить": "Accept and release",
+  "Замечание отделу. Задача начнёт новый круг с ним в брифе.": "Comment to the department. The task will start a new round with it in the brief.",
+  "Что поменять в новом круге.": "What to change in the next round.",
+  "Ответ на все вопросы одним сообщением.": "Answer all questions in one message.",
+  "Ответ": "Answer",
+  "Что доделать. Задача начнёт новый круг с этим в брифе.": "What remains to be done. The task will start a new round with it in the brief.",
+  "Задач пока нет": "No tasks yet",
+  "Напишите оркестратору, что сделать: он разберёт сообщение на задачи и раздаст их отделам.": "Tell the orchestrator what to do. It will split your message into tasks and assign them to departments.",
+  "Ждёт свободного места в отделе «": "Waiting for a free place in department “",
+  ": сейчас идёт ": ": now running ",
+  "Оркестратор предлагает новый отдел для этой задачи. Решение в карточке справа.": "The orchestrator proposes a new department for this task. Decide in the card on the right.",
+  "Отдел ждёт ответа на вопросы. Ответить можно в карточке справа.": "The department is waiting for answers. Reply in the card on the right.",
+  "Ждёт другую задачу.": "Waiting for another task.",
+  ". Агенты этой задачи ещё ничего не писали.": ". The agents on this task have not written anything yet.",
+  "Что поменять": "What to change",
+  "Файлы": "Files",
+  "комментарий": "comment",
+  "новый отдел": "new department",
+  "вопрос": "question",
+  "приёмка": "acceptance",
+  "новое": "new",
+  "идёт": "running",
+  "Правила отделов": "Department rules",
+  "Ещё готовых: ": "More completed: ",
+  "Расход за ": "Spend for ",
+  "Сервер на связи": "Server connected",
+  "Доска /": "Board /",
+  "Все задачи": "All tasks",
+  "Новый круг": "New round",
+  " · вернул": " · returned",
+  "В очереди": "Queued",
+  "Ждёт решения о новом отделе": "Awaiting new department decision",
+  "Ждёт ответа": "Waiting for an answer",
+  "Приёмка вами": "Your acceptance",
+  "Приёмка оркестратором": "Orchestrator acceptance",
+  "Приёмка · ждёт вас": "Acceptance · waiting for you",
+  "Принято": "Accepted",
+  "Отменена": "Cancelled",
+  "Вернул на исправление": "Returned for fixes",
+  "новый круг": "new round",
+  "Защита не пустила": "Guard denied",
+  "остановлен": "stopped",
+  "прервано: сервер перезапускался": "interrupted: server restarted",
+  "Вы · ": "You · ",
+  "думает": "thinking",
+  "ещё не начал": "not started",
+  "ждёт своего шага": "waiting for its step",
+  "закончил": "finished",
+  "Скажи ": "Message ",
+  "Сообщение ": "Message to ",
+  "Без ограничений": "Unrestricted",
+  "Только чтение": "Read only",
+  "Запись в папке задачи": "Write in task folder",
+  "Под защитой": "Protected",
+  "Сам решает": "Automatic",
+  "Спрашивает разрешения": "Asks permission",
+  "Задача не идёт: писать агенту можно, пока она в работе. Вернуть её с запиской можно в карточке справа.": "The task is not running. You can message the agent while it runs, or return the task with a note from the card on the right.",
+  " работает. Сообщение дойдёт после текущего шага.": " is working. The message will arrive after the current step.",
+  " ждёт своего шага. Сообщение уйдёт вместе с ним.": " is waiting for its step. The message will go with it.",
+  "Выполняет ": "Running ",
   "Одобрено": "Approved",
   "Разобрался, править не нужно": "Reviewed, no changes needed",
   "Показать полностью": "Show all",
@@ -3213,7 +3417,7 @@ function scDom(lane) {
   form.append(box, hint, att.input);
   pane.append(tab, log, form);
   att.paste(ta);
-  scDropZone(pane, files => { if (!ta.disabled) att.add(files); else scToast("Агент сейчас не работает. Файлы для задачи перетащите на карточку справа."); });
+  scDropZone(pane, files => { if (!ta.disabled) att.add(files); else scToast(t("Агент сейчас не работает. Файлы для задачи перетащите на карточку справа.")); });
   const d = lane.dom = { pane, ic, name, role, state, log, live, ta, access, model, stop, send, hint, att, cur: null, tools: new Map(), perms: new Map(), notes: new Map(), lastTs: 0, prompts: 0, busy: false, lastTxt: null, handoff: null, sticky: true, hintError: "" };
   log.addEventListener("scroll", () => { d.sticky = log.scrollTop + log.clientHeight >= log.scrollHeight - 60; });
   const grow = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; };
@@ -3233,7 +3437,7 @@ function scDom(lane) {
     const task = taskCards.get(lane.task);
     if (!task) return;
     stop.disabled = true;
-    try { await post(taskPath(task, "/stop"), {}); scToast("Задача остановлена. Её можно вернуть с запиской или запустить ещё раз."); }
+    try { await post(taskPath(task, "/stop"), {}); scToast(t("Задача остановлена. Её можно вернуть с запиской или запустить ещё раз.")); }
     catch (err) { d.hintError = t("Не остановлено: ") + err.message; scLaneHead(lane); }
     finally { stop.disabled = false; }
   };
@@ -3335,7 +3539,7 @@ function scChange(path, patch) {
   let shown = 0;
   for (const line of lines) {
     if (/^(diff |index |--- |\+\+\+ )/.test(line)) continue;
-    if (shown++ > 400) { diff.append(el("div", "sc-hk", t("… ещё ") + (lines.length - 400) + t(" строк"))); break; }
+    if (shown++ > 400) { diff.append(el("div", "sc-hk", tn(lines.length - 400, { ru: { one: "… ещё {n} строк", few: "… ещё {n} строк", many: "… ещё {n} строк", other: "… ещё {n} строк" }, en: { one: "… {n} more line", other: "… {n} more lines" } }))); break; }
     if (line.startsWith("@@")) diff.append(el("div", "sc-hk", line));
     else if (line.startsWith("+")) diff.append(el("div", "sc-a", line.slice(1)));
     else if (line.startsWith("-")) diff.append(el("div", "sc-d", line.slice(1)));
@@ -3354,7 +3558,7 @@ function scDraw(lane, env, live) {
   if (ev.type[0] !== "_") d.lastTs = ts;
   switch (ev.type) {
     case "_handoff": d.handoff = ev; return;
-    case "_looped": if (d.lastTxt) d.lastTxt.prepend(scTag("back", "undo", "Вернул на исправление")); return;
+    case "_looped": if (d.lastTxt) d.lastTxt.prepend(scTag("back", "undo", t("Вернул на исправление"))); return;
     case "message": {
       scClose(lane);
       if (ev.role === "user") {
@@ -3363,7 +3567,7 @@ function scDraw(lane, env, live) {
         let text = ev.text;
         if (text.startsWith(SC_QUEUED)) { const cut = text.indexOf("\n\n---\n\n"); if (cut > 0) text = text.slice(cut + 7); }
         const h = d.handoff; d.handoff = null; d.prompts++;
-        if (d.prompts > 1) scPush(lane, el("div", "sc-round", h ? scStepName(h.step, h.n) : "новый круг"));
+        if (d.prompts > 1) scPush(lane, el("div", "sc-round", h ? scStepName(h.step, h.n) : t("новый круг")));
         scPush(lane, scBrief(lane, h, text));
       } else if (ev.text && ev.text.trim()) {
         const node = scText(ev.text);
@@ -3395,25 +3599,25 @@ function scDraw(lane, env, live) {
       const res = el("span", "sc-res", "…");
       s.append(el("code", "", scToolLine(ev.name, ev.input)), res);
       row.append(s);
-      const t = { row, res, input: ev.input, output: null, err: false, pre: null };
+      const toolEntry = { row, res, input: ev.input, output: null, err: false, pre: null };
       row.addEventListener("toggle", () => {
-        if (!row.open || t.pre) return;
-        t.pre = el("pre", "sc-pre", fmtInput(t.input) + (t.output != null ? "\n\n→ " + clip(t.output, 8000) : ""));
-        row.append(t.pre);
+        if (!row.open || toolEntry.pre) return;
+        toolEntry.pre = el("pre", "sc-pre", fmtInput(toolEntry.input) + (toolEntry.output != null ? "\n\n→ " + clip(toolEntry.output, 8000) : ""));
+        row.append(toolEntry.pre);
       });
-      d.tools.set(ev.id, t);
+      d.tools.set(ev.id, toolEntry);
       g.body.append(row);
       scGroupLabel(g, live);
       scStick(lane);
       return;
     }
     case "tool_result": {
-      const t = d.tools.get(ev.id);
-      if (t) {
-        t.output = ev.output || ""; t.err = !!ev.is_error;
-        t.res.textContent = scResLine(ev.output, ev.is_error);
-        t.row.classList.toggle("sc-err", t.err);
-        if (t.pre) t.pre.textContent = fmtInput(t.input) + "\n\n→ " + clip(t.output, 8000);
+      const toolEntry = d.tools.get(ev.id);
+      if (toolEntry) {
+        toolEntry.output = ev.output || ""; toolEntry.err = !!ev.is_error;
+        toolEntry.res.textContent = scResLine(ev.output, ev.is_error);
+        toolEntry.row.classList.toggle("sc-err", toolEntry.err);
+        if (toolEntry.pre) toolEntry.pre.textContent = fmtInput(toolEntry.input) + "\n\n→ " + clip(toolEntry.output, 8000);
       }
       if (d.cur && d.cur.kind === "work") { d.cur.t1 = ts; scGroupLabel(d.cur, live); }
       return;
@@ -3426,14 +3630,14 @@ function scDraw(lane, env, live) {
       if (!ev.allow) {
         scClose(lane);
         const why = req && req.guard ? req.guard.reason : "";
-        scPush(lane, el("div", "sc-quiet", "Защита не пустила" + (req ? " " + req.tool : "") + (why ? ": " + why : "")));
+        scPush(lane, el("div", "sc-quiet", t("Защита не пустила") + (req ? " " + req.tool : "") + (why ? ": " + why : "")));
       }
       return;
     }
     case "done": {
       scClose(lane); d.busy = false;
       const r = String(ev.reason || "");
-      if (r && !["success", "completed", "end_turn", "stop"].includes(r)) scPush(lane, el("div", "sc-round sc-bad", r.startsWith("interrupted") ? (r.includes("restart") ? "прервано: сервер перезапускался" : "остановлен") : r));
+      if (r && !["success", "completed", "end_turn", "stop"].includes(r)) scPush(lane, el("div", "sc-round sc-bad", r.startsWith("interrupted") ? (r.includes("restart") ? t("прервано: сервер перезапускался") : t("остановлен")) : r));
       return;
     }
     case "error": scClose(lane); scPush(lane, el("div", "sc-errline", ev.message)); return;
@@ -3448,7 +3652,7 @@ function scDraw(lane, env, live) {
         scPush(lane, b);
       }
       const key = ev.status === "queued" ? (n.busy ? "queued_busy" : "queued_idle") : ev.status;
-      n.from.replaceChildren(scG("user", 13), el("span", "", "Вы · " + (SC_NOTE[key] || ev.status)));
+      n.from.replaceChildren(scG("user", 13), el("span", "", t("Вы · ") + (SC_NOTE[key] || ev.status)));
       n.b.classList.toggle("sc-dropped", ev.status === "dropped");
       return;
     }
@@ -3457,11 +3661,11 @@ function scDraw(lane, env, live) {
 function scLaneState(lane) {
   const task = taskCards.get(lane.task), state = task && task.work ? task.work.state : "";
   if (state === "running") {
-    if (lane.busy) return lane.running.size ? ["sc-live", "работает"] : ["sc-live", "думает"];
-    return ["", lane.events.some(e => e.event.type === "message") ? "ждёт своего шага" : "ещё не начал"];
+    if (lane.busy) return lane.running.size ? ["sc-live", t("работает")] : ["sc-live", t("думает")];
+    return ["", lane.events.some(e => e.event.type === "message") ? t("ждёт своего шага") : t("ещё не начал")];
   }
-  if (lane.doneReason.startsWith("interrupted") || state === "stuck") return ["sc-bad", "остановлен"];
-  if (["review", "done"].includes(state)) return ["sc-ok", "закончил"];
+  if (lane.doneReason.startsWith("interrupted") || state === "stuck") return ["sc-bad", t("остановлен")];
+  if (["review", "done"].includes(state)) return ["sc-ok", t("закончил")];
   return ["", workStates[state] || ""];
 }
 function scLaneHead(lane) {
@@ -3474,14 +3678,14 @@ function scLaneHead(lane) {
   const [cls, text] = scLaneState(lane);
   d.state.className = "sc-state" + (cls ? " " + cls : "");
   d.state.textContent = text;
-  d.ta.placeholder = "Скажи " + name + "…";
-  d.ta.setAttribute("aria-label", "Сообщение " + name);
+  d.ta.placeholder = t("Скажи ") + name + "…";
+  d.ta.setAttribute("aria-label", t("Сообщение ") + name);
   let access = "", write = false, ic = "shield";
   if (m) {
-    if (m.mode === "bypass") { access = "Без ограничений"; write = true; }
-    else if (m.kind === "codex" && /read/.test(String(m.sandbox || ""))) { access = "Только чтение"; ic = "eye"; }
-    else if (m.kind === "codex") { access = "Запись в папке задачи"; write = true; }
-    else access = { ask: "Спрашивает разрешения", auto: "Сам решает", smart: "Под защитой" }[m.mode] || "Под защитой";
+    if (m.mode === "bypass") { access = t("Без ограничений"); write = true; }
+    else if (m.kind === "codex" && /read/.test(String(m.sandbox || ""))) { access = t("Только чтение"); ic = "eye"; }
+    else if (m.kind === "codex") { access = t("Запись в папке задачи"); write = true; }
+    else access = { ask: t("Спрашивает разрешения"), auto: t("Сам решает"), smart: t("Под защитой") }[m.mode] || t("Под защитой");
   }
   const label = scModelLabel(m), pills = [access, write, ic, label, m && m.effort].join("|");
   if (d.pills !== pills) {
@@ -3496,9 +3700,9 @@ function scLaneHead(lane) {
   d.send.disabled = !running;
   d.att.button.disabled = !running;
   d.hint.className = "sc-hint" + (d.hintError ? " sc-bad" : "");
-  d.hint.textContent = d.hintError || (!running ? "Задача не идёт: писать агенту можно, пока она в работе. Вернуть её с запиской можно в карточке справа."
-    : lane.busy ? name + " работает. Сообщение дойдёт после текущего шага."
-    : name + " ждёт своего шага. Сообщение уйдёт вместе с ним.");
+  d.hint.textContent = d.hintError || (!running ? t("Задача не идёт: писать агенту можно, пока она в работе. Вернуть её с запиской можно в карточке справа.")
+    : lane.busy ? name + t(" работает. Сообщение дойдёт после текущего шага.")
+    : name + t(" ждёт своего шага. Сообщение уйдёт вместе с ним."));
 }
 function scLiveRow(lane) {
   const d = lane.dom;
@@ -3507,7 +3711,7 @@ function scLiveRow(lane) {
   if (on !== d.live.isConnected) { if (on) { d.log.append(d.live); scStick(lane); } else d.live.remove(); }
   if (on) {
     const tools = [...lane.running.values()], tool = tools[tools.length - 1];
-    d.live.firstChild.textContent = tool ? "Выполняет " + clip(scToolLine(tool.name, tool.input), 60) + "…" : "Думает…";
+    d.live.firstChild.textContent = tool ? t("Выполняет ") + clip(scToolLine(tool.name, tool.input), 60) + "…" : t("Думает…");
     d.live.lastChild.textContent = scSecs(Date.now() - (tool ? tool.ts : lane.lastTs));
   }
   if (d.cur && d.cur.kind === "work") scGroupLabel(d.cur, on);
@@ -3518,10 +3722,10 @@ function scTasks() { return [...taskCards.values()].filter(t => t.work && t.stat
 const SC_ORDER = { running: 0, waiting: 1, review: 2, stuck: 3, queued: 4, done: 5, cancelled: 6 };
 function scWaitLabel(task) {
   const w = task.work;
-  if (silentRun(w)) return "молчит " + silentMins(w) + " мин";
-  if (w.comment_draft) return "комментарий";
-  if (w.state === "waiting") return w.proposal ? "новый отдел" : "вопрос";
-  return w.state === "review" ? "приёмка" : w.state === "stuck" ? "застряла" : "";
+  if (silentRun(w)) return t("молчит ") + silentMins(w) + t(" мин");
+  if (w.comment_draft) return t("комментарий");
+  if (w.state === "waiting") return w.proposal ? t("новый отдел") : t("вопрос");
+  return w.state === "review" ? t("приёмка") : w.state === "stuck" ? t("застряла") : "";
 }
 function scItem(task, inWaits) {
   const unread = scUnread(task);
@@ -3532,13 +3736,13 @@ function scItem(task, inWaits) {
   if (inWaits) { const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot")); a.append(lead); }
   a.append(el("span", "sc-t", task.title));
   a.title = task.title;
-  if (inWaits) a.append(unread ? el("span", "sc-new", "новое") : el("small", "", scWaitLabel(task)));
-  else if (unread) a.append(el("span", "sc-new", "новое"));
-  else if (w.state === "running") { const s = el("span", "sc-spin"); s.setAttribute("aria-label", "идёт"); a.append(s); }
-  else if (ownerWaits(w)) { const s = el("span", "sc-dot"); s.setAttribute("aria-label", "ждёт вас"); a.append(s); }
+  if (inWaits) a.append(unread ? el("span", "sc-new", t("новое")) : el("small", "", scWaitLabel(task)));
+  else if (unread) a.append(el("span", "sc-new", t("новое")));
+  else if (w.state === "running") { const s = el("span", "sc-spin"); s.setAttribute("aria-label", t("идёт")); a.append(s); }
+  else if (ownerWaits(w)) { const s = el("span", "sc-dot"); s.setAttribute("aria-label", t("ждёт вас")); a.append(s); }
   else if (w.state === "queued" || w.state === "waiting") { const s = scG("clock", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", workStates[w.state]); s.removeAttribute("aria-hidden"); a.append(s); }
-  else if (w.state === "review") { const s = scG("eye", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", "проверяет оркестратор"); s.removeAttribute("aria-hidden"); a.append(s); }
-  else if (w.state === "stuck") a.append(el("small", "sc-bad", "застряла"));
+  else if (w.state === "review") { const s = scG("eye", 14); s.style.color = "var(--muted)"; s.setAttribute("aria-label", t("проверяет оркестратор")); s.removeAttribute("aria-hidden"); a.append(s); }
+  else if (w.state === "stuck") a.append(el("small", "sc-bad", t("застряла")));
   else a.append(el("small", "", scWhen(task.updated_ms)));
   a.addEventListener("click", () => $("#scene").classList.remove("sc-showside"));
   return a;
@@ -3546,17 +3750,17 @@ function scItem(task, inWaits) {
 function scSide() {
   const nodes = [], tasks = scTasks();
   const waits = tasks.filter(t => ownerWaits(t.work)).sort((a, b) => b.updated_ms - a.updated_ms);
-  nodes.push(el("div", "sc-sec", "Ждёт вас"));
+  nodes.push(el("div", "sc-sec", t("Ждёт вас")));
   if (!waits.length && !homeData.proposals.length) nodes.push(el("div", "sc-si sc-quiet", t("Ничего не ждёт вашего решения")));
   for (const t of waits) nodes.push(scItem(t, true));
   if (homeData.proposals.length) {
     const a = el("a", "sc-si"); a.href = "#";
     const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot"));
-    a.append(lead, el("span", "sc-t", "Правила отделов"), el("small", "", String(homeData.proposals.length)));
+    a.append(lead, el("span", "sc-t", t("Правила отделов")), el("small", "", String(homeData.proposals.length)));
     a.onclick = e => { e.preventDefault(); setView("home"); };
     nodes.push(a);
   }
-  nodes.push(el("div", "sc-sec", "Отделы"));
+  nodes.push(el("div", "sc-sec", t("Отделы")));
   const depts = homeData.departments.map(d => ({ id: d.id, title: d.title }));
   for (const t of tasks) if (!depts.some(d => d.id === t.work.department)) depts.push({ id: t.work.department, title: t.work.department });
   for (const dept of depts) {
@@ -3573,7 +3777,7 @@ function scSide() {
     for (const t of shown) nodes.push(scItem(t, false));
     if (open ? done.length > keep : done.length > shown.length) {
       const more = el("a", "sc-si sc-sub sc-done"); more.href = "#";
-      more.append(el("span", "sc-t", open ? "Свернуть" : "Ещё готовых: " + (done.length - shown.length)));
+      more.append(el("span", "sc-t", open ? t("Свернуть") : t("Ещё готовых: ") + (done.length - shown.length)));
       more.onclick = e => { e.preventDefault(); if (open) sc.more.delete(dept.id); else sc.more.add(dept.id); scSide(); };
       nodes.push(more);
     }
@@ -3588,7 +3792,7 @@ function scSide() {
     const limit = homeData.departments.reduce((s, d) => s + (d.limits && d.limits.month_usd || 0), 0);
     const total = homeData.spend.total_usd || 0;
     const month = new Date().toLocaleString(language, { month: "long" });
-    const line = el("div"); line.append(el("span", "", "Расход за " + month), el("b", "", money(total) + (limit ? " из " + money(limit) : "")));
+    const line = el("div"); line.append(el("span", "", t("Расход за ") + month), el("b", "", money(total) + (limit ? t(" из ") + money(limit) : "")));
     const nodesU = [line];
     if (limit) { const meter = el("span", "sc-meter" + (total > limit ? " sc-over" : "")); const i = el("i"); i.style.width = Math.min(100, total / limit * 100) + "%"; meter.append(i); nodesU.push(meter); }
     usage.replaceChildren(...nodesU);
@@ -3598,13 +3802,13 @@ function sceneConn(state, text) {
   const dot = $("#sc-conn");
   if (!dot) return;
   dot.className = "sc-conn" + (state === "on" ? " sc-on" : state === "bad" ? " sc-off" : "");
-  $("#sc-conn-text").textContent = state === "on" ? "Сервер на связи" : text;
+  $("#sc-conn-text").textContent = state === "on" ? t("Сервер на связи") : text;
 }
 function scWaitCount() { return scTasks().filter(t => ownerWaits(t.work)).length; }
 function scBar(task) {
   const crumb = $("#sc-crumb"), title = $("#sc-title");
-  if (sc.mode === "board") { crumb.textContent = "Доска /"; title.textContent = "Все задачи"; }
-  else if (sc.mode === "new" || !task) { crumb.textContent = ""; title.textContent = "Новая задача"; }
+  if (sc.mode === "board") { crumb.textContent = t("Доска /"); title.textContent = t("Все задачи"); }
+  else if (sc.mode === "new" || !task) { crumb.textContent = ""; title.textContent = t("Новая задача"); }
   else { const d = scDept(task.work.department); crumb.textContent = (d ? d.title : task.work.department) + " /"; title.textContent = task.title; }
   for (const b of document.querySelectorAll("[data-sc-mode]")) b.setAttribute("aria-pressed", String(b.dataset.scMode === (sc.mode === "new" ? "scene" : sc.mode)));
   const n = scWaitCount(), badge = $("#sc-wait-n");
@@ -3615,7 +3819,7 @@ function scStepItems(task) {
   const w = task.work, items = [], count = {};
   const reviews = (w.runs || []).reduce((s, r) => s + (sc.wf.get(r.id) || []).filter(e => e.status === "step_started" && e.step === "review").length, 0);
   (w.runs || []).forEach((run, i) => {
-    if (i > 0) items.push({ cls: "back", icon: "undo", text: "Новый круг", back: true });
+    if (i > 0) items.push({ cls: "back", icon: "undo", text: t("Новый круг"), back: true });
     const evs = sc.wf.get(run.id) || [];
     const first = evs.find(e => e.status === "step_started");
     let cur = null;
@@ -3628,18 +3832,18 @@ function scStepItems(task) {
       } else if (e.status === "step_done" && cur && cur.step === e.step) cur.cls = "done";
       else if (e.status === "looped" && first && first.step !== e.step) {
         const it = [...items].reverse().find(x => x.step === e.step);
-        if (it) { it.cls = "back"; it.text += " · вернул"; it.back = true; }
+        if (it) { it.cls = "back"; it.text += t(" · вернул"); it.back = true; }
       } else if (e.status === "failed" && cur && cur.cls === "now") { cur.cls = "bad"; cur.text += e.detail ? " · " + clip(e.detail, 40) : ""; }
     }
     if (w.state !== "running" && cur && cur.cls === "now") cur.cls = "bad";
   });
   const owner = ownerWaits(w);
   const tail = {
-    queued: { cls: "wait", text: "В очереди" }, waiting: { cls: "wait", text: w.proposal ? "Ждёт решения о новом отделе" : "Ждёт ответа" },
-    running: { cls: "next", text: w.risk === "external" ? "Приёмка вами" : "Приёмка оркестратором" },
-    review: { cls: "wait", text: owner ? "Приёмка · ждёт вас" : "Приёмка оркестратором" },
-    stuck: { cls: "bad", text: "Застряла" + (w.stuck_reason ? ": " + clip(w.stuck_reason, 60) : "") },
-    done: { cls: "done", text: "Принято" }, cancelled: { cls: "bad", text: "Отменена" },
+    queued: { cls: "wait", text: t("В очереди") }, waiting: { cls: "wait", text: w.proposal ? t("Ждёт решения о новом отделе") : t("Ждёт ответа") },
+    running: { cls: "next", text: w.risk === "external" ? t("Приёмка вами") : t("Приёмка оркестратором") },
+    review: { cls: "wait", text: owner ? t("Приёмка · ждёт вас") : t("Приёмка оркестратором") },
+    stuck: { cls: "bad", text: t("Застряла") + (w.stuck_reason ? ": " + clip(w.stuck_reason, 60) : "") },
+    done: { cls: "done", text: t("Принято") }, cancelled: { cls: "bad", text: t("Отменена") },
   }[w.state];
   if (tail) items.push(tail);
   return items;
@@ -3664,15 +3868,15 @@ function scSteps(task) {
 function scEmpty(task) {
   const box = el("div", "sc-empty");
   if (!task) {
-    box.append(el("h2", "", tasksLoaded ? "Задач пока нет" : t("Загрузка…")));
-    if (tasksLoaded) { box.append(el("p", "sc-para", "Напишите оркестратору, что сделать: он разберёт сообщение на задачи и раздаст их отделам.")); const b = el("a", "sc-btn sc-primary", "Новая задача"); b.href = "#new"; box.append(el("div"), b); }
+    box.append(el("h2", "", tasksLoaded ? t("Задач пока нет") : t("Загрузка…")));
+    if (tasksLoaded) { box.append(el("p", "sc-para", t("Напишите оркестратору, что сделать: он разберёт сообщение на задачи и раздаст их отделам."))); const b = el("a", "sc-btn sc-primary", t("Новая задача")); b.href = "#new"; box.append(el("div"), b); }
     return box;
   }
   const w = task.work, d = scDept(w.department);
   box.append(el("h2", "", task.title));
-  const line = { queued: "Ждёт свободного места в отделе «" + (d ? d.title : w.department) + "»" + (d ? ": сейчас идёт " + d.running + " из " + d.max_parallel : "") + ".",
-    waiting: w.proposal ? "Оркестратор предлагает новый отдел для этой задачи. Решение в карточке справа." : (w.questions || []).some(q => q.answer == null) ? "Отдел ждёт ответа на вопросы. Ответить можно в карточке справа." : "Ждёт другую задачу." }[w.state]
-    || (workStates[w.state] || w.state) + ". Агенты этой задачи ещё ничего не писали.";
+  const line = { queued: t("Ждёт свободного места в отделе «") + (d ? d.title : w.department) + "»" + (d ? t(": сейчас идёт ") + d.running + t(" из ") + d.max_parallel : "") + ".",
+    waiting: w.proposal ? t("Оркестратор предлагает новый отдел для этой задачи. Решение в карточке справа.") : (w.questions || []).some(q => q.answer == null) ? t("Отдел ждёт ответа на вопросы. Ответить можно в карточке справа.") : t("Ждёт другую задачу.") }[w.state]
+    || (workStates[w.state] || w.state) + t(". Агенты этой задачи ещё ничего не писали.");
   box.append(el("p", "sc-para", line));
   if (task.description && task.description.trim()) { const p = el("p", "sc-para", task.description.trim()); box.append(p); }
   return box;
@@ -3694,7 +3898,7 @@ function scPanes(task) {
   let show = task && sc.show.get(task.id);
   if (!lanes.some(l => l.id === show)) { const busy = lanes.filter(l => l.busy); show = (busy[busy.length - 1] || lanes[lanes.length - 1] || {}).id; }
   if (lanes.length > 1) {
-    const seg = el("span", "sc-seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", "Агент");
+    const seg = el("span", "sc-seg"); seg.setAttribute("role", "group"); seg.setAttribute("aria-label", t("Агент"));
     for (const l of lanes) {
       const b = el("button", "", scName(l) + " · " + scRole(l)); b.type = "button";
       b.setAttribute("aria-pressed", String(l.id === show));
@@ -3742,13 +3946,13 @@ async function scStopAndReturn(task, text) {
 function scNoteForm(label, button, run, errBox, task) {
   const form = el("form", "sc-note"), id = "sc-note-" + Math.random().toString(36).slice(2, 8);
   const l = el("label", "", label); l.htmlFor = id;
-  const ta = el("textarea"); ta.id = id; ta.placeholder = "Что поменять";
+  const ta = el("textarea"); ta.id = id; ta.placeholder = t("Что поменять");
   const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
   const cancel = el("button", "sc-btn", t("Отмена")); cancel.type = "button";
   const btns = el("div", "sc-btns");
   const att = task ? scAttacher() : null;
   if (att) {
-    const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", "Файлы"));
+    const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", t("Файлы")));
     pick.onclick = () => att.input.click();
     btns.append(send, pick, cancel);
     form.append(l, att.tray, ta, btns, att.input);
@@ -3760,7 +3964,7 @@ function scNoteForm(label, button, run, errBox, task) {
   }
   form.onsubmit = async e => {
     e.preventDefault();
-    if (att && att.busy()) { errBox.textContent = "Файлы ещё загружаются"; return; }
+    if (att && att.busy()) { errBox.textContent = t("Файлы ещё загружаются"); return; }
     const files = att ? att.paths() : [];
     if (!ta.value.trim() && !files.length) { ta.focus(); return; }
     send.disabled = true; errBox.textContent = "";
@@ -3785,13 +3989,13 @@ function scInfo(task) {
   if (sig === sc.infoSig || typing || info.querySelector(".sc-note:not([hidden]) textarea:not(:placeholder-shown), .sc-note:not([hidden]) .sc-atts:not([hidden])")) return;
   sc.infoSig = sig;
   const nodes = [];
-  const head = el("div", "sc-ih"); head.append(el("span", "", "Задача " + task.id), el("small", "", scWhen(task.created_ms)));
-  nodes.push(head, scInfoRow("folder", d ? d.title : w.department, "отдел"));
-  nodes.push(w.risk === "external" ? scInfoRow("globe", "Уйдёт наружу", "принимаете вы") : scInfoRow("orch", "Внутренняя", w.owner_review ? "принимаете вы" : "принимает оркестратор"));
-  const src = { owner: ["user", "От вас"], orchestrator: ["orch", "От оркестратора"], schedule: ["cal", "По расписанию"] }[w.source] || ["run", w.source ? "Заказ отдела " + w.source : "Источник неизвестен"];
-  nodes.push(scInfoRow(src[0], src[1], w.parent ? "для " + w.parent : ""));
-  nodes.push(scInfoRow("clock", workStates[w.state] || w.state, w.returns ? "возвратов " + w.returns : ""));
-  if (silentRun(w)) nodes.push(scInfoRow("clock", "Молчит " + silentMins(w) + " мин", "признаков жизни нет"));
+  const head = el("div", "sc-ih"); head.append(el("span", "", t("Задача ") + task.id), el("small", "", scWhen(task.created_ms)));
+  nodes.push(head, scInfoRow("folder", d ? d.title : w.department, t("отдел")));
+  nodes.push(w.risk === "external" ? scInfoRow("globe", t("Уйдёт наружу"), t("принимаете вы")) : scInfoRow("orch", t("Внутренняя"), w.owner_review ? t("принимаете вы") : t("принимает оркестратор")));
+  const src = { owner: ["user", t("От вас")], orchestrator: ["orch", t("От оркестратора")], schedule: ["cal", t("По расписанию")] }[w.source] || ["run", w.source ? t("Заказ отдела ") + w.source : t("Источник неизвестен")];
+  nodes.push(scInfoRow(src[0], src[1], w.parent ? t("для ") + w.parent : ""));
+  nodes.push(scInfoRow("clock", workStates[w.state] || w.state, w.returns ? t("возвратов ") + w.returns : ""));
+  if (silentRun(w)) nodes.push(scInfoRow("clock", t("Молчит ") + silentMins(w) + t(" мин"), t("признаков жизни нет")));
   const links = workLinks(w);
   if (links.length) {
     const row = el("div", "sc-row");
@@ -3800,45 +4004,45 @@ function scInfo(task) {
   }
 
   const repo = w.repo || (d && d.repos && d.repos[0]);
-  nodes.push(el("div", "sc-ih", "Окружение"));
-  if (repo) nodes.push(scInfoRow("folder", scBase(repo) + " · " + String(repo).replace(/[\\/][^\\/]*$/, ""), d && d.worktree ? "копия на ветке" : "репозиторий"));
-  nodes.push(scInfoRow("run", "runs/" + task.id, "папка запуска"));
+  nodes.push(el("div", "sc-ih", t("Окружение")));
+  if (repo) nodes.push(scInfoRow("folder", scBase(repo) + " · " + String(repo).replace(/[\\/][^\\/]*$/, ""), d && d.worktree ? t("копия на ветке") : t("репозиторий")));
+  nodes.push(scInfoRow("run", "runs/" + task.id, t("папка запуска")));
 
   const budget = w.budget_usd || (d && d.limits ? d.limits.task_usd : 0);
-  const bh = el("div", "sc-ih"); bh.append(el("span", "", "Бюджет"), el("small", "", money(w.cost_usd) + (budget ? " из " + money(budget) : "")));
+  const bh = el("div", "sc-ih"); bh.append(el("span", "", t("Бюджет")), el("small", "", money(w.cost_usd) + (budget ? t(" из ") + money(budget) : "")));
   const bm = el("div", "sc-mrow"); const bl = el("div");
-  bl.append(el("small", "", tokens(w.input_tokens) + " → " + tokens(w.output_tokens) + " токенов"), el("small", "", budget ? Math.round(w.cost_usd / budget * 100) + " %" : ""));
+  bl.append(el("small", "", tokens(w.input_tokens) + " → " + tokens(w.output_tokens) + t(" токенов")), el("small", "", budget ? Math.round(w.cost_usd / budget * 100) + " %" : ""));
   bm.append(scMeter(w.cost_usd, budget), bl);
   nodes.push(bh, bm);
   const allRuns = w.runs || [], run = allRuns[allRuns.length - 1];
   if (run) {
     const limit = d && d.limits ? d.limits.timeout_mins * 60000 : 0;
     const th = el("div", "sc-ih"); const small = el("small"); small.id = "sc-elapsed";
-    th.append(el("span", "", w.state === "running" ? "Время" : "Последний круг"), small);
+    th.append(el("span", "", w.state === "running" ? t("Время") : t("Последний круг")), small);
     const tm = el("div", "sc-mrow"); const meter = scMeter(0, 1); meter.id = "sc-tmeter"; tm.append(meter);
     meter.dataset.start = run.started_ms; meter.dataset.end = run.finished_ms || ""; meter.dataset.limit = limit;
     nodes.push(th, tm);
   }
   if ((w.questions || []).length) {
-    nodes.push(el("div", "sc-ih", "Вопросы"));
+    nodes.push(el("div", "sc-ih", t("Вопросы")));
     const list = el("ol", "sc-qs");
-    for (const q of w.questions) { const li = el("li", "", q.text); if (q.answer != null) li.append(el("small", "", "Ответ: " + q.answer)); list.append(li); }
+    for (const q of w.questions) { const li = el("li", "", q.text); if (q.answer != null) li.append(el("small", "", t("Ответ: ") + q.answer)); list.append(li); }
     nodes.push(list);
   }
-  if (w.proposal) nodes.push(el("div", "sc-ih", "Новый отдел"), el("p", "sc-para", "«" + w.proposal.title + "» (" + w.proposal.id + "): " + w.proposal.description));
-  if (w.stuck_reason && w.state === "stuck") nodes.push(el("p", "sc-para sc-bad", "Причина: " + w.stuck_reason));
+  if (w.proposal) nodes.push(el("div", "sc-ih", t("Новый отдел")), el("p", "sc-para", "«" + w.proposal.title + "» (" + w.proposal.id + "): " + w.proposal.description));
+  if (w.stuck_reason && w.state === "stuck") nodes.push(el("p", "sc-para sc-bad", t("Причина: ") + w.stuck_reason));
   if (w.result_summary) {
-    nodes.push(el("div", "sc-ih", "Результат"));
+    nodes.push(el("div", "sc-ih", t("Результат")));
     // Tables do not fit the card: it shows the lead, the center shows the whole result.
     const lead = w.result_summary.split("\n"), cut = lead.findIndex(l => /^\s*\|/.test(l));
     const summary = scText(clip((cut < 0 ? lead : lead.slice(0, cut)).join("\n").trim(), 900)); summary.classList.add("sc-para"); nodes.push(summary);
-    const show = el("button", "sc-link", "Открыть итог целиком"); show.type = "button";
+    const show = el("button", "sc-link", t("Открыть итог целиком")); show.type = "button";
     show.onclick = () => { sc.rview.set(task.id, "result"); sc.mode = "scene"; scRender(); $("#sc-result").scrollTop = 0; $("#scene").classList.remove("sc-showinfo"); };
     nodes.push(show);
   }
   const taskFiles = sc.taskFiles.get(task.id) || [];
-  const fh = el("div", "sc-ih"); fh.append(el("span", "", "Файлы" + (taskFiles.length ? " · " + taskFiles.length : "")));
-  const addFile = el("button", "sc-link sc-addfile"); addFile.type = "button"; addFile.append(scG("clip", 13), el("span", "", "Приложить"));
+  const fh = el("div", "sc-ih"); fh.append(el("span", "", t("Файлы") + (taskFiles.length ? " · " + taskFiles.length : "")));
+  const addFile = el("button", "sc-link sc-addfile"); addFile.type = "button"; addFile.append(scG("clip", 13), el("span", "", t("Приложить")));
   addFile.onclick = () => scPickForTask(task);
   fh.append(addFile);
   nodes.push(fh);
@@ -3848,12 +4052,12 @@ function scInfo(task) {
     nodes.push(grid);
   } else {
     const hint = el("button", "sc-drop-hint"); hint.type = "button";
-    hint.append(scG("clip", 16), el("span", "", "Перетащите файлы сюда или нажмите, чтобы выбрать. Отдел получит их в следующем круге."));
+    hint.append(scG("clip", 16), el("span", "", t("Перетащите файлы сюда или нажмите, чтобы выбрать. Отдел получит их в следующем круге.")));
     hint.onclick = () => scPickForTask(task);
     nodes.push(hint);
   }
   if (files && files.size) {
-    nodes.push(el("div", "sc-ih", "Изменения в коде"));
+    nodes.push(el("div", "sc-ih", t("Изменения в коде")));
     for (const [path, c] of [...files].slice(0, 14)) {
       const r = el("div", "sc-row"); r.title = path;
       const s = el("small"); s.append(el("span", "sc-plus", "+" + c.add), " ", el("span", "sc-minus", "−" + c.del));
@@ -3866,37 +4070,37 @@ function scInfo(task) {
   const acts = el("div", "sc-acts");
   const back = (label, run) => {
     const { form, ta } = scNoteForm(label, t("Вернуть в работу"), run, errBox, task); form.hidden = true;
-    const open = el("button", "sc-btn"); open.type = "button"; open.append(scG("undo"), el("span", "", "Вернуть с запиской"));
+    const open = el("button", "sc-btn"); open.type = "button"; open.append(scG("undo"), el("span", "", t("Вернуть с запиской")));
     open.onclick = () => { form.hidden = !form.hidden; if (!form.hidden) ta.focus(); };
     acts.append(open, form);
   };
   if (w.state === "running") {
-    if (silentRun(w)) acts.append(scAct("Подождать ещё", "", "clock", supervise(task, "wait"), errBox), scAct("Перезапустить шаг", "sc-primary", "run", supervise(task, "restart"), errBox));
-    back("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", text => scStopAndReturn(task, text));
-    acts.append(scAct("Остановить задачу", "sc-danger", "sq", () => post(taskPath(task, "/stop"), {}), errBox));
+    if (silentRun(w)) acts.append(scAct(t("Подождать ещё"), "", "clock", supervise(task, "wait"), errBox), scAct(t("Перезапустить шаг"), "sc-primary", "run", supervise(task, "restart"), errBox));
+    back(t("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе."), text => scStopAndReturn(task, text));
+    acts.append(scAct(t("Остановить задачу"), "sc-danger", "sq", () => post(taskPath(task, "/stop"), {}), errBox));
   } else if (w.state === "review") {
-    acts.append(scAct(w.risk === "external" ? "Принять и выпустить" : t("Принять"), "sc-primary", "check", () => patchTask(task.id, { status: "done" }), errBox));
-    acts.append(scAct("Ещё круг", "", "run", () => post(taskPath(task, "/retry"), {}), errBox));
-    back("Замечание отделу. Задача начнёт новый круг с ним в брифе.", text => post(taskPath(task, "/return"), { text }));
+    acts.append(scAct(w.risk === "external" ? t("Принять и выпустить") : t("Принять"), "sc-primary", "check", () => patchTask(task.id, { status: "done" }), errBox));
+    acts.append(scAct(t("Ещё круг"), "", "run", () => post(taskPath(task, "/retry"), {}), errBox));
+    back(t("Замечание отделу. Задача начнёт новый круг с ним в брифе."), text => post(taskPath(task, "/return"), { text }));
   } else if (w.state === "stuck") {
-    acts.append(scAct("Ещё круг", "sc-primary", "run", () => post(taskPath(task, "/retry"), {}), errBox));
-    back("Что поменять в новом круге.", text => post(taskPath(task, "/return"), { text }));
-    acts.append(scAct("Принять как есть", "", "check", () => patchTask(task.id, { status: "done" }), errBox));
+    acts.append(scAct(t("Ещё круг"), "sc-primary", "run", () => post(taskPath(task, "/retry"), {}), errBox));
+    back(t("Что поменять в новом круге."), text => post(taskPath(task, "/return"), { text }));
+    acts.append(scAct(t("Принять как есть"), "", "check", () => patchTask(task.id, { status: "done" }), errBox));
     acts.append(scAct(t("Закрыть"), "sc-danger", "x", () => patchTask(task.id, { status: "archived" }), errBox));
   } else if (w.state === "waiting" && w.proposal) {
-    acts.append(scAct("Создать отдел", "sc-primary", "check", () => post(taskPath(task, "/proposal"), { create: true }), errBox));
-    acts.append(scAct("В общий отдел", "", "folder", () => post(taskPath(task, "/proposal"), { create: false }), errBox));
+    acts.append(scAct(t("Создать отдел"), "sc-primary", "check", () => post(taskPath(task, "/proposal"), { create: true }), errBox));
+    acts.append(scAct(t("В общий отдел"), "", "folder", () => post(taskPath(task, "/proposal"), { create: false }), errBox));
   } else if (w.state === "waiting" && (w.questions || []).some(q => q.answer == null)) {
-    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", t("Ответить"), text => post(taskPath(task, "/answer"), { text }), errBox, task);
-    form.querySelector("textarea").placeholder = "Ответ";
+    const { form } = scNoteForm(t("Ответ на все вопросы одним сообщением."), t("Ответить"), text => post(taskPath(task, "/answer"), { text }), errBox, task);
+    form.querySelector("textarea").placeholder = t("Ответ");
     form.querySelector(".sc-btns .sc-btn:last-child").remove();
     acts.append(form);
   } else if (w.state === "done") {
-    back("Что доделать. Задача начнёт новый круг с этим в брифе.", text => post(taskPath(task, "/return"), { text }));
+    back(t("Что доделать. Задача начнёт новый круг с этим в брифе."), text => post(taskPath(task, "/return"), { text }));
   }
   if (w.comment_draft) {
-    nodes.push(el("div", "sc-ih", "Закрывающий комментарий" + (w.event ? " · " + eventLabel(w.event) : "")), el("p", "sc-para", clip(w.comment_draft, 900)));
-    acts.append(scAct("Опубликовать комментарий", "sc-primary", "check", supervise(task, "publish"), errBox), scAct("Не нужно", "", "x", supervise(task, "drop"), errBox));
+    nodes.push(el("div", "sc-ih", t("Закрывающий комментарий") + (w.event ? " · " + eventLabel(w.event) : "")), el("p", "sc-para", clip(w.comment_draft, 900)));
+    acts.append(scAct(t("Опубликовать комментарий"), "sc-primary", "check", supervise(task, "publish"), errBox), scAct(t("Не нужно"), "", "x", supervise(task, "drop"), errBox));
   }
   if (acts.childNodes.length) nodes.push(el("div", "sc-divider"), acts);
   nodes.push(errBox);
@@ -3908,7 +4112,7 @@ function scTickInfo() {
   if (!meter || !label) return;
   const start = +meter.dataset.start, end = +meter.dataset.end || Date.now(), limit = +meter.dataset.limit;
   const spent = Math.max(0, end - start);
-  label.textContent = scSecs(spent) + (limit ? " из " + Math.round(limit / 60000) + " мин" : "");
+  label.textContent = scSecs(spent) + (limit ? t(" из ") + Math.round(limit / 60000) + t(" мин") : "");
   meter.firstChild.style.width = (limit ? Math.min(100, spent / limit * 100) : 0) + "%";
   meter.classList.toggle("sc-over", !!limit && spent > limit);
 }
@@ -3920,7 +4124,7 @@ function scDialog(title, label, button, needText, run) {
   form.append(h);
   let ta = null;
   if (label) form.append(el("label", "", label));
-  if (needText) { ta = el("textarea"); ta.placeholder = "Что поменять"; ta.setAttribute("aria-label", label || title); form.append(ta); }
+  if (needText) { ta = el("textarea"); ta.placeholder = t("Что поменять"); ta.setAttribute("aria-label", label || title); form.append(ta); }
   const err = el("div", "sc-err-t");
   const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
   const cancel = el("button", "sc-btn", t("Отмена")); cancel.type = "button";
@@ -3950,17 +4154,17 @@ function scDrop(task, to) {
   const w = task.work, from = scColumn(task);
   if (from === to) return;
   if (to === "queue" && w.state === "running")
-    return scDialog("Вернуть задачу в очередь", "Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", t("Вернуть в работу"), true, text => scStopAndReturn(task, text));
+    return scDialog(t("Вернуть задачу в очередь"), t("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе."), t("Вернуть в работу"), true, text => scStopAndReturn(task, text));
   if (to === "queue" && ["review", "stuck", "done"].includes(w.state))
-    return scDialog("Вернуть задачу в работу", "Записка отделу. Задача начнёт новый круг с ней в брифе.", t("Вернуть в работу"), true, text => post(taskPath(task, "/return"), { text }));
+    return scDialog(t("Вернуть задачу в работу"), t("Записка отделу. Задача начнёт новый круг с ней в брифе."), t("Вернуть в работу"), true, text => post(taskPath(task, "/return"), { text }));
   if (to === "done" && ["review", "stuck"].includes(w.state))
-    return scDialog(w.risk === "external" ? "Принять и выпустить?" : "Принять результат?", w.risk === "external" ? "Результат уйдёт наружу: пост, письмо или изменение в чужой системе." : "", t("Принять"), false, () => patchTask(task.id, { status: "done" }));
-  scToast(w.state === "running" ? "Задача ещё идёт. Остановить её или вернуть с запиской можно перетаскиванием в очередь." : "Так перенести нельзя.");
+    return scDialog(w.risk === "external" ? t("Принять и выпустить?") : t("Принять результат?"), w.risk === "external" ? t("Результат уйдёт наружу: пост, письмо или изменение в чужой системе.") : "", t("Принять"), false, () => patchTask(task.id, { status: "done" }));
+  scToast(w.state === "running" ? t("Задача ещё идёт. Остановить её или вернуть с запиской можно перетаскиванием в очередь.") : t("Так перенести нельзя."));
 }
 function scBoard() {
   if (sc.dragging) return;
   const root = $("#sc-board"), tasks = scTasks();
-  const cols = { queue: ["В очереди", []], run: ["В работе", []], wait: ["Ждёт вас", []], done: ["Готово", []] };
+  const cols = { queue: [t("В очереди"), []], run: [t("В работе"), []], wait: [t("Ждёт вас"), []], done: [t("Готово"), []] };
   for (const t of tasks) if (t.work.state !== "cancelled") cols[scColumn(t)][1].push(t);
   cols.done[1] = cols.done[1].sort((a, b) => b.updated_ms - a.updated_ms).slice(0, 12);
   const grid = el("div", "sc-cols");
@@ -3969,7 +4173,7 @@ function scBoard() {
     const h = el("div", "sc-col-h"); h.append(el("span", "", label), el("small", "", String(list.length)));
     if (key === "wait" && list.length) h.append(el("span", "sc-dot"));
     col.append(h);
-    if (!list.length) col.append(el("div", "sc-col-empty", key === "wait" ? "Ничего не ждёт вас" : "Пусто"));
+    if (!list.length) col.append(el("div", "sc-col-empty", key === "wait" ? t("Ничего не ждёт вас") : t("Пусто")));
     for (const t of list.sort((a, b) => key === "done" ? 0 : (SC_ORDER[a.work.state] - SC_ORDER[b.work.state]) || b.updated_ms - a.updated_ms)) col.append(scCard(t));
     col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("sc-drop"); });
     col.addEventListener("dragleave", e => { if (!col.contains(e.relatedTarget)) col.classList.remove("sc-drop"); });
@@ -3987,16 +4191,16 @@ function scCard(task) {
   const w = task.work, d = scDept(w.department);
   const card = el("article", "sc-card" + (w.state === "running" ? " sc-live" : "") + (scUnread(task) ? " sc-unread" : ""));
   card.draggable = true; card.dataset.id = task.id; card.tabIndex = 0;
-  card.title = "Открыть сцену задачи";
+  card.title = t("Открыть сцену задачи");
   card.append(el("div", "sc-card-t", task.title));
   const meta = el("div", "sc-card-m");
-  if (scUnread(task)) meta.append(el("span", "sc-new", "новое"));
+  if (scUnread(task)) meta.append(el("span", "sc-new", t("новое")));
   meta.append(el("span", "", d ? d.title : w.department));
   const items = scStepItems(task), now = items.filter(i => i.cls === "now").pop();
   meta.append(el("span", "", silentRun(w) ? scWaitLabel(task) : w.state === "running" && now ? now.text : ownerWaits(w) ? scWaitLabel(task) : workStates[w.state] || w.state));
   const budget = w.budget_usd || (d && d.limits ? d.limits.task_usd : 0);
-  if (w.cost_usd || w.state !== "queued") meta.append(el("span", "", money(w.cost_usd) + (budget && w.state === "running" ? " из " + money(budget) : "")));
-  if (w.risk === "external" && w.state !== "done") meta.append(el("span", "", "наружу"));
+  if (w.cost_usd || w.state !== "queued") meta.append(el("span", "", money(w.cost_usd) + (budget && w.state === "running" ? t(" из ") + money(budget) : "")));
+  if (w.risk === "external" && w.state !== "done") meta.append(el("span", "", t("наружу")));
   card.append(meta);
   const lanes = sc.byTask.get(task.id) || [];
   if (w.state === "running" && lanes.length) {
@@ -4007,11 +4211,11 @@ function scCard(task) {
     card.append(tick, who);
   }
   const btns = el("div", "sc-btns"), errBox = el("div", "sc-err-t");
-  if (silentRun(w)) btns.append(scAct("Подождать ещё", "", "", supervise(task, "wait"), errBox), scAct("Перезапустить шаг", "sc-primary", "", supervise(task, "restart"), errBox), scAct("Остановить", "sc-danger", "", supervise(task, "stop"), errBox));
-  else if (w.comment_draft && w.state === "done") btns.append(scAct("Опубликовать комментарий", "sc-primary", "", supervise(task, "publish"), errBox), scAct("Не нужно", "", "", supervise(task, "drop"), errBox));
-  else if (w.state === "review" && ownerWaits(w)) btns.append(scAct(t("Принять"), "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
-  else if (w.state === "stuck") btns.append(scAct("Ещё круг", "sc-primary", "", () => post(taskPath(task, "/retry"), {}), errBox));
-  else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? "Решить" : t("Ответить")); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
+  if (silentRun(w)) btns.append(scAct(t("Подождать ещё"), "", "", supervise(task, "wait"), errBox), scAct(t("Перезапустить шаг"), "sc-primary", "", supervise(task, "restart"), errBox), scAct(t("Остановить"), "sc-danger", "", supervise(task, "stop"), errBox));
+  else if (w.comment_draft && w.state === "done") btns.append(scAct(t("Опубликовать комментарий"), "sc-primary", "", supervise(task, "publish"), errBox), scAct(t("Не нужно"), "", "", supervise(task, "drop"), errBox));
+  else if (w.state === "review" && ownerWaits(w)) btns.append(scAct(t("Принять"), "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct(t("Ещё круг"), "", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  else if (w.state === "stuck") btns.append(scAct(t("Ещё круг"), "sc-primary", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? t("Решить") : t("Ответить")); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
   if (btns.childNodes.length) card.append(btns, errBox);
   const open = () => { location.hash = "#task=" + encodeURIComponent(task.id); };
   card.addEventListener("click", e => { if (!e.target.closest("button, a")) open(); });
@@ -4025,28 +4229,28 @@ function scNew() {
   if (root.firstChild) return;
   const box = el("form", "sc-newbox");
   const ta = el("textarea"); ta.id = "sc-new-text";
-  ta.placeholder = "Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…";
-  ta.setAttribute("aria-label", "Сообщение оркестратору");
-  const send = el("button", "sc-btn sc-primary", "Отправить оркестратору"); send.type = "submit";
+  ta.placeholder = t("Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…");
+  ta.setAttribute("aria-label", t("Сообщение оркестратору"));
+  const send = el("button", "sc-btn sc-primary", t("Отправить оркестратору")); send.type = "submit";
   const status = el("span", "sc-hint"); status.setAttribute("aria-live", "polite");
   const btns = el("div", "sc-btns"); btns.append(send, scMentorSwitch(), status);
   const att = scAttacher();
   const field = el("div", "sc-newfield"), frow = el("div", "sc-newfield-row");
-  const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", "Приложить файлы"));
+  const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", t("Приложить файлы")));
   pick.onclick = () => att.input.click();
-  frow.append(pick, el("span", "", "или перетащите их сюда, можно вставить из буфера"));
+  frow.append(pick, el("span", "", t("или перетащите их сюда, можно вставить из буфера")));
   field.append(att.tray, ta, frow, att.input);
   att.paste(ta);
   scDropZone(root, files => att.add(files));
-  box.append(el("h2", "", "Что сделать?"), el("p", "", "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева."), field, btns);
+  box.append(el("h2", "", t("Что сделать?")), el("p", "", t("Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева.")), field, btns);
   box.onsubmit = async e => {
     e.preventDefault();
-    if (att.busy()) { status.className = "sc-hint"; status.textContent = "Файлы ещё загружаются"; return; }
+    if (att.busy()) { status.className = "sc-hint"; status.textContent = t("Файлы ещё загружаются"); return; }
     const files = att.paths();
     if (!ta.value.trim() && !files.length) { ta.focus(); return; }
     send.disabled = true; status.className = "sc-hint"; status.textContent = "";
-    try { await post("/api/orchestrator", { text: ta.value.trim() || "Разбери приложенные файлы.", files }); ta.value = ""; att.clear(); status.textContent = "Принято. Задачи появятся слева, ответ придёт в почту и Telegram."; }
-    catch (err) { status.className = "sc-hint sc-bad"; status.textContent = "Ошибка: " + err.message; }
+    try { await post("/api/orchestrator", { text: ta.value.trim() || "Разбери приложенные файлы.", files }); ta.value = ""; att.clear(); status.textContent = t("Принято. Задачи появятся слева, ответ придёт в почту и Telegram."); }
+    catch (err) { status.className = "sc-hint sc-bad"; status.textContent = t("Ошибка: ") + err.message; }
     finally { send.disabled = false; }
   };
   ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) box.requestSubmit(); });
@@ -4111,10 +4315,10 @@ function scMentorShow(data) {
 async function scMentorSet(id) {
   try {
     scMentorShow(await post("/api/mentor", { preset: id }));
-    scToast(id === "off" ? "Наставник выключен" : "Наставник: " + scMentorTitle(id) + ". Со следующей задачи");
+    scToast(id === "off" ? t("Наставник выключен") : t("Наставник: ") + scMentorTitle(id) + t(". Со следующей задачи"));
   } catch (error) {
     for (const view of scMentor.views) view.draw();
-    scToast("Не сохранилось: " + error.message);
+    scToast(t("Не сохранилось: ") + error.message);
   }
 }
 // Тумблер: нажатие включает и выключает, при наведении или фокусе выбор модели.
@@ -4122,17 +4326,17 @@ function scMentorSwitch() {
   const root = el("span", "sc-mt");
   const toggle = el("button", "sc-mt-btn"); toggle.type = "button"; toggle.setAttribute("role", "switch");
   const name = el("small");
-  toggle.append(el("i", "sc-mt-knob"), el("span", "", "Наставник"), name);
-  const menu = el("span", "sc-mt-menu"); menu.setAttribute("role", "group"); menu.setAttribute("aria-label", "Модель наставника");
+  toggle.append(el("i", "sc-mt-knob"), el("span", "", t("Наставник")), name);
+  const menu = el("span", "sc-mt-menu"); menu.setAttribute("role", "group"); menu.setAttribute("aria-label", t("Модель наставника"));
   root.append(toggle, menu);
   toggle.onclick = () => scMentorSet(scMentor.preset === "off" ? scMentorLast() : "off");
   const draw = () => {
     root.hidden = !scMentor.ok;
     const on = scMentor.preset !== "off";
     toggle.setAttribute("aria-checked", on ? "true" : "false");
-    name.textContent = on ? scMentorTitle(scMentor.preset) : "выключен";
-    toggle.title = "Сильная модель пишет постановку исполнителю и сама проверяет результат. Действует на задачи, запущенные после выбора.";
-    menu.replaceChildren(el("span", "sc-mt-cap", "Кто наставник"), ...scMentor.presets.map(p => {
+    name.textContent = on ? scMentorTitle(scMentor.preset) : t("выключен");
+    toggle.title = t("Сильная модель пишет постановку исполнителю и сама проверяет результат. Действует на задачи, запущенные после выбора.");
+    menu.replaceChildren(el("span", "sc-mt-cap", t("Кто наставник")), ...scMentor.presets.map(p => {
       const item = el("button", "sc-mt-item", p.title); item.type = "button";
       item.setAttribute("aria-pressed", p.id === scMentor.preset ? "true" : "false");
       item.onclick = () => scMentorSet(p.id);
@@ -4146,7 +4350,7 @@ function scMentorSwitch() {
 (() => {
   const select = $("#sc-mentor");
   scMentor.views.push({ root: select, draw() {
-    const options = [["off", "выключен"], ...scMentor.presets.map(p => [p.id, p.title])];
+    const options = [["off", t("выключен")], ...scMentor.presets.map(p => [p.id, p.title])];
     select.replaceChildren(...options.map(([id, title]) => { const option = el("option", "", title); option.value = id; return option; }));
     select.value = scMentor.preset;
   } });
@@ -4186,7 +4390,7 @@ setInterval(() => {
 // and the run's files; /file serves only those.
 const SC_UPLOAD_MAX = 50 * 1048576;
 const SC_VIEWABLE = ["md", "txt", "csv", "tsv", "json", "jsonl", "log", "toml", "yaml", "yml", "xml", "html", "htm", "svg", "py", "js", "ts", "rs", "sh", "ps1", "sql", "ini", "cfg", "srt", "pdf", "png", "jpg", "jpeg", "gif", "webp"];
-const SC_FILE_KIND = { attachment: "от вас", result: "итог", artifact: "от отдела" };
+const SC_FILE_KIND = { attachment: t("от вас"), result: t("итог"), artifact: t("от отдела") };
 function scExt(name) { const m = /\.([^.\\/]+)$/.exec(String(name)); return m ? m[1].toLowerCase() : ""; }
 function scKindOf(ext) {
   if (["xlsx", "xls", "csv", "tsv", "ods"].includes(ext)) return "sheet";
@@ -4197,13 +4401,18 @@ function scKindOf(ext) {
 }
 function scSize(n) {
   n = n || 0;
-  if (n < 1024) return n + " Б";
-  if (n < 1048576) return Math.round(n / 1024) + " КБ";
-  return (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace(".", ",") + " МБ";
+  if (language === "en") {
+    if (n < 1024) return new Intl.NumberFormat(language, { style: "unit", unit: "byte", unitDisplay: "short" }).format(n);
+    if (n < 1048576) return new Intl.NumberFormat(language, { style: "unit", unit: "kilobyte", unitDisplay: "short", maximumFractionDigits: 0 }).format(n / 1024);
+    return new Intl.NumberFormat(language, { style: "unit", unit: "megabyte", unitDisplay: "short", minimumFractionDigits: n < 10485760 ? 1 : 0, maximumFractionDigits: n < 10485760 ? 1 : 0 }).format(n / 1048576);
+  }
+  if (n < 1024) return n + t(" Б");
+  if (n < 1048576) return Math.round(n / 1024) + t(" КБ");
+  return (n / 1048576).toFixed(n < 10485760 ? 1 : 0).replace(".", ",") + t(" МБ");
 }
 function scBadge(name) {
   const ext = scExt(name), kind = scKindOf(ext);
-  return el("span", "sc-badge" + (kind ? " sc-b-" + kind : ""), ext ? ext.toUpperCase().slice(0, 5) : "ФАЙЛ");
+  return el("span", "sc-badge" + (kind ? " sc-b-" + kind : ""), ext ? ext.toUpperCase().slice(0, 5) : t("ФАЙЛ"));
 }
 function scHasFiles(e) { return !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files"); }
 // `node` lights up while files are dragged over it; cards dragged on the board are ignored.
@@ -4219,7 +4428,7 @@ function scDropZone(node, onFiles) {
   });
 }
 async function scUpload(file, batch) {
-  if (file.size > SC_UPLOAD_MAX) throw new Error("больше 50 МБ");
+  if (file.size > SC_UPLOAD_MAX) throw new Error(t("больше 50 МБ"));
   const r = await fetch(api("/api/upload?name=" + encodeURIComponent(file.name || "файл") + (batch ? "&batch=" + batch : "")), { method: "POST", body: file });
   let data = null;
   try { data = await r.json(); } catch (_) {}
@@ -4232,7 +4441,7 @@ function scAttacher() {
   const tray = el("div", "sc-atts"); tray.hidden = true;
   const input = el("input"); input.type = "file"; input.multiple = true; input.hidden = true; input.tabIndex = -1;
   const button = el("button", "sc-ib sc-attach"); button.type = "button"; button.append(scG("clip"));
-  button.title = "Приложить файлы"; button.setAttribute("aria-label", "Приложить файлы");
+  button.title = t("Приложить файлы"); button.setAttribute("aria-label", t("Приложить файлы"));
   button.onclick = () => input.click();
   const st = { tray, input, button, items: [], batch: "", chain: Promise.resolve() };
   const draw = () => {
@@ -4241,8 +4450,8 @@ function scAttacher() {
       tile.title = item.name + (item.error ? ": " + item.error : "");
       if (item.thumb) { const img = el("img", "sc-att-thumb"); img.src = item.thumb; img.alt = ""; tile.classList.add("sc-att-img"); tile.append(img); }
       const foot = el("div", "sc-att-foot");
-      foot.append(scBadge(item.name), el("small", "", item.state === "up" ? "загрузка…" : item.state === "bad" ? item.error : scSize(item.size)));
-      const x = el("button", "sc-att-x"); x.type = "button"; x.append(scG("x")); x.setAttribute("aria-label", "Убрать " + item.name);
+      foot.append(scBadge(item.name), el("small", "", item.state === "up" ? t("загрузка…") : item.state === "bad" ? item.error : scSize(item.size)));
+      const x = el("button", "sc-att-x"); x.type = "button"; x.append(scG("x")); x.setAttribute("aria-label", t("Убрать ") + item.name);
       x.onclick = () => { st.items = st.items.filter(i => i !== item); if (item.thumb) URL.revokeObjectURL(item.thumb); draw(); };
       tile.append(el("div", "sc-att-name", item.name), foot, x);
       return tile;
@@ -4251,7 +4460,7 @@ function scAttacher() {
   };
   st.add = files => {
     for (const file of Array.from(files)) {
-      if (st.items.length >= 20) { scToast("Не больше 20 файлов в одном сообщении"); break; }
+      if (st.items.length >= 20) { scToast(t("Не больше 20 файлов в одном сообщении")); break; }
       const item = { name: file.name || "файл", size: file.size, state: "up", thumb: /^image\/(png|jpeg|gif|webp)$/.test(file.type) ? URL.createObjectURL(file) : "" };
       st.items.push(item);
       st.chain = st.chain.then(async () => {
@@ -4279,7 +4488,7 @@ function scFileUrl(task, path, inline) {
 // A downloadable tile: the whole tile downloads, the eye opens text, pictures and PDF in a tab.
 function scFileTile(task, f) {
   const name = scBase(f.name), ext = scExt(name), image = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext);
-  const shown = f.kind === "result" ? "Итог задачи" : name;
+  const shown = f.kind === "result" ? t("Итог задачи") : name;
   const tile = el("div", "sc-att sc-dl" + (f.kind === "result" ? " sc-att-result" : ""));
   tile.title = f.name + " · " + scSize(f.size) + " · " + (SC_FILE_KIND[f.kind] || "");
   if (image) {
@@ -4290,12 +4499,12 @@ function scFileTile(task, f) {
     tile.append(top);
   }
   const foot = el("div", "sc-att-foot"); foot.append(scBadge(name), el("small", "", scSize(f.size)));
-  const hit = el("a", "sc-att-hit"); hit.href = scFileUrl(task, f.path); hit.download = name; hit.setAttribute("aria-label", "Скачать " + name);
+  const hit = el("a", "sc-att-hit"); hit.href = scFileUrl(task, f.path); hit.download = name; hit.setAttribute("aria-label", t("Скачать ") + name);
   tile.append(el("div", "sc-att-name", shown), foot, hit);
   const acts = el("div", "sc-att-acts");
   if (SC_VIEWABLE.includes(ext)) {
     const view = el("a", "sc-att-a"); view.href = scFileUrl(task, f.path, true); view.target = "_blank"; view.rel = "noopener";
-    view.title = "Открыть"; view.setAttribute("aria-label", "Открыть " + name); view.append(scG("eye")); acts.append(view);
+    view.title = t("Открыть"); view.setAttribute("aria-label", t("Открыть ") + name); view.append(scG("eye")); acts.append(view);
   }
   const dl = el("span", "sc-att-a"); dl.append(scG("down")); acts.append(dl);
   tile.append(acts);
@@ -4322,7 +4531,7 @@ function scPickForTask(task) { scTaskFor = task; scTaskInput.click(); }
 async function scAttachToTask(task, files) {
   files = Array.from(files).slice(0, 20);
   if (!files.length) return;
-  scToast("Загружаю " + tn(files.length, pluralWords.file) + "…");
+  scToast(t("Загружаю ") + tn(files.length, pluralWords.file) + "…");
   let batch = "";
   const paths = [], failed = [];
   for (const file of files) {
@@ -4330,13 +4539,13 @@ async function scAttachToTask(task, files) {
     catch (err) { failed.push(file.name + ": " + err.message); }
   }
   try { if (paths.length) await post(taskPath(task, "/attach"), { files: paths }); }
-  catch (err) { scToast("Не приложил: " + err.message); return; }
+  catch (err) { scToast(t("Не приложил: ") + err.message); return; }
   const running = task.work && task.work.state === "running";
-  scToast(failed.length ? "Не загрузились: " + failed.join("; ")
-    : "Приложено к задаче. Отдел получит файлы в следующем круге" + (running ? "; агенту прямо сейчас — скрепкой в его записке." : "."));
+  scToast(failed.length ? t("Не загрузились: ") + failed.join("; ")
+    : t("Приложено к задаче. Отдел получит файлы в следующем круге") + (running ? t("; агенту прямо сейчас — скрепкой в его записке.") : "."));
   scLoadFiles(task, true);
 }
-scDropZone($("#sc-info"), files => { const task = taskCards.get(sc.task); if (task) scAttachToTask(task, files); else scToast("Сначала выберите задачу слева"); });
+scDropZone($("#sc-info"), files => { const task = taskCards.get(sc.task); if (task) scAttachToTask(task, files); else scToast(t("Сначала выберите задачу слева")); });
 
 // Unread results. A finished task stays marked until the owner has looked at it
 // for two seconds; what finished more than a day before the first visit counts as read.
@@ -4458,9 +4667,9 @@ function scResultTabs(task) {
     if (tabs.dataset.sig !== sig) {
       tabs.dataset.sig = sig;
       const list = [];
-      if (has) list.push(tab("result", "doc", "Итог"));
-      list.push(tab("agents", "orch", has ? "Как работали" : "Агенты", lanes.length ? String(lanes.length) : ""));
-      if (diff) list.push(tab("diff", "diff", "Правки", nFiles ? String(nFiles) : ""));
+      if (has) list.push(tab("result", "doc", t("Итог")));
+      list.push(tab("agents", "orch", has ? t("Как работали") : t("Агенты"), lanes.length ? String(lanes.length) : ""));
+      if (diff) list.push(tab("diff", "diff", t("Правки"), nFiles ? String(nFiles) : ""));
       tabs.replaceChildren(...list);
     }
   }
@@ -4469,7 +4678,7 @@ function scResultTabs(task) {
 }
 // The result as a chat: the request on the right, the department's answer below it,
 // files as cards and a row of actions under the answer, as in ChatGPT and Claude.
-const SC_KIND_NAME = { sheet: "Таблица", pdf: "PDF", image: "Изображение", code: "Код", "": "Файл" };
+const SC_KIND_NAME = { sheet: t("Таблица"), pdf: "PDF", image: t("Изображение"), code: t("Код"), "": t("Файл") };
 function scResultTitle(task, text) {
   const h = /^\s*#{1,3}\s+(.+)$/m.exec(text || "");
   return (h ? h[1].replace(/[*`]/g, "").trim() : "") || task.title;
@@ -4478,13 +4687,13 @@ function scFileCard(task, f, label) {
   const name = label || scBase(f.name), ext = f.kind === "result" ? "md" : scExt(f.name);
   const kind = f.kind === "result" ? "doc" : scKindOf(ext);
   const card = el("a", "sc-fcard"); card.href = scFileUrl(task, f.path); card.download = name;
-  card.title = "Скачать " + name;
+  card.title = t("Скачать ") + name;
   const ic = el("span", "sc-fcard-ic sc-fk-" + (kind || "file"));
   ic.append(kind === "image" ? scG("eye") : scG(kind === "sheet" ? "grid" : "doc"));
-  const t = el("span", "sc-fcard-t");
-  t.append(el("b", "", name), el("small", "", [f.kind === "result" ? "Документ" : SC_KIND_NAME[kind] || "Файл", ext ? ext.toUpperCase() : "", scSize(f.size)].filter(Boolean).join(" · ")));
+  const fileText = el("span", "sc-fcard-t");
+  fileText.append(el("b", "", name), el("small", "", [f.kind === "result" ? t("Документ") : SC_KIND_NAME[kind] || t("Файл"), ext ? ext.toUpperCase() : "", scSize(f.size)].filter(Boolean).join(" · ")));
   const dl = el("span", "sc-fcard-dl"); dl.append(scG("down"));
-  card.append(ic, t, dl);
+  card.append(ic, fileText, dl);
   return card;
 }
 function scIconBtn(icon, label, run) {
@@ -4520,14 +4729,14 @@ function scResult(task) {
     ask.append(row);
   }
   const bubble = el("div", "sc-ask-bubble");
-  const from = { owner: "Вы", orchestrator: "Оркестратор", schedule: "По расписанию" }[w.source] || "Заказ отдела";
+  const from = { owner: t("Вы"), orchestrator: t("Оркестратор"), schedule: t("По расписанию") }[w.source] || t("Заказ отдела");
   bubble.append(el("div", "sc-ask-from", from + " · " + scWhen(task.created_ms)));
   const body = el("div", "sc-ask-text", (task.description || task.title).trim());
   bubble.append(body);
   if ((task.description || "").length > 420) {
     body.classList.add("sc-clamp");
-    const more = el("button", "sc-link", "Показать полностью"); more.type = "button";
-    more.onclick = () => { const open = body.classList.toggle("sc-clamp"); more.textContent = open ? "Показать полностью" : "Свернуть"; };
+    const more = el("button", "sc-link", t("Показать полностью")); more.type = "button";
+    more.onclick = () => { const open = body.classList.toggle("sc-clamp"); more.textContent = open ? t("Показать полностью") : t("Свернуть"); };
     bubble.append(more);
   }
   ask.append(bubble);
@@ -4542,7 +4751,7 @@ function scResult(task) {
   if (doer) who.append(el("span", "", scName(doer)));
   who.append(el("small", "", [workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN > 1 ? tn(runsN, pluralWords.round) : ""].filter(Boolean).join(" · ")));
   ans.append(who);
-  ans.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? "Итог не найден." : "Загружаю итог…"));
+  ans.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? t("Итог не найден.") : t("Загружаю итог…")));
   const made = files.filter(f => f.kind === "artifact" && !f.name.startsWith("browser/"));
   const resultFile = files.find(f => f.kind === "result");
   if (made.length || resultFile) {
@@ -4552,16 +4761,16 @@ function scResult(task) {
     ans.append(cards);
   }
   const acts = el("div", "sc-ans-acts");
-  if (text) acts.append(scIconBtn("copy", "Копировать ответ", async b => {
+  if (text) acts.append(scIconBtn("copy", t("Копировать ответ"), async b => {
     try { await navigator.clipboard.writeText(text); b.replaceChildren(scG("check")); setTimeout(() => b.replaceChildren(scG("copy")), 1500); }
-    catch (_) { scToast("Не удалось скопировать"); }
+    catch (_) { scToast(t("Не удалось скопировать")); }
   }));
   if (resultFile) {
     const dl = el("a", "sc-ib sc-act-ib"); dl.href = scFileUrl(task, resultFile.path); dl.download = "";
-    dl.title = "Скачать ответ файлом"; dl.setAttribute("aria-label", "Скачать ответ файлом"); dl.append(scG("down"));
+    dl.title = t("Скачать ответ файлом"); dl.setAttribute("aria-label", t("Скачать ответ файлом")); dl.append(scG("down"));
     acts.append(dl);
   }
-  if (lanes.length) acts.append(scIconBtn("orch", "Как работали агенты", () => { sc.rview.set(task.id, "agents"); scRender(); for (const l of lanes) if (l.dom) scStick(l, true); }));
+  if (lanes.length) acts.append(scIconBtn("orch", t("Как работали агенты"), () => { sc.rview.set(task.id, "agents"); scRender(); for (const l of lanes) if (l.dom) scStick(l, true); }));
   ans.append(acts);
   chat.append(ans);
 
@@ -4609,33 +4818,34 @@ function rvLines(text) {
     if (line.startsWith("@@")) {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       if (m) { o = +m[1]; n = +m[2]; out.push({ kind: "hunk", text: line }); }
-      else if (/^@@ new file @@/.test(line)) { o = null; n = 1; out.push({ kind: "hunk", text: "Новый файл" }); }
-      else { o = n = null; out.push({ kind: "hunk", text: "Правка без номеров строк" }); }
+      else if (/^@@ new file @@/.test(line)) { o = null; n = 1; out.push({ kind: "hunk", text: t("Новый файл") }); }
+      else { o = n = null; out.push({ kind: "hunk", text: t("Правка без номеров строк") }); }
       hunk = true; continue;
     }
     if (!hunk) {
-      if (/^(Binary files |GIT binary patch)/.test(line)) { out.push({ kind: "meta", text: "Двоичный файл, содержимое не показано." }); continue; }
+      if (/^(Binary files |GIT binary patch)/.test(line)) { out.push({ kind: "meta", text: t("Двоичный файл, содержимое не показано.") }); continue; }
       if (/^(--- |\+\+\+ |index |new file mode|deleted file mode|old mode|new mode|similarity |rename |copy )/.test(line)) continue;
       if (!/^[+\- ]/.test(line)) { if (line) out.push({ kind: "meta", text: line }); continue; }
       hunk = true;
     }
-    if (line.startsWith("\\")) { out.push({ kind: "meta", text: "Нет перевода строки в конце файла" }); continue; }
+    if (line.startsWith("\\")) { out.push({ kind: "meta", text: t("Нет перевода строки в конце файла") }); continue; }
     if (line.startsWith("+")) { out.push({ kind: "add", text: line.slice(1), o: null, n }); if (n != null) n++; }
     else if (line.startsWith("-")) { out.push({ kind: "del", text: line.slice(1), o, n: null }); if (o != null) o++; }
     else { out.push({ kind: "ctx", text: line.slice(1), o, n }); if (o != null) o++; if (n != null) n++; }
   }
   return out;
 }
-function rvWhere(c) {
-  if (c.row == null) return c.path + " · весь файл";
-  if (c.line != null) return c.path + ":" + c.line + (c.side === "old" ? " (удалённая строка)" : "");
-  return c.path + " · строка без номера" + (c.patch != null ? ", правка " + (c.patch + 1) : "");
+function rvWhere(c, agentText = false) {
+  const tr = agentText ? value => value : t;
+  if (c.row == null) return c.path + tr(" · весь файл");
+  if (c.line != null) return c.path + ":" + c.line + (c.side === "old" ? tr(" (удалённая строка)") : "");
+  return c.path + tr(" · строка без номера") + (c.patch != null ? tr(", правка ") + (c.patch + 1) : "");
 }
 // What the agent receives: path:line, the quoted line, the comment.
 function rvFormat(list) {
   const parts = ["Замечания хозяина к правкам (" + list.length + "):"];
   list.forEach((c, i) => {
-    const lines = [(i + 1) + ". " + rvWhere(c)];
+    const lines = [(i + 1) + ". " + rvWhere(c, true)];
     if (c.quote != null) lines.push("> " + c.quote);
     lines.push(c.text.trim());
     parts.push(lines.join("\n"));
@@ -4645,17 +4855,17 @@ function rvFormat(list) {
 function rvSourceText(m) {
   const parts = [];
   if (m.note) parts.push(m.note);
-  if (m.source === "git") parts.push("Источник: git, ветка " + (m.branch || "задачи") + " против " + (m.base || "базы") + ". Видно только закоммиченное.");
-  else parts.push("Источник: лента агентов. Каждая правка отдельно и по порядку; номера строк есть, только если их дал агент. Правка, которую потом отклонили или откатили, здесь тоже видна.");
-  if (m.truncated) parts.push("Показано не всё: правки больше 2 МБ, у файлов без текста стоит «не весь».");
+  if (m.source === "git") parts.push(t("Источник: git, ветка ") + (m.branch || t("задачи")) + t(" против ") + (m.base || t("базы")) + t(". Видно только закоммиченное."));
+  else parts.push(t("Источник: лента агентов. Каждая правка отдельно и по порядку; номера строк есть, только если их дал агент. Правка, которую потом отклонили или откатили, здесь тоже видна."));
+  if (m.truncated) parts.push(t("Показано не всё: правки больше 2 МБ, у файлов без текста стоит «не весь»."));
   return parts.join(" ");
 }
 function rvTags(f) {
   const tags = [];
-  if (f.status === "added") tags.push("новый");
-  if (f.status === "deleted") tags.push("удалён");
-  if (f.binary) tags.push("двоичный");
-  if (f.truncated) tags.push("не весь");
+  if (f.status === "added") tags.push(t("новый"));
+  if (f.status === "deleted") tags.push(t("удалён"));
+  if (f.binary) tags.push(t("двоичный"));
+  if (f.truncated) tags.push(t("не весь"));
   return tags.map(t => el("span", "rv-tag", t));
 }
 function rvCounts(f) {
@@ -4688,27 +4898,27 @@ function rvPanel(model, ctx) {
   status.setAttribute("role", "status");
   const orphans = el("div", "rv-orphans");
   let armed = false;
-  const clear = btn("Убрать все", "", () => {
-    if (!armed) { armed = true; clear.textContent = "Точно убрать все?"; return; }
+  const clear = btn(t("Убрать все"), "", () => {
+    if (!armed) { armed = true; clear.textContent = t("Точно убрать все?"); return; }
     drafts.length = 0; rvSave(ctx.scope);
     for (const n of root.querySelectorAll(".rv-note:not(.rv-form)")) n.remove();
-    armed = false; clear.textContent = "Убрать все"; update();
+    armed = false; clear.textContent = t("Убрать все"); update();
   });
   const send = btn(ctx.send ? ctx.send.label : t("Отправить"), ctx.scene ? "sc-primary" : "primary", async () => {
     if (!ctx.send || !drafts.length) return;
-    send.disabled = true; status.className = "rv-hint"; status.textContent = "Отправляю…";
+    send.disabled = true; status.className = "rv-hint"; status.textContent = t("Отправляю…");
     try {
       await ctx.send.run(rvFormat(drafts));
       drafts.length = 0; rvSave(ctx.scope);
       for (const n of root.querySelectorAll(".rv-note:not(.rv-form)")) n.remove();
-      status.textContent = "Отправлено.";
-    } catch (err) { status.className = "rv-hint rv-bad"; status.textContent = "Не отправлено: " + err.message; }
+      status.textContent = t("Отправлено.");
+    } catch (err) { status.className = "rv-hint rv-bad"; status.textContent = t("Не отправлено: ") + err.message; }
     update();
   });
   const update = () => {
     const n = drafts.length;
-    count.textContent = n ? "Замечаний: " + n : "Замечаний нет";
-    hint.textContent = !ctx.send ? "Отправить можно, пока задача идёт или ждёт вашей приёмки." : n ? ctx.send.hint : "Нажмите номер строки или «Замечание к файлу», чтобы написать.";
+    count.textContent = n ? t("Замечаний: ") + n : t("Замечаний нет");
+    hint.textContent = !ctx.send ? t("Отправить можно, пока задача идёт или ждёт вашей приёмки.") : n ? ctx.send.hint : t("Нажмите номер строки или «Замечание к файлу», чтобы написать.");
     send.disabled = !n || !ctx.send;
     clear.hidden = !n;
   };
@@ -4720,8 +4930,8 @@ function rvPanel(model, ctx) {
     const card = el("div", "rv-note");
     const text = el("div", "", c.text);
     const row = el("div", "rv-btns");
-    const edit = btn("Изменить", "rv-mini", () => openForm(c, card, edit, c));
-    row.append(edit, btn("Убрать", "rv-mini", () => {
+    const edit = btn(t("Изменить"), "rv-mini", () => openForm(c, card, edit, c));
+    row.append(edit, btn(t("Убрать"), "rv-mini", () => {
       const at = drafts.indexOf(c); if (at >= 0) drafts.splice(at, 1);
       rvSave(ctx.scope); card.remove(); update();
     }));
@@ -4733,8 +4943,8 @@ function rvPanel(model, ctx) {
     closeForm();
     const form = el("div", "rv-note rv-form");
     const ta = el("textarea");
-    ta.setAttribute("aria-label", "Замечание: " + rvWhere(anchor));
-    ta.placeholder = "Что не так и как надо";
+    ta.setAttribute("aria-label", t("Замечание: ") + rvWhere(anchor));
+    ta.placeholder = t("Что не так и как надо");
     if (existing) { ta.value = existing.text; after.hidden = true; }
     const save = btn(existing ? t("Сохранить") : t("Добавить"), ctx.scene ? "sc-primary rv-mini" : "primary rv-mini", () => {
       const text = ta.value.trim();
@@ -4750,7 +4960,7 @@ function rvPanel(model, ctx) {
       else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel.click(); }
     });
     const row = el("div", "rv-btns"); row.append(save, cancel);
-    form.append(el("div", "rv-where", rvWhere(anchor)), ta, row, el("small", "rv-where", "Ctrl+Enter — добавить, Esc — отмена"));
+    form.append(el("div", "rv-where", rvWhere(anchor)), ta, row, el("small", "rv-where", t("Ctrl+Enter — добавить, Esc — отмена")));
     after.after(form);
     open = { form, back };
     ta.focus();
@@ -4759,7 +4969,7 @@ function rvPanel(model, ctx) {
   const known = new Set(files.map(f => f.path));
   if (files.length) {
     const body = el("div", "rv-body");
-    const nav = el("nav", "rv-files"); nav.setAttribute("aria-label", "Файлы");
+    const nav = el("nav", "rv-files"); nav.setAttribute("aria-label", t("Файлы"));
     const list = el("div", "rv-list");
     files.forEach((f, fi) => {
       const parsed = (f.patches || []).map(p => rvLines(p.text));
@@ -4780,17 +4990,17 @@ function rvPanel(model, ctx) {
       const fill = () => {
         if (filled) return;
         filled = true;
-        if (!parsed.length) det.append(el("div", "rv-meta", f.truncated ? "Текст правки не поместился в 2 МБ." : "Текста правки нет."));
+        if (!parsed.length) det.append(el("div", "rv-meta", f.truncated ? t("Текст правки не поместился в 2 МБ.") : t("Текста правки нет.")));
         parsed.forEach((lines, pi) => {
           const box = el("div", "rv-patch rv-code");
           const p = f.patches[pi];
-          if (p.agent || parsed.length > 1) box.append(el("div", "rv-meta", "Правка " + (pi + 1) + (p.agent ? " · " + p.agent : "")));
+          if (p.agent || parsed.length > 1) box.append(el("div", "rv-meta", t("Правка ") + (pi + 1) + (p.agent ? " · " + p.agent : "")));
           lines.forEach((ln, ri) => {
             if (ln.kind === "hunk" || ln.kind === "meta") { box.append(el("div", "rv-" + ln.kind, ln.text)); return; }
             const num = ln.kind === "del" ? ln.o : ln.n;
             const row = el("div", "rv-ln rv-" + ln.kind);
             const no = el("button", "rv-no", rvPad(ln.o) + " " + rvPad(ln.n)); no.type = "button";
-            no.setAttribute("aria-label", t("Замечание к строке") + (num != null ? " " + num : "") + (ln.kind === "add" ? ", добавлена" : ln.kind === "del" ? ", удалена" : ""));
+            no.setAttribute("aria-label", t("Замечание к строке") + (num != null ? " " + num : "") + (ln.kind === "add" ? t(", добавлена") : ln.kind === "del" ? t(", удалена") : ""));
             no.title = t("Написать замечание к этой строке");
             row.append(no, el("span", "rv-sg", ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "), el("span", "rv-tx", ln.text || " "));
             box.append(row);
@@ -4813,7 +5023,7 @@ function rvPanel(model, ctx) {
     });
     body.append(nav, list);
     root.append(body);
-  } else root.append(el("p", "rv-empty", model.source === "git" ? "В ветке задачи нет отличий от базы." : "Агенты пока не меняли файлы."));
+  } else root.append(el("p", "rv-empty", model.source === "git" ? t("В ветке задачи нет отличий от базы.") : t("Агенты пока не меняли файлы.")));
   // Comments on files that are no longer among the changes.
   for (const c of drafts) if (!known.has(c.path)) orphans.append(noteCard(c));
   bar.append(count, hint, clear, send, status, orphans);
@@ -4822,7 +5032,7 @@ function rvPanel(model, ctx) {
   return root;
 }
 
-// Scene: the "Правки" tab of a task.
+// Scene: the t("Правки") tab of a task.
 function rvAvailable(task) {
   if (!task || !task.work) return false;
   const d = scDept(task.work.department), files = sc.files.get(task.id);
@@ -4847,10 +5057,10 @@ function rvSceneSend(task) {
     const lanes = (sc.byTask.get(task.id) || []).slice().sort((a, b) => (b.busy - a.busy) || (b.lastTs - a.lastTs));
     const lane = lanes[0];
     if (!lane) return null;
-    return { label: t("Отправить агенту"), hint: "Уйдёт запиской агенту " + scName(lane) + ": он получит её после текущего хода и ответит заново.", run: text => post("/api/agent/note", { agent: lane.id, text }) };
+    return { label: t("Отправить агенту"), hint: t("Уйдёт запиской агенту ") + scName(lane) + t(": он получит её после текущего хода и ответит заново."), run: text => post("/api/agent/note", { agent: lane.id, text }) };
   }
   if (w.state === "review" || w.state === "stuck" || w.state === "done")
-    return { label: t("Вернуть с замечаниями"), hint: "Задача начнёт новый круг, замечания будут в её брифе.", run: text => post(taskPath(task, "/return"), { text }) };
+    return { label: t("Вернуть с замечаниями"), hint: t("Задача начнёт новый круг, замечания будут в её брифе."), run: text => post(taskPath(task, "/return"), { text }) };
   return null;
 }
 function scReview(task) {
@@ -4876,10 +5086,10 @@ function scReview(task) {
   // A comment being typed is never torn down: the panel waits until the form closes.
   if (box.dataset.task === task.id && box.querySelector(".rv-form")) return;
   box.dataset.sig = sig;
-  if (!cached) { box.dataset.task = task.id; box.replaceChildren(el("p", "rv-empty", "Загружаю правки…")); return; }
+  if (!cached) { box.dataset.task = task.id; box.replaceChildren(el("p", "rv-empty", t("Загружаю правки…"))); return; }
   const reload = () => { rv.cache.delete(task.id); box.dataset.sig = ""; scDirty(); };
   if (cached.error) {
-    const p = el("p", "rv-empty", "Правки не загрузились: " + cached.error + " ");
+    const p = el("p", "rv-empty", t("Правки не загрузились: ") + cached.error + " ");
     const again = el("button", "sc-btn", t("Ещё раз")); again.type = "button"; again.onclick = reload;
     p.append(again);
     box.dataset.task = task.id; box.replaceChildren(p);
@@ -4910,7 +5120,7 @@ function rvAgentModel(agent) {
   return { source: "events", files: [...files.values()], truncated: false };
 }
 function rvPaneButton(agent) {
-  const b = el("button", "rv-pane-btn", "Правки"); b.type = "button";
+  const b = el("button", "rv-pane-btn", t("Правки")); b.type = "button";
   b.title = t("Что этот агент менял в файлах за сессию");
   b.onclick = () => rvOpenAgent(agent);
   rv.paneBtns.set(agent, b);
@@ -4921,8 +5131,8 @@ function rvPaneCount(agent) {
   const b = rv.paneBtns.get(agent);
   if (!b) return;
   const n = new Set((rv.byAgent.get(agent) || []).map(d => d.path)).size;
-  b.textContent = n ? "Правки · " + n : "Правки";
-  b.setAttribute("aria-label", n ? "Правки агента: " + tn(n, pluralWords.file) : "Правки агента: пока нет");
+  b.textContent = n ? t("Правки · ") + n : t("Правки");
+  b.setAttribute("aria-label", n ? t("Правки агента: ") + tn(n, pluralWords.file) : t("Правки агента: пока нет"));
 }
 function rvOpenAgent(agent) {
   let dlg = $("#rv-dlg");
@@ -4934,14 +5144,14 @@ function rvOpenAgent(agent) {
   rv.open = { agent };
   const inner = el("div", "rv-dlg-in");
   const top = el("div", "rv-dlg-top");
-  const title = el("h2", "", "Правки · " + agent); title.id = "rv-dlg-title";
+  const title = el("h2", "", t("Правки · ") + agent); title.id = "rv-dlg-title";
   dlg.setAttribute("aria-labelledby", title.id);
   const refresh = el("button", "", t("Обновить")); refresh.type = "button"; refresh.onclick = () => rvOpenAgent(agent);
   const close = el("button", "", t("Закрыть")); close.type = "button"; close.onclick = () => dlg.close();
   top.append(title, refresh, close);
   inner.append(top, rvPanel(rvAgentModel(agent), {
     scope: "agent:" + agent, scene: false, reload: null,
-    send: { label: t("Отправить агенту"), hint: "Уйдёт агенту " + agent + " обычным заданием. Если он занят, дождитесь конца хода.", run: text => post("/api/prompt", { agent, text }) },
+    send: { label: t("Отправить агенту"), hint: t("Уйдёт агенту ") + agent + t(" обычным заданием. Если он занят, дождитесь конца хода."), run: text => post("/api/prompt", { agent, text }) },
   }));
   dlg.replaceChildren(inner);
   if (!dlg.open) dlg.showModal();
@@ -4959,7 +5169,7 @@ async function refreshState() {
   const ready = await loadState();
   if (ready && !tasksLoaded) try { await loadTasks(); } catch (_) {}
   if (ready && !es) connect();
-  if (!ready && !es) setConn("bad", TOKEN ? "не удалось загрузить команду" : "нет токена");
+  if (!ready && !es) setConn("bad", TOKEN ? t("не удалось загрузить команду") : t("нет токена"));
   setTimeout(refreshState, 5000);
 }
 refreshState();

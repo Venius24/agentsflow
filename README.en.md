@@ -2,6 +2,8 @@
 
 [Русский](README.md) · **English**
 
+The web page is available in Russian and English.
+
 A lightweight gateway for a team of Claude Code and Codex agents. Each team member runs as its own CLI process, and all their events are converted to one common format. The orchestrator manages workflows and the mail between members.
 
 ```
