@@ -309,9 +309,9 @@
     --ink-filter: invert(1); --lift-filter: brightness(2.1) saturate(.7); color-scheme: dark;
   }
   .sc { position: fixed; inset: 0; z-index: 5; display: grid; grid-template-columns: 264px minmax(0, 1fr) 272px; background: var(--bg); color: var(--ink); font: 400 14px/1.55 var(--font); -webkit-font-smoothing: antialiased; font-variant-numeric: normal; }
-  .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"] { grid-template-columns: 264px minmax(0, 1fr) 0; }
-  .sc.sc-noinfo .sc-info, .sc[data-mode="board"] .sc-info, .sc[data-mode="new"] .sc-info { display: none; }
-  .sc[data-mode="board"] #sc-panel, .sc[data-mode="new"] #sc-panel { visibility: hidden; }
+  .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"], .sc[data-mode="inbox"], .sc[data-mode="office"] { grid-template-columns: 264px minmax(0, 1fr) 0; }
+  .sc.sc-noinfo .sc-info, .sc[data-mode="board"] .sc-info, .sc[data-mode="new"] .sc-info, .sc[data-mode="inbox"] .sc-info, .sc[data-mode="office"] .sc-info { display: none; }
+  .sc[data-mode="board"] #sc-panel, .sc[data-mode="new"] #sc-panel, .sc[data-mode="inbox"] #sc-panel, .sc[data-mode="office"] #sc-panel { visibility: hidden; }
   .sc ::selection { background: var(--accent-soft); color: var(--ink); }
   .sc code { font-family: var(--mono); font-size: 12.5px; }
   .sc h1, .sc h2, .sc h3 { font-weight: 600; }
@@ -356,7 +356,8 @@
   .sc-si.sc-done { color: var(--muted); }
   .sc-si.sc-quiet { color: var(--muted); cursor: default; }
   .sc-si .sc-lead { width: 16px; display: grid; place-items: center; flex: none; color: var(--muted); }
-  .sc-newtask { margin: 4px 8px 6px; }
+  .sc-side-nav { display: grid; gap: 1px; margin: 4px 8px 6px; }
+  .sc-side-nav .sc-new { margin-left: auto; }
   .sc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
   .sc-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: sc-spin .9s linear infinite; flex: none; }
   @keyframes sc-spin { to { transform: rotate(360deg); } }
@@ -404,6 +405,7 @@
   .sc[data-mode="scene"] .sc-view-scene { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); }
   .sc[data-mode="board"] .sc-view-board { display: block; }
   .sc[data-mode="new"] .sc-view-new { display: block; }
+  .sc[data-mode="inbox"] .sc-view-inbox, .sc[data-mode="office"] .sc-view-office { display: block; }
 
   .sc-steps { display: flex; align-items: center; gap: 6px; padding: 10px 18px; border-bottom: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--muted); white-space: nowrap; scrollbar-width: none; min-height: 45px; }
   .sc-st { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 5px; border-radius: 999px; flex: none; }
@@ -563,6 +565,31 @@
   .sc-newbox .sc-btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
   .sc-view-board { overflow: auto; padding: 18px 18px 24px; min-height: 0; }
+  /* Inbox and "Отделы и правила": letters to the owner, departments, schedules, rules. */
+  .sc-view-inbox, .sc-view-office { overflow: auto; padding: 28px 24px 40px; min-height: 0; }
+  .sc-page { max-width: 880px; margin: 0 auto; display: grid; gap: 12px; }
+  .sc-page > h2 { margin: 0; font-size: 22px; letter-spacing: -.015em; }
+  .sc-page > p { margin: 0 0 4px; color: var(--muted); font-size: 13.5px; }
+  .sc-page h3 { margin: 14px 0 0; font-size: 13px; color: var(--muted); font-weight: 500; display: flex; gap: 8px; align-items: center; }
+  .sc-letter { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: grid; gap: 6px; min-width: 0; }
+  .sc-letter.sc-unread { box-shadow: inset 3px 0 0 var(--accent); }
+  .sc-letter-h { display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; font-size: 12px; color: var(--muted); }
+  .sc-letter-h b { color: var(--ink); font-size: 13.5px; font-weight: 600; flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+  .sc-letter-b { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; color: var(--ink-2); max-height: 7.5em; overflow: hidden; }
+  .sc-letter-b.sc-open { max-height: none; }
+  .sc-letter .sc-btns, .sc-box .sc-btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .sc .sc-letter textarea { min-height: 64px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: 13.5px/1.45 var(--font); outline: none; width: 100%; }
+  .sc-linkbtn { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+  .sc-linkbtn:hover { color: var(--ink); }
+  .sc-office-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .sc-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+  .sc-box h4 { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .sc-box p { margin: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+  .sc-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; font-size: 12.5px; margin: 0; }
+  .sc-kv dt { color: var(--muted); } .sc-kv dd { margin: 0; color: var(--ink-2); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .sc-box pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--mono); background: var(--raised); border-radius: var(--r-sm); padding: 8px 10px; }
+  .sc-tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12.5px; color: var(--muted); }
+  .sc-tools select { height: 32px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); font: 13px var(--font); padding: 0 8px; max-width: 100%; }
   .sc-cols { display: grid; grid-template-columns: repeat(4, minmax(240px, 1fr)); gap: 14px; align-items: start; min-width: 1000px; }
   .sc-col { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px; display: grid; gap: 8px; align-content: start; min-height: 220px; transition: border-color .15s, background .15s; }
   .sc-col.sc-drop { border-color: var(--accent); background: var(--accent-soft); }
@@ -591,7 +618,9 @@
     .sc.sc-showinfo[data-mode="scene"] .sc-info { display: grid; }
   }
   @media (max-width: 880px) {
-    .sc, .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"] { grid-template-columns: minmax(0, 1fr); }
+    .sc, .sc.sc-noinfo, .sc[data-mode="board"], .sc[data-mode="new"], .sc[data-mode="inbox"], .sc[data-mode="office"] { grid-template-columns: minmax(0, 1fr); }
+    .sc-view-inbox, .sc-view-office { padding: 20px 16px; }
+    .sc-office-grid { grid-template-columns: minmax(0, 1fr); }
     .sc-side { display: none; position: fixed; inset: 0 auto 0 0; width: min(300px, 86vw); z-index: 25; box-shadow: 12px 0 32px rgba(0, 0, 0, .3); }
     .sc.sc-showside .sc-side { display: grid; }
     .sc-close-side { display: inline-grid !important; }
@@ -887,6 +916,7 @@
     <symbol id="sci-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
     <symbol id="sci-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
     <symbol id="sci-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+    <symbol id="sci-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
     <symbol id="sci-home" viewBox="0 0 24 24"><path d="M4 21V9l8-5 8 5v12"/><path d="M9 21v-6h6v6"/></symbol>
     <symbol id="sci-clip" viewBox="0 0 24 24"><path d="m21 11.5-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.8-8.8a3.7 3.7 0 0 1 5.2 5.2l-8.8 8.8a1.8 1.8 0 0 1-2.6-2.6l8.1-8.1"/></symbol>
     <symbol id="sci-down" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></symbol>
@@ -902,7 +932,11 @@
       <span class="sc-sp"></span>
       <button class="sc-ib sc-close-side" type="button" id="sc-close-side" aria-label="Скрыть список задач"><svg class="sc-g"><use href="#sci-x"/></svg></button>
     </div>
-    <a class="sc-si sc-newtask" href="#new" id="sc-newlink"><span class="sc-lead"><svg class="sc-g"><use href="#sci-new"/></svg></span><span class="sc-t">Новая задача</span></a>
+    <div class="sc-side-nav">
+      <a class="sc-si" href="#new" id="sc-newlink"><span class="sc-lead"><svg class="sc-g"><use href="#sci-new"/></svg></span><span class="sc-t">Новая задача</span></a>
+      <a class="sc-si" href="#inbox" id="sc-inboxlink"><span class="sc-lead"><svg class="sc-g"><use href="#sci-mail"/></svg></span><span class="sc-t">Входящие</span><span class="sc-new" id="sc-inbox-n" hidden></span></a>
+      <a class="sc-si" href="#office" id="sc-officelink"><span class="sc-lead"><svg class="sc-g"><use href="#sci-home"/></svg></span><span class="sc-t">Отделы и правила</span><span class="sc-new" id="sc-office-n" hidden></span></a>
+    </div>
     <div class="sc-scroll" id="sc-list"></div>
     <div class="sc-side-foot">
       <div class="sc-usage" id="sc-usage"></div>
@@ -913,7 +947,7 @@
         <span class="sc-conn" id="sc-conn"></span><span id="sc-conn-text">подключение…</span>
         <span class="sc-sp"></span>
         <button class="sc-ib" type="button" id="sc-theme" aria-label="Сменить тему" title="Сменить тему"><svg class="sc-g"><use href="#sci-moon"/></svg></button>
-        <button class="sc-ib" type="button" id="sc-classic" aria-label="Классический вид" title="Классический вид: отделы, правила, расписания, чаты, почта"><svg class="sc-g"><use href="#sci-grid"/></svg></button>
+        <button class="sc-ib" type="button" id="sc-classic" hidden aria-label="Классический вид" title="Классический вид: отделы, правила, расписания, чаты, почта"><svg class="sc-g"><use href="#sci-grid"/></svg></button>
       </div>
     </div>
   </aside>
@@ -942,6 +976,8 @@
     </div>
     <div class="sc-view sc-view-board" id="sc-board"></div>
     <div class="sc-view sc-view-new" id="sc-new"></div>
+    <div class="sc-view sc-view-inbox" id="sc-inbox"></div>
+    <div class="sc-view sc-view-office" id="sc-office"></div>
   </main>
 
   <aside class="sc-info" id="sc-info" aria-label="Задача"></aside>
@@ -1068,7 +1104,7 @@ const translations = {
   "или перетащите их сюда, можно вставить из буфера": "or drop them here, or paste from the clipboard",
   "Что сделать?": "What needs doing?",
   "Оркестратор разберёт сообщение на задачи, раздаст их отделам и спросит, если чего-то не хватает. Задачи появятся слева.": "The orchestrator will split your message into tasks, assign them to departments, and ask if anything is missing. Tasks will appear on the left.",
-  "Принято. Задачи появятся слева, ответ придёт в почту и Telegram.": "Received. Tasks will appear on the left; the answer will arrive by mail and Telegram.",
+  "Принято. Задачи появятся слева, ответ придёт во «Входящие» и в Telegram.": "Received. Tasks will appear on the left; the answer will arrive in the Inbox and Telegram.",
   "Задача ": "Task ",
   "отдел": "department",
   "Уйдёт наружу": "External",
@@ -1416,7 +1452,16 @@ const translations = {
   "Ещё раз": "Try again", "Правок нет": "No changes", "Замечание к файлу": "Comment on file",
   "Замечание к строке": "Comment on line", "Написать замечание к этой строке": "Comment on this line",
   "Отправить агенту": "Send to agent", "Вернуть с замечаниями": "Return with comments", "Что этот агент менял в файлах за сессию": "Files changed by this agent during the session",
-  "Сильная модель держит замысел: пишет постановку исполнителю и сама проверяет результат. Мелкие задачи идут без наставника. Действует на задачи, запущенные после выбора.": "A strong model writes the brief and reviews the result. Small tasks skip the mentor. Applies to tasks started after the choice."
+  "Сильная модель держит замысел: пишет постановку исполнителю и сама проверяет результат. Мелкие задачи идут без наставника. Действует на задачи, запущенные после выбора.": "A strong model writes the brief and reviews the result. Small tasks skip the mentor. Applies to tasks started after the choice.",
+  "Входящие": "Inbox", "Отделы и правила": "Departments and rules", "Оркестратор": "Orchestrator", "agentsflow, уведомление": "agentsflow notice",
+  "Открыть задачу": "Open task",
+  "Ответ оркестратору (Ctrl+Enter — отправить)": "Reply to the orchestrator (Ctrl+Enter to send)", "Ответ оркестратору": "Reply to the orchestrator",
+  "Ответ ушёл оркестратору": "Reply sent to the orchestrator", "Показать ещё ": "Show more: ",
+  "Ответы оркестратора, итоги задач и уведомления системы. Те же письма приходят в Telegram.": "Orchestrator replies, task results and system notices. The same letters go to Telegram.",
+  "Кто в каких отделах, сколько они тратят, расписания и правила, которые отделы предлагают себе.": "Who is in which department, what they spend, schedules, and the rules departments propose for themselves.",
+  "Ждут вашего решения: правила": "Rules waiting for your decision", "Расписаний пока нет.": "No schedules yet.",
+  "Отделы пока не добавляли себе правил. Новые предложения появятся здесь и в «Ждёт вас».": "Departments haven't added any rules yet. New proposals will show up here and under “Waiting for you”.",
+  "Прочее": "Other", "Экспорт в Markdown": "Export to Markdown", "Экспорт в JSONL": "Export to JSONL"
 };
 function t(ru, vars = {}) {
   return (language === "en" ? (translations[ru] || ru) : ru).replace(/\{(\w+)\}/g, (match, key) => key in vars ? vars[key] : match);
@@ -1464,8 +1509,7 @@ function el(tag, cls, text) {
   return n;
 }
 function api(path) { return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN); }
-async function downloadExport(format) {
-  const error = $("#export-error");
+async function downloadExport(format, error = $("#export-error")) {
   error.textContent = "";
   try {
     const response = await fetch(api("/api/export?format=" + encodeURIComponent(format)));
@@ -1927,6 +1971,7 @@ function handle(env) {
 
 const orch = { running: false, workflows: [] };
 const mail = { threads: new Map(), messages: new Map(), read: new Set(), viewed: new Set(), awaiting: new Set(), agentsKnown: false };
+const inbox = [];
 function buildOrch() {
   const col = el("section", "col orch");
   orch.col = col;
@@ -2200,6 +2245,8 @@ function handleMail(env) {
   item.append(body, more);
   thread.items.append(item);
   mail.messages.set(ev.id, { unread, body, more, to: ev.to, from: ev.from });
+  // Letters to the owner also go to the scene's inbox.
+  if (ev.to === "orchestrator") { inbox.push({ id: ev.id, from: ev.from, subject: ev.subject, body: ev.body, ts: env.ts_ms }); try { scDirty(); } catch (_) {} }
   thread.messageIds.push(ev.id);
   mail.log.prepend(thread.card);
   for (const other of mail.threads.values()) if (!other.manual) other.card.open = other === thread;
@@ -3156,6 +3203,7 @@ const sc = {
   mode: "scene", task: null, lanes: new Map(), byTask: new Map(), wf: new Map(), files: new Map(),
   show: new Map(), more: new Set(), timer: 0, ticks: 0, dragging: null, infoSig: "", emptySig: "", note: null,
   taskFiles: new Map(), filesKey: new Map(), rview: new Map(), resultText: new Map(), resultLoading: new Set(), seenTicks: 0, seenTask: null,
+  fresh: new Set(), letterOpen: new Set(), inboxAll: false,
 };
 const scReduce = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -3758,10 +3806,9 @@ function scSide() {
   if (!waits.length && !homeData.proposals.length) nodes.push(el("div", "sc-si sc-quiet", t("Ничего не ждёт вашего решения")));
   for (const t of waits) nodes.push(scItem(t, true));
   if (homeData.proposals.length) {
-    const a = el("a", "sc-si"); a.href = "#";
+    const a = el("a", "sc-si"); a.href = "#office";
     const lead = el("span", "sc-lead"); lead.append(el("span", "sc-dot"));
     a.append(lead, el("span", "sc-t", t("Правила отделов")), el("small", "", String(homeData.proposals.length)));
-    a.onclick = e => { e.preventDefault(); setView("home"); };
     nodes.push(a);
   }
   nodes.push(el("div", "sc-sec", t("Отделы")));
@@ -3790,6 +3837,12 @@ function scSide() {
   list.replaceChildren(...nodes);
   list.scrollTop = top;
   $("#sc-newlink").toggleAttribute("aria-current", sc.mode === "new");
+  $("#sc-inboxlink").toggleAttribute("aria-current", sc.mode === "inbox");
+  $("#sc-officelink").toggleAttribute("aria-current", sc.mode === "office");
+  const unread = sc.mode === "inbox" ? 0 : scInboxUnread(), inboxN = $("#sc-inbox-n");
+  inboxN.hidden = !unread; inboxN.textContent = String(unread);
+  const officeN = $("#sc-office-n");
+  officeN.hidden = !homeData.proposals.length; officeN.textContent = String(homeData.proposals.length);
   // Month spend and the sum of the departments' month limits.
   const usage = $("#sc-usage");
   if (homeData.spend) {
@@ -3812,6 +3865,8 @@ function scWaitCount() { return scTasks().filter(t => ownerWaits(t.work)).length
 function scBar(task) {
   const crumb = $("#sc-crumb"), title = $("#sc-title");
   if (sc.mode === "board") { crumb.textContent = t("Доска /"); title.textContent = t("Все задачи"); }
+  else if (sc.mode === "inbox") { crumb.textContent = ""; title.textContent = t("Входящие"); }
+  else if (sc.mode === "office") { crumb.textContent = ""; title.textContent = t("Отделы и правила"); }
   else if (sc.mode === "new" || !task) { crumb.textContent = ""; title.textContent = t("Новая задача"); }
   else { const d = scDept(task.work.department); crumb.textContent = (d ? d.title : task.work.department) + " /"; title.textContent = task.title; }
   for (const b of document.querySelectorAll("[data-sc-mode]")) b.setAttribute("aria-pressed", String(b.dataset.scMode === (sc.mode === "new" ? "scene" : sc.mode)));
@@ -4253,7 +4308,7 @@ function scNew() {
     const files = att.paths();
     if (!ta.value.trim() && !files.length) { ta.focus(); return; }
     send.disabled = true; status.className = "sc-hint"; status.textContent = "";
-    try { await post("/api/orchestrator", { text: ta.value.trim() || "Разбери приложенные файлы.", files }); ta.value = ""; att.clear(); status.textContent = t("Принято. Задачи появятся слева, ответ придёт в почту и Telegram."); }
+    try { await post("/api/orchestrator", { text: ta.value.trim() || "Разбери приложенные файлы.", files }); ta.value = ""; att.clear(); status.textContent = t("Принято. Задачи появятся слева, ответ придёт во «Входящие» и в Telegram."); }
     catch (err) { status.className = "sc-hint sc-bad"; status.textContent = t("Ошибка: ") + err.message; }
     finally { send.disabled = false; }
   };
@@ -4277,15 +4332,185 @@ function scRender() {
   scSide(); scBar(task);
   if (sc.mode === "scene") { scSteps(task); scPanes(task); scResultTabs(task); scInfo(task); }
   else if (sc.mode === "board") scBoard();
+  else if (sc.mode === "inbox") scInbox();
+  else if (sc.mode === "office") scOffice();
   else scNew();
+}
+// ---- Inbox: letters to the owner (orchestrator replies, results, notices) ----
+function scInboxSeen() {
+  let seen = NaN;
+  try { seen = Number(localStorage.getItem("agentsflow.inboxSeen")); } catch (_) {}
+  if (!seen) { seen = Date.now(); try { localStorage.setItem("agentsflow.inboxSeen", String(seen)); } catch (_) {} }
+  return seen;
+}
+function scInboxUnread() { const seen = scInboxSeen(); return inbox.filter(m => m.ts > seen).length; }
+function scFrom(id) { return id === NOTICE_FROM_UI ? t("agentsflow, уведомление") : id === "оркестратор" ? t("Оркестратор") : id; }
+const NOTICE_FROM_UI = "agentsflow";
+function scLetterTask(m) {
+  for (const id of (m.subject + " " + m.body).match(/\b[0-9a-f]{8}\b/g) || []) if (taskCards.has(id)) return taskCards.get(id);
+  return null;
+}
+function scLetter(m) {
+  const card = el("article", "sc-letter" + (sc.fresh.has(m.id) ? " sc-unread" : ""));
+  const head = el("div", "sc-letter-h");
+  head.append(el("b", "", m.subject));
+  if (sc.fresh.has(m.id)) head.append(el("span", "sc-new", t("новое")));
+  head.append(el("span", "", scFrom(m.from)), el("span", "", scWhen(m.ts)));
+  const body = el("div", "sc-letter-b" + (sc.letterOpen.has(m.id) ? " sc-open" : ""), m.body);
+  card.append(head, body);
+  const btns = el("div", "sc-btns"), errBox = el("div", "sc-err-t");
+  if (m.body.length > 360 || m.body.split("\n").length > 5) {
+    const more = el("button", "sc-linkbtn", sc.letterOpen.has(m.id) ? t("свернуть") : t("показать полностью")); more.type = "button";
+    more.onclick = () => {
+      if (sc.letterOpen.has(m.id)) sc.letterOpen.delete(m.id); else sc.letterOpen.add(m.id);
+      body.classList.toggle("sc-open"); more.textContent = body.classList.contains("sc-open") ? t("свернуть") : t("показать полностью");
+    };
+    btns.append(more);
+  }
+  const task = scLetterTask(m);
+  if (task) { const a = el("a", "sc-btn", t("Открыть задачу")); a.href = "#task=" + encodeURIComponent(task.id); a.title = task.title; btns.append(a); }
+  const reply = el("button", "sc-btn", t("Ответить")); reply.type = "button";
+  btns.append(reply);
+  card.append(btns);
+  reply.onclick = () => {
+    if (card.querySelector("form")) { card.querySelector("textarea").focus(); return; }
+    const form = el("form", "sc-btns"), ta = el("textarea"), send = el("button", "sc-btn sc-primary", t("Отправить оркестратору")); send.type = "submit";
+    ta.placeholder = t("Ответ оркестратору (Ctrl+Enter — отправить)"); ta.setAttribute("aria-label", t("Ответ оркестратору"));
+    form.append(ta, send);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (!ta.value.trim()) { ta.focus(); return; }
+      send.disabled = true; errBox.textContent = "";
+      try { await post("/api/orchestrator", { text: "Ответ на письмо «" + m.subject + "»:\n" + ta.value.trim(), files: [] }); form.remove(); scToast(t("Ответ ушёл оркестратору")); }
+      catch (err) { errBox.textContent = err.message; }
+      finally { send.disabled = false; }
+    };
+    ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) form.requestSubmit(); });
+    card.append(form);
+    ta.focus();
+  };
+  card.append(errBox);
+  return card;
+}
+function scInbox() {
+  const root = $("#sc-inbox");
+  // Don't wipe a half-typed reply under the owner's cursor.
+  if (root.contains(document.activeElement) && document.activeElement.tagName === "TEXTAREA") { setTimeout(scDirty, 2000); return; }
+  if ([...root.querySelectorAll("textarea")].some(ta => ta.value.trim())) return;
+  const seen = scInboxSeen(), last = inbox.reduce((max, m) => Math.max(max, m.ts || 0), 0);
+  for (const m of inbox) if (m.ts > seen) sc.fresh.add(m.id);
+  if (last > seen) try { localStorage.setItem("agentsflow.inboxSeen", String(last)); } catch (_) {}
+  const sig = inbox.length + ":" + sc.fresh.size + ":" + taskCards.size + ":" + language;
+  if (root.dataset.sig === sig && root.firstChild) return;
+  root.dataset.sig = sig;
+  const page = el("div", "sc-page");
+  page.append(el("h2", "", t("Входящие")), el("p", "", t("Ответы оркестратора, итоги задач и уведомления системы. Те же письма приходят в Telegram.")));
+  const list = [...inbox].sort((a, b) => b.ts - a.ts);
+  if (!list.length) page.append(el("div", "sc-col-empty", t("Писем пока нет")));
+  const shown = sc.inboxAll ? list : list.slice(0, 60);
+  for (const m of shown) page.append(scLetter(m));
+  if (shown.length < list.length) {
+    const more = el("button", "sc-btn", t("Показать ещё ") + (list.length - shown.length)); more.type = "button";
+    more.onclick = () => { sc.inboxAll = true; root.dataset.sig = ""; scInbox(); };
+    page.append(more);
+  }
+  root.replaceChildren(page);
+}
+// ---- Departments, schedules and rules (was the classic "Отделы" view) ----
+function scOffice() {
+  const root = $("#sc-office");
+  const sig = JSON.stringify([homeData.departments, homeData.schedules, homeData.proposals, homeData.recent, homeData.spend, homeData.error, language]);
+  if (root.dataset.sig === sig && root.firstChild) return;
+  root.dataset.sig = sig;
+  const page = el("div", "sc-page");
+  page.append(el("h2", "", t("Отделы и правила")), el("p", "", t("Кто в каких отделах, сколько они тратят, расписания и правила, которые отделы предлагают себе.")));
+  if (homeData.error) page.append(el("div", "sc-err-t", homeData.error));
+
+  if (homeData.proposals.length) {
+    const h = el("h3"); h.append(el("span", "sc-dot"), el("span", "", t("Ждут вашего решения: правила")));
+    page.append(h);
+    for (const p of homeData.proposals) {
+      const box = el("div", "sc-box"), errBox = el("div", "sc-err-t"), btns = el("div", "sc-btns");
+      const path = "/api/rules/" + encodeURIComponent(p.target) + "/" + encodeURIComponent(p.id);
+      btns.append(scAct(t("Добавить"), "sc-primary", "check", () => post(path + "/approve", {}), errBox), scAct(t("Отклонить"), "sc-danger", "x", () => post(path + "/reject", {}), errBox));
+      box.append(el("h4", "", t("Правило для «") + p.target + "»"), el("pre", "", p.text), btns, errBox);
+      page.append(box);
+    }
+  }
+
+  page.append(el("h3", "", t("Отделы")));
+  if (homeData.spend) {
+    const all = Object.values(homeData.spend.tokens || {});
+    const sum = key => all.reduce((s, x) => s + (x[key] || 0), 0);
+    const orch = homeData.spend.month && homeData.spend.month.orchestrator;
+    const line = el("div", "sc-tools", t("Расход за месяц: ") + spent(homeData.spend.total_usd, sum("input"), sum("output")) + (orch ? t(", из них оркестратор ") + money(orch) : ""));
+    page.append(line);
+    if (sum("unpriced_input") || sum("unpriced_output")) page.append(el("div", "sc-tools", t("Без цены (Codex, нет [prices.codex]): ") + tokens(sum("unpriced_input")) + " → " + tokens(sum("unpriced_output")) + t(" токенов, в долларах не учтены.")));
+  }
+  const grid = el("div", "sc-office-grid");
+  for (const d of homeData.departments) {
+    const box = el("div", "sc-box");
+    box.append(el("h4", "", d.title + " · " + d.id));
+    if (d.description) box.append(el("p", "", d.description));
+    const dl = el("dl", "sc-kv"), row = (k, v) => dl.append(el("dt", "", k), el("dd", "", v));
+    const used = d.month_tokens || {};
+    row(t("Состав"), (d.agents || []).map(a => a.id + " (" + a.kind + ((a.roles || []).length ? ", " + a.roles.join(", ") : "") + ")").join(" · "));
+    row(t("Идёт"), d.running + t(" из ") + d.max_parallel);
+    row(t("За месяц"), money(d.month_spent_usd) + (d.limits.month_usd ? t(" из ") + money(d.limits.month_usd) : ""));
+    row(t("Токены"), tokens(used.input) + " → " + tokens(used.output) + (used.unpriced_input ? t(", из них без цены ") + tokens(used.unpriced_input) + " → " + tokens(used.unpriced_output) : ""));
+    row(t("Задача"), t("до ") + money(d.limits.task_usd) + ", " + d.limits.timeout_mins + t(" мин, кругов ") + d.limits.max_loops);
+    box.append(dl);
+    if (d.limits.month_usd) box.append(scMeter(d.month_spent_usd, d.limits.month_usd));
+    grid.append(box);
+  }
+  if (!homeData.departments.length) page.append(el("div", "sc-col-empty", t("Загрузка…")));
+  page.append(grid);
+
+  page.append(el("h3", "", t("Расписания")));
+  if (!homeData.schedules.length) page.append(el("div", "sc-tools", t("Расписаний пока нет.")));
+  {
+    for (const item of homeData.schedules) {
+      const box = el("div", "sc-box"), errBox = el("div", "sc-err-t"), btns = el("div", "sc-btns");
+      const next = item.paused ? t("на паузе") : item.next_ms ? t("следующий запуск ") + new Date(item.next_ms).toLocaleString(language) : t("не запланировано");
+      const path = "/api/schedules/" + encodeURIComponent(item.key);
+      btns.append(scAct(item.paused ? t("Возобновить") : t("Пауза"), "", "", () => post(path + (item.paused ? "/resume" : "/pause"), {}), errBox), scAct(t("Запустить сейчас"), "", "", () => post(path + "/run", {}), errBox));
+      box.append(el("h4", "", item.title), el("p", "", item.department + " · " + item.cron + " · " + next), btns, errBox);
+      page.append(box);
+    }
+  }
+
+  page.append(el("h3", "", t("Последние правила")));
+  if (!homeData.recent.length) page.append(el("div", "sc-tools", t("Отделы пока не добавляли себе правил. Новые предложения появятся здесь и в «Ждёт вас».")));
+  {
+    for (const rule of homeData.recent) {
+      const box = el("div", "sc-box"), errBox = el("div", "sc-err-t"), btns = el("div", "sc-btns");
+      btns.append(scAct(t("Отменить"), "sc-danger", "undo", () => post("/api/rules/revert/" + encodeURIComponent(rule.commit), {}), errBox));
+      box.append(el("h4", "", rule.subject), el("p", "", rule.date + " · " + rule.commit.slice(0, 7)), btns, errBox);
+      page.append(box);
+    }
+  }
+
+  page.append(el("h3", "", t("Прочее")));
+  const tools = el("div", "sc-tools"), errBox = el("span", "sc-err-t");
+  const md = el("button", "sc-btn", t("Экспорт в Markdown")); md.type = "button"; md.onclick = () => downloadExport("md", errBox);
+  const jl = el("button", "sc-btn", t("Экспорт в JSONL")); jl.type = "button"; jl.onclick = () => downloadExport("jsonl", errBox);
+  tools.append(md, jl);
+  const projects = $("#project-controls");
+  if (!projects.hidden) { $("#project-switch").className = "sc-btn"; tools.append(projects); }
+  const version = $("#app-version").textContent;
+  if (version) tools.append(el("span", "", "agentsflow " + version));
+  page.append(tools, errBox);
+  root.replaceChildren(page);
 }
 function scDirty() {
   if (!sc.timerRender && !$("#scene").hidden) sc.timerRender = setTimeout(scRender, 150);
 }
 function scFromHash() {
   const h = decodeURIComponent(location.hash.slice(1));
+  if (sc.mode === "inbox" && h !== "inbox") sc.fresh.clear();
   if (h === "board") sc.mode = "board";
   else if (h === "new") sc.mode = "new";
+  else if (h === "inbox" || h === "office") sc.mode = h;
   else { sc.mode = "scene"; if (h.startsWith("task=")) sc.task = h.slice(5); }
   sc.infoSig = "";
   scRender();
@@ -4367,6 +4592,8 @@ $("#sc-theme").onclick = () => {
   r.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("agentsflow.theme", r.dataset.theme); } catch (_) {}
 };
+// The classic views left the departments mode (archived 2026-11-16); ?classic=1 still opens them.
+$("#sc-classic").hidden = !new URLSearchParams(location.search).has("classic");
 $("#sc-classic").onclick = () => setView("home");
 $("#sc-menu").onclick = () => $("#scene").classList.toggle("sc-showside");
 $("#sc-close-side").onclick = () => $("#scene").classList.remove("sc-showside");

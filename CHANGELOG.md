@@ -4,9 +4,11 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The workspace version is `0.1.0`, but no release has been published yet. Everything below is the history up to now, summarized from the git log. When the first release is tagged (`v0.1.0`), rename "Unreleased" to `0.1.0` with the date and start a new empty "Unreleased" section above it.
+Everything in 0.1.0 is the history up to the first release, summarized from the git log.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-11-16
 
 ### Added
 
@@ -71,4 +73,5 @@ The workspace version is `0.1.0`, but no release has been published yet. Everyth
 - The page no longer drags the view back down while you scroll up.
 - In departments mode the page always opens on the "Сцена".
 
-[Unreleased]: https://github.com/Venius24/agentsflow/commits/master
+[Unreleased]: https://github.com/Venius24/agentsflow/compare/v0.1.0...master
+[0.1.0]: https://github.com/Venius24/agentsflow/releases/tag/v0.1.0
