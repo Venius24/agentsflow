@@ -1577,6 +1577,9 @@ function icon(name, size = 18) {
   for (const d of ICONS[name]) s.append(d === "circle" ? svg("circle", { cx: 12, cy: 12, r: 2.5 }) : svg("path", { d }));
   return s;
 }
+function agentKindName(kind) {
+  return ({ gemini: "Gemini", opencode: "OpenCode", acp: "ACP" })[kind] || kind;
+}
 function updatePaneInfo(p, member) {
   p.a = member;
   p.col.style.setProperty("--accent", accentFor(member));
@@ -1586,7 +1589,7 @@ function updatePaneInfo(p, member) {
   p.guard.hidden = member.guard !== true || member.mode === "bypass";
   const mode = { ask: t("спрашивает"), auto: t("авто"), smart: t("умный"), bypass: "BYPASS" }[member.mode];
   const sandbox = member.kind === "codex" ? (member.mode === "bypass" ? t("без песочницы") : member.sandbox) : null;
-  p.subtitle.textContent = [member.kind || t("тип неизвестен"), member.model || t("по умолчанию"), member.effort || t("по умолчанию"), mode, sandbox, member.title].filter(Boolean).join(" · ");
+  p.subtitle.textContent = [agentKindName(member.kind) || t("тип неизвестен"), member.model || t("по умолчанию"), member.effort || t("по умолчанию"), mode, sandbox, member.title].filter(Boolean).join(" · ");
   p.input.placeholder = t("Задание для ") + member.id;
   p.input.title = t("Enter — отправить, Shift+Enter — перенос строки");
 }
@@ -2462,7 +2465,7 @@ function renderDash() {
   for (const member of team) {
     const card = el("article", "dash-card"); card.dataset.agent = member.id; card.style.setProperty("--c", lineColor(member.id));
     const pane = panes[member.id], stats = statsData && statsData.agents[member.id] || {};
-    card.append(el("h2", "", member.id), el("div", "dash-muted", [member.kind, member.model || t("по умолчанию"), member.effort || t("по умолчанию"), member.mode].join(" · ")));
+    card.append(el("h2", "", member.id), el("div", "dash-muted", [agentKindName(member.kind), member.model || t("по умолчанию"), member.effort || t("по умолчанию"), member.mode].join(" · ")));
     card.append(el("span", "chip", pane ? pane.chip.textContent : t("свободен")));
     const list = el("dl");
     list.append(el("dt", "", t("Токены")), el("dd", "", (stats.input_tokens || 0) + " / " + (stats.output_tokens || 0)), el("dt", "", t("Стоимость")), el("dd", "", stats.cost_usd > 0 ? "$" + stats.cost_usd.toFixed(2) : t("нет данных")));
@@ -2739,7 +2742,7 @@ function focusPanel(id) {
   const p = panes[id], cur = agentTasks(id).find(t => t.status === "in_progress");
   const g = el("div", "grow");
   g.append(el("h3", "", id + " — " + STATE_LABEL[agentState(id)]));
-  g.append(el("div", "muted", [m.kind, m.model || t("по умолчанию"), m.effort || t("по умолчанию"), MODE_LABEL[m.mode], m.guard === true && m.mode !== "bypass" ? t("guard включён") : null].filter(Boolean).join(" · ")));
+  g.append(el("div", "muted", [agentKindName(m.kind), m.model || t("по умолчанию"), m.effort || t("по умолчанию"), MODE_LABEL[m.mode], m.guard === true && m.mode !== "bypass" ? t("guard включён") : null].filter(Boolean).join(" · ")));
   g.append(el("div", "", cur ? cur.title + " · " + cur.progress + "%" : t("Нет задачи в работе")));
   for (const ev of recentEvents.get(id) || []) g.append(el("div", "muted", ev));
   const open = el("button", "primary", t("Открыть чат"));
@@ -3214,7 +3217,7 @@ function scName(lane) {
   const m = scMember(lane);
   if (!m) return lane.member;
   if (m.kind === "codex") return "Codex";
-  if (m.kind !== "claude") return m.kind || lane.member;
+  if (m.kind !== "claude") return agentKindName(m.kind) || lane.member;
   const model = String(m.model || "");
   for (const [re, name] of [[/opus/i, "Opus"], [/sonnet/i, "Sonnet"], [/haiku/i, "Haiku"], [/fable/i, "Fable"]]) if (re.test(model)) return name;
   return "Claude";

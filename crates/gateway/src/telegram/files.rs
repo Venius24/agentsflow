@@ -255,12 +255,13 @@ async fn upload_with(
 /// Подпись к `.diff`: откуда правки и файлы с числом строк. Telegram берёт до
 /// 1024 знаков, остальные файлы есть в самом документе.
 fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str, lang: Lang) -> String {
+    let source = diff_source_label(diff, lang);
     let mut text = i18n::render(
         lang,
         "<b>🧾 Правки</b> «{title}»\n{source}\n",
         &[
             ("title", &message_text(title, token, 120)),
-            ("source", &message_text(&diff.source_label(), token, 300)),
+            ("source", &message_text(&source, token, 300)),
         ],
     );
     for (shown, file) in diff.files.iter().enumerate() {
@@ -287,6 +288,56 @@ fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str, lang: 
         text.push_str(&line);
     }
     text
+}
+
+fn diff_source_label(diff: &crate::review::TaskDiff, lang: Lang) -> String {
+    use crate::review::Source;
+    if lang == Lang::Ru {
+        return diff.source_label();
+    }
+    let mut parts = Vec::new();
+    if let Some(note) = &diff.note {
+        let translated = match note.as_str() {
+            "В ветке задачи пока нет коммитов." => {
+                tr(lang, "В ветке задачи пока нет коммитов.").to_owned()
+            }
+            "Копия репозитория задачи — ссылка или без своей папки .git, её не читаю." => {
+                tr(
+                    lang,
+                    "Копия репозитория задачи — ссылка или без своей папки .git, её не читаю.",
+                )
+                .to_owned()
+            }
+            _ => note.strip_prefix("git не показал правки: ").map_or_else(
+                || note.clone(),
+                |error| format!("{}{error}", tr(lang, "git не показал правки: ")),
+            ),
+        };
+        parts.push(translated);
+    }
+    parts.push(match diff.source {
+        Source::Git => i18n::render(
+            lang,
+            "Ветка {branch} против {base}, только закоммиченное.",
+            &[
+                (
+                    "branch",
+                    diff.branch.as_deref().unwrap_or(tr(lang, "задачи")),
+                ),
+                ("base", diff.base.as_deref().unwrap_or(tr(lang, "базы"))),
+            ],
+        ),
+        Source::Events => tr(
+            lang,
+            "Правки из ленты агентов, каждая отдельно и по порядку.",
+        )
+        .to_owned(),
+        Source::None => tr(lang, "Правок нет.").to_owned(),
+    });
+    if diff.truncated {
+        parts.push(tr(lang, "Показано не всё: правки больше 2 МБ.").to_owned());
+    }
+    parts.join(" ")
 }
 
 /// Файл результата задачи.
@@ -914,7 +965,7 @@ impl Bridge {
         let mut sent = false;
         // Если Telegram не принял разметку, показываем тот же текст без неё.
         for markdown in [markdown, false] {
-            let pages = reader::pages(&text, markdown);
+            let pages = reader::pages_for(lang, &text, markdown);
             let page = page.min(pages.len() - 1);
             let rows = self.reader_rows(id, index, page, pages.len(), files.entries.len(), lang);
             let body = format!("📖 <b>{name}</b>\n\n{}", pages[page]);
@@ -1094,6 +1145,38 @@ mod tests {
         assert_eq!(size_label(1024, Lang::En), "1 KB");
         assert_eq!(size_label(1_572_864, Lang::En), "1.5 MB");
         assert_eq!(size_label(1024, Lang::Ru), "1 \u{41a}\u{411}");
+    }
+
+    #[test]
+    fn changes_caption_uses_english_source_without_changing_api_note() {
+        let note = "В ветке задачи пока нет коммитов.";
+        let diff = crate::review::TaskDiff {
+            source: crate::review::Source::Events,
+            branch: None,
+            base: None,
+            note: Some(note.into()),
+            truncated: true,
+            files: Vec::new(),
+        };
+        let caption = diff_caption(&diff, "Task", "secret", Lang::En);
+        assert!(
+            caption.contains("no commits yet")
+                && caption.contains("agent feed")
+                && caption.contains("2 MB"),
+            "{caption}"
+        );
+        assert_eq!(serde_json::to_value(&diff).unwrap()["note"], note);
+        let git = crate::review::TaskDiff {
+            source: crate::review::Source::Git,
+            branch: Some("feature".into()),
+            base: Some("main".into()),
+            note: None,
+            truncated: false,
+            files: Vec::new(),
+        };
+        assert!(
+            diff_caption(&git, "Task", "secret", Lang::En).contains("Branch feature against main")
+        );
     }
 
     #[test]

@@ -89,6 +89,114 @@ fn add_task(hub: &Hub, title: &str, status: TaskStatus, assignee: Option<&str>) 
 }
 
 #[tokio::test]
+async fn english_board_card_and_help_follow_chat_language() {
+    let hub = Hub::new();
+    let id = add_task(&hub, "Example task", TaskStatus::Review, Some("lead"));
+    let (mut bridge, calls, server) = fake(hub).await;
+    bridge.languages.insert(11, Lang::En);
+    bridge.update(&msg("/board")).await;
+    assert!(last_text(&calls).contains("Board"), "{}", last_text(&calls));
+    bridge.update(&cb(&format!("s:t:{id}"))).await;
+    let text = last_text(&calls);
+    assert!(
+        text.contains("Example task") && text.contains("review"),
+        "{text}"
+    );
+    let body = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find_map(|(_, body)| {
+            let v: Value = serde_json::from_slice(body).ok()?;
+            v.pointer("/reply_markup/inline_keyboard")
+                .map(Value::to_string)
+        })
+        .unwrap();
+    assert!(body.contains("Accept") && body.contains("Return"), "{body}");
+    bridge.update(&msg("/help")).await;
+    let help = &bridge.queues[&11].back().unwrap().text;
+    assert!(help.contains("/board") && help.contains("/team"), "{help}");
+    server.abort();
+}
+
+#[tokio::test]
+async fn changing_chat_language_updates_command_descriptions() {
+    let (mut bridge, calls, server) = fake(Hub::new()).await;
+    bridge.languages.insert(11, Lang::Ru);
+    bridge.update(&msg("/lang")).await;
+    assert_eq!(bridge.language(11), Lang::En);
+    let records = calls.lock().unwrap();
+    let body = records
+        .iter()
+        .find(|(method, _)| method == "setMyCommands")
+        .unwrap();
+    let params: Value = serde_json::from_slice(&body.1).unwrap();
+    assert_eq!(params["scope"]["chat_id"], 11);
+    assert_eq!(
+        params["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["command"] == "board")
+            .unwrap()["description"],
+        "Task board"
+    );
+    assert!(
+        menu_keyboard_for(bridge.language(11))
+            .to_string()
+            .contains("Board")
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn english_permission_card_and_buttons() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let hub = Hub::new();
+            let (_, mut events) = hub.subscribe();
+            let (actor, task) =
+                crate::hub::spawn(hub.clone(), AgentId::from("claude"), false, || async {
+                    Ok(crate::testing::Silent::new(1, true))
+                });
+            let (mut bridge, calls, server) = fake(hub).await;
+            bridge.languages.insert(11, Lang::En);
+            bridge.agents = Agents::from([(AgentId::from("claude"), actor.clone())]);
+            actor.prompt("work".into()).await.unwrap();
+            let event = loop {
+                let event = events.recv().await.unwrap();
+                if matches!(event.event, Event::PermissionRequest { .. }) {
+                    break event;
+                }
+            };
+            bridge.handle_event(event);
+            bridge.flush().await;
+            let value: Value = {
+                let records = calls.lock().unwrap();
+                let body = records
+                    .iter()
+                    .rev()
+                    .find(|(method, _)| method == "sendMessage")
+                    .unwrap();
+                serde_json::from_slice(&body.1).unwrap()
+            };
+            let text = value["text"].as_str().unwrap();
+            assert!(text.contains("permission"), "{text}");
+            let buttons = value["reply_markup"].to_string();
+            assert!(
+                buttons.contains("Allow") && buttons.contains("Deny"),
+                "{buttons}"
+            );
+            actor.interrupt().await.unwrap();
+            actor.shutdown().await;
+            task.await.unwrap();
+            server.abort();
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn board_filters_pages_and_card_actions() {
     let hub = Hub::new();
     hub.set_mail_enabled(true);

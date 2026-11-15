@@ -233,6 +233,14 @@ delivery = "pr"                 # требует worktree, repos и [source] с 
 
 Замечания: нажмите номер строки (или «Замечание к файлу»), напишите, нажмите «Добавить». Замечания копятся внизу и уходят одной кнопкой: пока задача идёт — запиской работающему агенту (`/api/agent/note`), когда задача ждёт приёмки, застряла или готова — «Вернуть с замечаниями» (`/api/tasks/{id}/return`, новый круг). Агент получает каждое замечание как `путь:строка`, строку цитатой и ваш текст. Неотправленные замечания хранит браузер.
 
+### Другие агенты (ACP)
+
+Сначала войдите в Gemini CLI и OpenCode в терминале. OpenCode по умолчанию правит файлы без запроса разрешения: `mode` и guard видят только те запросы, которые агент сам присылает.
+
+Участники команды и отделов могут использовать `kind = "gemini"` (`gemini --acp`), `kind = "opencode"` (`opencode acp`) или `kind = "acp"` с обязательным `command = ["gemini", "--acp"]`. Для ACP работают `mode` и `guard`, но не поддерживаются `sandbox` и `effort`; `model` игнорируется. ACP не сообщает число токенов и стоимость, поэтому лимиты расходов не учитывают эти ходы.
+
+Если почта включена, MCP-сервер почты и задач передаётся в `session/new`; его доступность зависит от агента. Guard видит только запросы разрешения и переданные в них данные, включая текст команды, если он есть. Инструменты, которые агент запускает без запроса разрешения, guard проверить не может.
+
 ## Сторож шлюза
 
 `agentsflow watch --home DIR` — отдельный небольшой процесс, который смотрит на шлюз снаружи. Раз в `interval_secs` он спрашивает `GET /api/alive` (единственная ручка без токена; она отвечает только `{ok, version}`). Если шлюз молчит `misses` раз подряд, сторож пишет вам в Telegram напрямую, не через шлюз, а с `kill_hung = true` ещё и завершает зависший процесс, чтобы автозапуск поднял новый (не чаще раза в 5 минут и не больше трёх раз подряд; завершается только процесс `agentsflow`, слушающий порт). Когда шлюз снова отвечает, приходит «снова работает». Если Telegram в этот момент недоступен, сообщение не теряется: сторож повторяет его при каждом следующем взгляде (до часа, не больше 20 сообщений). Сторож читает только `agentsflow.toml`, поэтому сломанный `department.toml` его не останавливает. После перезапуска шлюз сам присылает, какие запуски прервались.
@@ -335,16 +343,3 @@ kill_hung = true
 - Сайт просит код: агент спрашивает его у хозяина обычным вопросом, Chrome ждёт открытым, следующий запуск вводит код в ту же форму.
 - Капчу никто не обходит: агент сообщает о ней хозяину. При неверном пароле агент не пробует снова, чтобы не заблокировать учётную запись.
 - Профиль браузера лежит в `<дом>/.agentsflow/browser/<отдел>`. Нужны Chrome и Node.js (`npx`).
-
-
-### ACP agents
-
-Team and department members can use `kind = "gemini"` (`gemini --acp`),
-`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
-`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
-but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
-report token usage or cost, so spending limits cannot account for these turns.
-The mail and task MCP server is passed to `session/new` when mail is enabled;
-availability depends on the agent. The guard sees only permission requests the
-agent sends and their supplied input, including command text when present; it
-cannot inspect tools the agent executes without requesting permission.

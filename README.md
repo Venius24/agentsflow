@@ -144,6 +144,14 @@ mode = "bypass"
 
 Веб-страница получает состав команды из `/api/state` и показывает колонки в порядке конфигурации. События из старых журналов для неизвестных ID отображаются в отдельных нейтральных колонках.
 
+### Другие агенты (ACP)
+
+Сначала войдите в Gemini CLI и OpenCode в терминале. OpenCode по умолчанию правит файлы без запроса разрешения: `mode` и guard видят только те запросы, которые агент сам присылает.
+
+Участники команды и отделов могут использовать `kind = "gemini"` (`gemini --acp`), `kind = "opencode"` (`opencode acp`) или `kind = "acp"` с обязательным `command = ["gemini", "--acp"]`. Для ACP работают `mode` и `guard`, но не поддерживаются `sandbox` и `effort`; `model` игнорируется. ACP не сообщает число токенов и стоимость, поэтому лимиты расходов не учитывают эти ходы.
+
+Если почта включена, MCP-сервер почты и задач передаётся в `session/new`; его доступность зависит от агента. Guard видит только запросы разрешения и переданные в них данные, включая текст команды, если он есть. Инструменты, которые агент запускает без запроса разрешения, guard проверить не может.
+
 ## Единый формат событий
 
 Каждое событие — `Envelope { session, agent, seq, ts_ms, event }`, где `agent` — ID участника или `orchestrator`. Варианты `event` (поле `type`):
@@ -362,18 +370,3 @@ CI (GitHub Actions) выполняет те же проверки на Linux и 
 ## Лицензия
 
 MIT, см. файл [LICENSE](LICENSE).
-
-
-### Другие агенты (ACP)
-
-Сначала войдите в Gemini CLI и OpenCode в терминале. OpenCode по умолчанию правит файлы, не спрашивая разрешения: `mode` и guard видят только те запросы, которые агент сам присылает.
-
-Team and department members can use `kind = "gemini"` (`gemini --acp`),
-`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
-`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
-but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
-report token usage or cost, so spending limits cannot account for these turns.
-The mail and task MCP server is passed to `session/new` when mail is enabled;
-availability depends on the agent. The guard sees only permission requests the
-agent sends and their supplied input, including command text when present; it
-cannot inspect tools the agent executes without requesting permission.

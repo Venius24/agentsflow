@@ -29,6 +29,7 @@ pub(super) fn escape(text: &str) -> String {
 }
 
 /// Страницы текста; файл без разметки показывается как есть, моноширинно.
+#[cfg(test)]
 pub(super) fn pages(text: &str, markdown: bool) -> Vec<String> {
     pages_for(crate::i18n::default_lang(), text, markdown)
 }

@@ -33,6 +33,7 @@ pub(crate) fn set_default(lang: Lang) {
 }
 
 const ENGLISH: &[(&str, &str)] = &[
+    ("вчера {time}", "yesterday {time}"),
     ("Язык", "Language"),
     ("Язык: русский", "Language: English"),
     ("👥 Команда", "👥 Team"),
@@ -363,6 +364,77 @@ pub(crate) fn plural<'a>(lang: Lang, n: u64, ru: [&'a str; 3], en: [&'a str; 2])
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_literal_translation_key_has_an_english_entry() {
+        let files = [
+            ("telegram.rs", include_str!("telegram.rs")),
+            ("screens.rs", include_str!("telegram/screens.rs")),
+            ("files.rs", include_str!("telegram/files.rs")),
+            ("reader.rs", include_str!("telegram/reader.rs")),
+        ];
+        for (name, source) in files {
+            let source = source
+                .split("#[cfg(test)]\nmod tests")
+                .next()
+                .unwrap_or(source);
+            for (offset, _) in source
+                .match_indices("tr(")
+                .chain(source.match_indices("render("))
+            {
+                let before = source[..offset].chars().next_back();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &source[offset..];
+                let mut chars = rest.char_indices().peekable();
+                let mut depth = 0_i32;
+                'scan: while let Some((start, c)) = chars.next() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        '"' => {
+                            let mut escaped = false;
+                            for (end, ch) in chars.by_ref() {
+                                if ch == '"' && !escaped {
+                                    let literal = &rest[start..=end];
+                                    if depth == 1
+                                        && let Ok(key) = serde_json::from_str::<String>(literal)
+                                    {
+                                        if key.chars().any(|ch| {
+                                            ('А'..='я').contains(&ch) || ch == 'ё' || ch == 'Ё'
+                                        }) {
+                                            assert!(
+                                                ENGLISH
+                                                    .iter()
+                                                    .chain(screens_en::TABLE)
+                                                    .chain(files_en::TABLE)
+                                                    .any(|(ru, _)| *ru == key),
+                                                "missing English key in {name}: {key:?}; call: {}",
+                                                rest.chars()
+                                                    .take(140)
+                                                    .collect::<String>()
+                                                    .escape_debug()
+                                            );
+                                        }
+                                        break 'scan;
+                                    }
+                                    break;
+                                }
+                                escaped = ch == '\\' && !escaped;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn translations_and_fallback() {
         assert_eq!(tr(Lang::Ru, "Язык"), "Язык");

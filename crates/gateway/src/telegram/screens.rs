@@ -506,7 +506,7 @@ impl Bridge {
             "\nОбновлено {time}",
             &[(
                 "time",
-                &(format_time(task.updated_ms, now_ms())).to_string(),
+                &(format_time_for(lang, task.updated_ms, now_ms())).to_string(),
             )],
         ));
         let id = &task.id;
@@ -603,7 +603,7 @@ impl Bridge {
             "\nОбновлено {time}",
             &[(
                 "time",
-                &(format_time(task.updated_ms, now_ms())).to_string(),
+                &(format_time_for(lang, task.updated_ms, now_ms())).to_string(),
             )],
         ));
         if task.thread.is_some() {
@@ -1030,7 +1030,7 @@ impl Bridge {
                 .last()
                 .and_then(|m| times.get(&m.id))
                 .map_or(String::new(), |ts| {
-                    format!(" · {}", format_time(*ts, now_ms()))
+                    format!(" · {}", format_time_for(self.language(chat), *ts, now_ms()))
                 });
             text.push_str(&i18n::render(
                 self.language(chat),
@@ -1111,7 +1111,7 @@ impl Bridge {
         );
         for message in &thread.messages[start..end] {
             let when = times.get(&message.id).map_or(String::new(), |ts| {
-                format!(" · {}", format_time(*ts, now_ms()))
+                format!(" · {}", format_time_for(self.language(chat), *ts, now_ms()))
             });
             text.push_str(&format!(
                 "\n\n<b>{} → {}</b>{when}\n{}",
@@ -1652,7 +1652,8 @@ impl Bridge {
         let home = runs.home();
         let offset = i64::from(home.config.offset_minutes()) * 60_000;
         let local = |ms: u64| {
-            format_time(
+            format_time_for(
+                self.language(chat),
                 (ms as i64 + offset).max(0) as u64,
                 (now_ms() as i64 + offset).max(0) as u64,
             )
@@ -1940,7 +1941,13 @@ impl Bridge {
             .iter()
             .filter(|e| e.agent == *agent)
             .filter_map(|e| event_line(&e.event, self.language(chat)).map(|l| (e.ts_ms, l)))
-            .map(|(ts, line)| format!("{} {}", format_time(ts, now_ms()), line))
+            .map(|(ts, line)| {
+                format!(
+                    "{} {}",
+                    format_time_for(self.language(chat), ts, now_ms()),
+                    line
+                )
+            })
             .collect();
         let end = lines.len().saturating_sub(page * size);
         let start = end.saturating_sub(size);

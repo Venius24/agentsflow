@@ -157,27 +157,31 @@ fn menu_keyboard() -> Value {
 }
 
 fn bot_commands() -> Value {
+    bot_commands_for(i18n::default_lang())
+}
+
+fn bot_commands_for(lang: Lang) -> Value {
     json!({"commands":[
-        {"command":"team","description":tr(i18n::default_lang(), "Команда")},
-        {"command":"requests","description":tr(i18n::default_lang(), "Запросы на разрешение")},
-        {"command":"board","description":tr(i18n::default_lang(), "Доска задач")},
-        {"command":"task","description":tr(i18n::default_lang(), "Новая задача")},
-        {"command":"files","description":tr(i18n::default_lang(), "Результаты и файлы задач")},
-        {"command":"mentor","description":tr(i18n::default_lang(), "Наставник: сильная модель ведёт задачи")},
-        {"command":"mail","description":tr(i18n::default_lang(), "Почта")},
-        {"command":"ask","description":tr(i18n::default_lang(), "Написать агенту")},
-        {"command":"agent","description":tr(i18n::default_lang(), "Карточка агента")},
-        {"command":"stop","description":tr(i18n::default_lang(), "Остановить агента")},
-        {"command":"run","description":tr(i18n::default_lang(), "Запустить workflow")},
-        {"command":"stats","description":tr(i18n::default_lang(), "Статистика")},
-        {"command":"log","description":tr(i18n::default_lang(), "Что делал агент")},
-        {"command":"export","description":tr(i18n::default_lang(), "Экспорт переписки")},
-        {"command":"mute","description":tr(i18n::default_lang(), "Тишина")},
-        {"command":"unmute","description":tr(i18n::default_lang(), "Включить звук")},
-        {"command":"status","description":tr(i18n::default_lang(), "Состояние команды")},
-        {"command":"more","description":tr(i18n::default_lang(), "Другие действия")},
-        {"command":"help","description":tr(i18n::default_lang(), "Помощь")},
-        {"command":"lang","description":tr(i18n::default_lang(), "Язык")}
+        {"command":"team","description":tr(lang, "Команда")},
+        {"command":"requests","description":tr(lang, "Запросы на разрешение")},
+        {"command":"board","description":tr(lang, "Доска задач")},
+        {"command":"task","description":tr(lang, "Новая задача")},
+        {"command":"files","description":tr(lang, "Результаты и файлы задач")},
+        {"command":"mentor","description":tr(lang, "Наставник: сильная модель ведёт задачи")},
+        {"command":"mail","description":tr(lang, "Почта")},
+        {"command":"ask","description":tr(lang, "Написать агенту")},
+        {"command":"agent","description":tr(lang, "Карточка агента")},
+        {"command":"stop","description":tr(lang, "Остановить агента")},
+        {"command":"run","description":tr(lang, "Запустить workflow")},
+        {"command":"stats","description":tr(lang, "Статистика")},
+        {"command":"log","description":tr(lang, "Что делал агент")},
+        {"command":"export","description":tr(lang, "Экспорт переписки")},
+        {"command":"mute","description":tr(lang, "Тишина")},
+        {"command":"unmute","description":tr(lang, "Включить звук")},
+        {"command":"status","description":tr(lang, "Состояние команды")},
+        {"command":"more","description":tr(lang, "Другие действия")},
+        {"command":"help","description":tr(lang, "Помощь")},
+        {"command":"lang","description":tr(lang, "Язык")}
     ]})
 }
 
@@ -189,14 +193,24 @@ pub fn set_display_offset(minutes: i32) {
 }
 
 fn format_time(timestamp_ms: u64, now_ms: u64) -> String {
-    format_time_at(
+    format_time_for(Lang::Ru, timestamp_ms, now_ms)
+}
+
+fn format_time_for(lang: Lang, timestamp_ms: u64, now_ms: u64) -> String {
+    format_time_at_for(
+        lang,
         timestamp_ms,
         now_ms,
         DISPLAY_OFFSET_MINUTES.get().copied().unwrap_or(0),
     )
 }
 
+#[cfg(test)]
 fn format_time_at(timestamp_ms: u64, now_ms: u64, offset_minutes: i32) -> String {
+    format_time_at_for(Lang::Ru, timestamp_ms, now_ms, offset_minutes)
+}
+
+fn format_time_at_for(lang: Lang, timestamp_ms: u64, now_ms: u64, offset_minutes: i32) -> String {
     let shift = |ms: u64| ms.saturating_add_signed(i64::from(offset_minutes) * 60_000);
     let seconds = shift(timestamp_ms) / 1000;
     let days = seconds / 86_400;
@@ -206,7 +220,7 @@ fn format_time_at(timestamp_ms: u64, now_ms: u64, offset_minutes: i32) -> String
         return time;
     }
     if days.checked_add(1) == Some(today) {
-        return format!("вчера {time}");
+        return i18n::render(lang, "вчера {time}", &[("time", &time)]);
     }
     let z = days as i64 + 719_468;
     let era = z / 146_097;
@@ -477,6 +491,16 @@ impl Bridge {
         }
         self.languages = languages;
         Ok(lang)
+    }
+
+    async fn set_chat_commands(&self, chat: i64, lang: Lang) {
+        let mut params = bot_commands_for(lang);
+        params["scope"] = json!({"type":"chat", "chat_id":chat});
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            self.bot.request::<_, Value>("setMyCommands", Some(params)),
+        )
+        .await;
     }
 
     fn queue(&mut self, chat: i64, text: &str, key: Option<u64>) {
@@ -1802,7 +1826,10 @@ impl Bridge {
                     }
                     Some("lang") => {
                         match self.toggle_language(chat) {
-                            Ok(lang) => self.queue(chat, tr(lang, "Язык: русский"), None),
+                            Ok(lang) => {
+                                self.set_chat_commands(chat, lang).await;
+                                self.queue(chat, tr(lang, "Язык: русский"), None);
+                            }
                             Err(_) => self.queue(
                                 chat,
                                 tr(
@@ -2217,7 +2244,10 @@ impl Bridge {
             }
             if raw == "/lang" {
                 match self.toggle_language(chat) {
-                    Ok(lang) => self.queue(chat, tr(lang, "Язык: русский"), None),
+                    Ok(lang) => {
+                        self.set_chat_commands(chat, lang).await;
+                        self.queue(chat, tr(lang, "Язык: русский"), None);
+                    }
                     Err(_) => self.queue(
                         chat,
                         tr(
@@ -2714,6 +2744,26 @@ mod tests {
         assert_eq!(restarted.language(11), Lang::En);
         assert_eq!(restarted.language(12), Lang::Ru);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn english_keyboard_and_command_descriptions() {
+        let keyboard = menu_keyboard_for(Lang::En).to_string();
+        for label in ["Team", "Requests", "Board", "Mail", "More"] {
+            assert!(keyboard.contains(label), "{keyboard}");
+        }
+        let commands = bot_commands_for(Lang::En);
+        let board = commands["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["command"] == "board")
+            .unwrap();
+        assert_eq!(board["description"], "Task board");
+        assert_eq!(
+            format_time_at_for(Lang::En, 1_700_000_000_000, 1_700_086_400_000, 0),
+            "yesterday 22:13"
+        );
     }
 
     #[test]

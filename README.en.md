@@ -146,6 +146,20 @@ Start it with `agentsflow serve --team team.toml --allow-bypass`. The global `--
 
 The web page gets the team roster from `/api/state` and shows columns in configuration order. Events from old journals for unknown IDs appear in separate neutral columns.
 
+### ACP agents
+
+Gemini CLI and OpenCode must be signed in from a terminal first. OpenCode edits files without asking permission by default; `mode` and the guard see only requests the agent chooses to send.
+
+Team and department members can use `kind = "gemini"` (`gemini --acp`),
+`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
+`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
+but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
+report token usage or cost, so spending limits cannot account for these turns.
+The mail and task MCP server is passed to `session/new` when mail is enabled;
+availability depends on the agent. The guard sees only permission requests the
+agent sends and their supplied input, including command text when present; it
+cannot inspect tools the agent executes without requesting permission.
+
 ## Common event format
 
 Every event is an `Envelope { session, agent, seq, ts_ms, event }`, where `agent` is a member ID or `orchestrator`. The variants of `event` (field `type`) are:
@@ -364,18 +378,3 @@ See [SECURITY.md](SECURITY.md) for how to report a vulnerability and for the thr
 ## License
 
 MIT, see the [LICENSE](LICENSE) file.
-
-
-### ACP agents
-
-Gemini CLI and OpenCode must be signed in from a terminal first. OpenCode edits files without asking permission by default; `mode` and the guard see only requests the agent chooses to send.
-
-Team and department members can use `kind = "gemini"` (`gemini --acp`),
-`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
-`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
-but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
-report token usage or cost, so spending limits cannot account for these turns.
-The mail and task MCP server is passed to `session/new` when mail is enabled;
-availability depends on the agent. The guard sees only permission requests the
-agent sends and their supplied input, including command text when present; it
-cannot inspect tools the agent executes without requesting permission.

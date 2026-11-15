@@ -2,6 +2,30 @@
 
 pub(crate) const TABLE: &[(&str, &str)] = &[
     (
+        "В ветке задачи пока нет коммитов.",
+        "The task branch has no commits yet.",
+    ),
+    (
+        "Копия репозитория задачи — ссылка или без своей папки .git, её не читаю.",
+        "The task repository copy is a link or has no .git directory of its own; it is not read.",
+    ),
+    ("git не показал правки: ", "git could not show changes: "),
+    (
+        "Ветка {branch} против {base}, только закоммиченное.",
+        "Branch {branch} against {base}, committed changes only.",
+    ),
+    ("задачи", "task"),
+    ("базы", "base"),
+    (
+        "Правки из ленты агентов, каждая отдельно и по порядку.",
+        "Changes from the agent feed, separately and in order.",
+    ),
+    ("Правок нет.", "No changes."),
+    (
+        "Показано не всё: правки больше 2 МБ.",
+        "Not all changes are shown: they exceed 2 MB.",
+    ),
+    (
         "файл больше 20 МБ, бот не может его скачать",
         "file exceeds 20 MB; the bot cannot download it",
     ),
