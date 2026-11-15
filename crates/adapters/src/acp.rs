@@ -750,7 +750,8 @@ mod tests {
                     command,
                     ..Default::default()
                 },
-                Duration::from_millis(700),
+                // The auth answer needs the interpreter to start: slow on CI runners.
+                Duration::from_millis(if mode == "auth" { 20_000 } else { 700 }),
             )
             .await
             {
