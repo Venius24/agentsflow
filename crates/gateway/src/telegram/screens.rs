@@ -1827,8 +1827,8 @@ impl Bridge {
     // ---------- команды и кнопки ----------
     pub(super) async fn handle_command(&mut self, chat: i64, raw: &str) -> bool {
         let (command, rest) = match raw {
-            "📋 Доска" => ("/board", ""),
-            "✉ Почта" => ("/mail", ""),
+            "📋 Доска" | "📋 Board" => ("/board", ""),
+            "✉ Почта" | "✉ Mail" => ("/mail", ""),
             _ => raw
                 .split_once(char::is_whitespace)
                 .map_or((raw, ""), |(c, r)| (c, r.trim())),

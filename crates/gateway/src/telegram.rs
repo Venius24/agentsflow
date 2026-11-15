@@ -1,3 +1,4 @@
+use crate::i18n::{self, Lang, tr};
 use crate::{
     hub::{Hub, HubError, NewTask, ResolutionOrigin},
     runtime::Agents,
@@ -146,31 +147,37 @@ impl Drop for TemporaryCommand {
     }
 }
 
+fn menu_keyboard_for(lang: Lang) -> Value {
+    json!({"keyboard":[[{"text":tr(lang, "👥 Команда")},{"text":tr(lang, "🔐 Запросы")}],[{"text":tr(lang, "📋 Доска")},{"text":tr(lang, "✉ Почта")}],[{"text":tr(lang, "⚙ Ещё")}]],"resize_keyboard":true,"is_persistent":true})
+}
+
+#[cfg(test)]
 fn menu_keyboard() -> Value {
-    json!({"keyboard":[[{"text":"👥 Команда"},{"text":"🔐 Запросы"}],[{"text":"📋 Доска"},{"text":"✉ Почта"}],[{"text":"⚙ Ещё"}]],"resize_keyboard":true,"is_persistent":true})
+    menu_keyboard_for(Lang::Ru)
 }
 
 fn bot_commands() -> Value {
     json!({"commands":[
-        {"command":"team","description":"Команда"},
-        {"command":"requests","description":"Запросы на разрешение"},
-        {"command":"board","description":"Доска задач"},
-        {"command":"task","description":"Новая задача"},
-        {"command":"files","description":"Результаты и файлы задач"},
-        {"command":"mentor","description":"Наставник: сильная модель ведёт задачи"},
-        {"command":"mail","description":"Почта"},
-        {"command":"ask","description":"Написать агенту"},
-        {"command":"agent","description":"Карточка агента"},
-        {"command":"stop","description":"Остановить агента"},
-        {"command":"run","description":"Запустить workflow"},
-        {"command":"stats","description":"Статистика"},
-        {"command":"log","description":"Что делал агент"},
-        {"command":"export","description":"Экспорт переписки"},
-        {"command":"mute","description":"Тишина"},
-        {"command":"unmute","description":"Включить звук"},
-        {"command":"status","description":"Состояние команды"},
-        {"command":"more","description":"Другие действия"},
-        {"command":"help","description":"Помощь"}
+        {"command":"team","description":tr(i18n::default_lang(), "Команда")},
+        {"command":"requests","description":tr(i18n::default_lang(), "Запросы на разрешение")},
+        {"command":"board","description":tr(i18n::default_lang(), "Доска задач")},
+        {"command":"task","description":tr(i18n::default_lang(), "Новая задача")},
+        {"command":"files","description":tr(i18n::default_lang(), "Результаты и файлы задач")},
+        {"command":"mentor","description":tr(i18n::default_lang(), "Наставник: сильная модель ведёт задачи")},
+        {"command":"mail","description":tr(i18n::default_lang(), "Почта")},
+        {"command":"ask","description":tr(i18n::default_lang(), "Написать агенту")},
+        {"command":"agent","description":tr(i18n::default_lang(), "Карточка агента")},
+        {"command":"stop","description":tr(i18n::default_lang(), "Остановить агента")},
+        {"command":"run","description":tr(i18n::default_lang(), "Запустить workflow")},
+        {"command":"stats","description":tr(i18n::default_lang(), "Статистика")},
+        {"command":"log","description":tr(i18n::default_lang(), "Что делал агент")},
+        {"command":"export","description":tr(i18n::default_lang(), "Экспорт переписки")},
+        {"command":"mute","description":tr(i18n::default_lang(), "Тишина")},
+        {"command":"unmute","description":tr(i18n::default_lang(), "Включить звук")},
+        {"command":"status","description":tr(i18n::default_lang(), "Состояние команды")},
+        {"command":"more","description":tr(i18n::default_lang(), "Другие действия")},
+        {"command":"help","description":tr(i18n::default_lang(), "Помощь")},
+        {"command":"lang","description":tr(i18n::default_lang(), "Язык")}
     ]})
 }
 
@@ -220,21 +227,36 @@ fn now_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+#[cfg(test)]
 fn resolution_label(origin: Option<ResolutionOrigin>, allow: bool, rule: &str) -> String {
+    resolution_label_for(Lang::Ru, origin, allow, rule)
+}
+fn resolution_label_for(
+    lang: Lang,
+    origin: Option<ResolutionOrigin>,
+    allow: bool,
+    rule: &str,
+) -> String {
     match origin {
-        Some(ResolutionOrigin::Interrupt) => "⏹ Ход остановлен".into(),
-        Some(ResolutionOrigin::Guard) => format!("🛡 Отклонено guard: {rule}"),
-        Some(ResolutionOrigin::Response) if allow => "✅ Разрешено на странице".into(),
-        Some(ResolutionOrigin::Response) => "⛔ Отклонено на странице".into(),
-        _ => "Запрос закрыт".into(),
+        Some(ResolutionOrigin::Interrupt) => tr(lang, "⏹ Ход остановлен").into(),
+        Some(ResolutionOrigin::Guard) => {
+            i18n::render(lang, "🛡 Отклонено guard: {rule}", &[("rule", rule)])
+        }
+        Some(ResolutionOrigin::Response) if allow => tr(lang, "✅ Разрешено на странице").into(),
+        Some(ResolutionOrigin::Response) => tr(lang, "⛔ Отклонено на странице").into(),
+        _ => tr(lang, "Запрос закрыт").into(),
     }
 }
 
+#[cfg(test)]
 fn own_decision(allow: bool) -> &'static str {
+    own_decision_for(Lang::Ru, allow)
+}
+fn own_decision_for(lang: Lang, allow: bool) -> &'static str {
     if allow {
-        "✅ Разрешено вами"
+        tr(lang, "✅ Разрешено вами")
     } else {
-        "⛔ Отклонено вами"
+        tr(lang, "⛔ Отклонено вами")
     }
 }
 
@@ -261,7 +283,7 @@ struct Pending {
     detail: String,
     guarded: bool,
     confirming: HashSet<i64>,
-    text: String,
+    texts: HashMap<i64, String>,
 }
 struct Screen {
     key: u64,
@@ -302,6 +324,8 @@ struct Bridge {
     drafts: HashMap<i64, Draft>,
     bypass_confirmed: HashSet<AgentId>,
     muted: HashSet<i64>,
+    languages: HashMap<i64, Lang>,
+    language_file: Option<std::path::PathBuf>,
     inputs: HashMap<i64, screens::Input>,
     wf: Option<screens::WorkflowView>,
     wf_live: HashMap<i64, (i64, String)>,
@@ -374,6 +398,8 @@ impl Bridge {
             drafts: HashMap::new(),
             bypass_confirmed: HashSet::new(),
             muted: HashSet::new(),
+            languages: HashMap::new(),
+            language_file: None,
             inputs: HashMap::new(),
             wf: None,
             wf_live: HashMap::new(),
@@ -388,6 +414,35 @@ impl Bridge {
             fetched_rx: Some(fetched_rx),
         }
     }
+    fn language(&self, chat: i64) -> Lang {
+        self.languages
+            .get(&chat)
+            .copied()
+            .unwrap_or_else(i18n::default_lang)
+    }
+
+    fn toggle_language(&mut self, chat: i64) -> std::io::Result<Lang> {
+        let lang = match self.language(chat) {
+            Lang::Ru => Lang::En,
+            Lang::En => Lang::Ru,
+        };
+        let mut languages = self.languages.clone();
+        languages.insert(chat, lang);
+        if let Some(path) = &self.language_file {
+            let saved: HashMap<String, &str> = languages
+                .iter()
+                .map(|(id, lang)| (id.to_string(), if *lang == Lang::En { "en" } else { "ru" }))
+                .collect();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let bytes = serde_json::to_vec(&saved).map_err(std::io::Error::other)?;
+            std::fs::write(path, bytes)?;
+        }
+        self.languages = languages;
+        Ok(lang)
+    }
+
     fn queue(&mut self, chat: i64, text: &str, key: Option<u64>) {
         let text = message_text(text, &self.config.token, 3500);
         self.queue_html(chat, text, key);
@@ -517,22 +572,26 @@ impl Bridge {
                     usize::MAX,
                 );
                 let safe_agent = message_text(agent.as_str(), &self.config.token, 100);
-                let text = if let Some(note) = &guard {
-                    format!(
-                        "⚠️ <b>Опасная команда</b> · {safe_agent}\nПравило: <code>{}</code> - {}\n<pre>{short}</pre>",
-                        message_text(&note.rule, &self.config.token, 100),
-                        message_text(&note.reason, &self.config.token, 500)
-                    )
-                } else if !command.is_empty() {
-                    format!(
-                        "🔐 <b>{safe_agent}</b> просит разрешение\nКоманда в терминале:\n<pre>{short}</pre>"
-                    )
-                } else {
-                    format!(
-                        "🔐 <b>{safe_agent}</b> просит разрешение\n{}: <code>{short}</code>",
-                        message_text(&tool, &self.config.token, 100)
-                    )
-                };
+                let rule = guard
+                    .as_ref()
+                    .map(|note| message_text(&note.rule, &self.config.token, 100))
+                    .unwrap_or_default();
+                let reason = guard
+                    .as_ref()
+                    .map(|note| message_text(&note.reason, &self.config.token, 500))
+                    .unwrap_or_default();
+                let safe_tool = message_text(&tool, &self.config.token, 100);
+                let texts: HashMap<i64, String> = self.config.users.iter().map(|&chat| {
+                    let lang = self.language(chat);
+                    let text = if guard.is_some() {
+                        i18n::render(lang, "⚠️ <b>Опасная команда</b> · {safe_agent}\nПравило: <code>{rule}</code> - {reason}\n<pre>{short}</pre>", &[("safe_agent", &safe_agent), ("rule", &rule), ("reason", &reason), ("short", &short)])
+                    } else if !command.is_empty() {
+                        i18n::render(lang, "🔐 <b>{safe_agent}</b> просит разрешение\nКоманда в терминале:\n<pre>{short}</pre>", &[("safe_agent", &safe_agent), ("short", &short)])
+                    } else {
+                        i18n::render(lang, "🔐 <b>{safe_agent}</b> просит разрешение\n{tool}: <code>{short}</code>", &[("safe_agent", &safe_agent), ("tool", &safe_tool), ("short", &short)])
+                    };
+                    (chat, text)
+                }).collect();
                 self.pending.insert(
                     key,
                     Pending {
@@ -542,11 +601,11 @@ impl Bridge {
                         detail,
                         guarded: guard.is_some(),
                         confirming: HashSet::new(),
-                        text: text.clone(),
+                        texts: texts.clone(),
                     },
                 );
-                for chat in self.config.users.clone() {
-                    self.queue_html(chat, text.clone(), Some(key));
+                for (chat, text) in texts {
+                    self.queue_html(chat, text, Some(key));
                 }
             }
             Event::PermissionResolved {
@@ -560,7 +619,7 @@ impl Bridge {
                     let reason = message_text(reason, &self.config.token, 500);
                     let command = message_text(command, &self.config.token, 600);
                     for chat in self.config.users.clone() {
-                        self.queue_item(chat, format!("⚠️ guard остановил <b>{agent}</b>: <code>{command}</code> ({reason})"), None, true);
+                        self.queue_item(chat, i18n::render(self.language(chat), "⚠️ guard остановил <b>{agent}</b>: <code>{command}</code> ({reason})", &[("agent", &agent), ("command", &command), ("reason", &reason)]), None, true);
                     }
                 }
                 let keys: Vec<_> = self
@@ -571,13 +630,14 @@ impl Bridge {
                     .collect();
                 for key in keys {
                     if let Some(pending) = self.pending.remove(&key) {
-                        let label = resolution_label(
-                            self.hub.resolution_origin(envelope.seq),
-                            allow,
-                            note.as_ref()
-                                .map_or("", |(rule, _)| rule.split(" - ").next().unwrap_or("")),
-                        );
                         for (chat, messages) in pending.messages {
+                            let label = resolution_label_for(
+                                self.language(chat),
+                                self.hub.resolution_origin(envelope.seq),
+                                allow,
+                                note.as_ref()
+                                    .map_or("", |(rule, _)| rule.split(" - ").next().unwrap_or("")),
+                            );
                             for message in messages {
                                 edits.push((
                                     chat,
@@ -872,9 +932,9 @@ impl Bridge {
                                     chat,
                                     message,
                                     if reason == "interrupted" {
-                                        "⏹ Ход остановлен".into()
+                                        tr(self.language(chat), "⏹ Ход остановлен").into()
                                     } else {
-                                        "Запрос закрыт".into()
+                                        tr(self.language(chat), "Запрос закрыт").into()
                                     },
                                 ));
                             }
@@ -923,18 +983,18 @@ impl Bridge {
                 if let Some(pending) = self.pending.get(&key) {
                     let mut rows = if pending.guarded {
                         vec![vec![
-                            json!({"text":"⛔ Отклонить","callback_data":format!("perm:d:{key}")}),
-                            json!({"text":"Разрешить всё равно…","callback_data":format!("perm:c:{key}")}),
+                            json!({"text":tr(self.language(chat), "⛔ Отклонить"),"callback_data":format!("perm:d:{key}")}),
+                            json!({"text":tr(self.language(chat), "Разрешить всё равно…"),"callback_data":format!("perm:c:{key}")}),
                         ]]
                     } else {
                         vec![vec![
-                            json!({"text":"✅ Разрешить","callback_data":format!("perm:a:{key}")}),
-                            json!({"text":"⛔ Отклонить","callback_data":format!("perm:d:{key}")}),
+                            json!({"text":tr(self.language(chat), "✅ Разрешить"),"callback_data":format!("perm:a:{key}")}),
+                            json!({"text":tr(self.language(chat), "⛔ Отклонить"),"callback_data":format!("perm:d:{key}")}),
                         ]]
                     };
                     if pending.detail.chars().count() > 600 {
                         rows.push(vec![
-                            json!({"text":"Показать полностью","callback_data":format!("perm:f:{key}")}),
+                            json!({"text":tr(self.language(chat), "Показать полностью"),"callback_data":format!("perm:f:{key}")}),
                         ]);
                     }
                     request["reply_markup"] = json!({"inline_keyboard":rows});
@@ -942,7 +1002,7 @@ impl Bridge {
             } else if let Some(buttons) = &item.buttons {
                 request["reply_markup"] = buttons.clone();
             } else {
-                request["reply_markup"] = menu_keyboard();
+                request["reply_markup"] = menu_keyboard_for(self.language(chat));
             }
             let result: Result<Value, _> = self.bot.request("sendMessage", Some(request)).await;
             match result {
@@ -999,25 +1059,31 @@ impl Bridge {
             delay = (delay * 2).min(60);
         }
     }
+    #[cfg(test)]
     fn screen_content(&self, agent: Option<&AgentId>, key: u64) -> (String, Value) {
+        self.screen_content_for(Lang::Ru, agent, key)
+    }
+    fn screen_content_for(&self, lang: Lang, agent: Option<&AgentId>, key: u64) -> (String, Value) {
         let safe = |s: &str| message_text(s, &self.config.token, 300);
         let status = |id: &AgentId| {
             let state = self.agents.get(id).map(|a| a.state()).unwrap_or_default();
             if state.last_error.is_some() {
-                "🔴 ошибка"
+                tr(lang, "🔴 ошибка")
             } else if !state.pending.is_empty() {
-                "🟡 ждёт вас"
+                tr(lang, "🟡 ждёт вас")
             } else if state.busy {
-                "🟢 работает"
+                tr(lang, "🟢 работает")
             } else {
-                "⚪ свободен"
+                tr(lang, "⚪ свободен")
             }
         };
         let mode = |m: &crate::team::Member| match m.mode {
-            Some(crate::team::AccessMode::Auto) => "⚡ авто",
-            Some(crate::team::AccessMode::Smart) => "🧠 умный",
-            Some(crate::team::AccessMode::Bypass) => "<b>⚠ BYPASS</b> (без запросов и песочницы)",
-            _ => "✋ спрашивает",
+            Some(crate::team::AccessMode::Auto) => tr(lang, "⚡ авто"),
+            Some(crate::team::AccessMode::Smart) => tr(lang, "🧠 умный"),
+            Some(crate::team::AccessMode::Bypass) => {
+                tr(lang, "<b>⚠ BYPASS</b> (без запросов и песочницы)")
+            }
+            _ => tr(lang, "✋ спрашивает"),
         };
         let task_line = |id: &AgentId| {
             self.hub
@@ -1050,51 +1116,55 @@ impl Bridge {
                 safe(member.id.as_str()),
                 safe(&member.title),
                 member.kind,
-                safe(member.model.as_deref().unwrap_or("по умолчанию")),
-                safe(member.effort.as_deref().unwrap_or("по умолчанию")),
+                safe(member.model.as_deref().unwrap_or(tr(lang, "по умолчанию"))),
+                safe(member.effort.as_deref().unwrap_or(tr(lang, "по умолчанию"))),
                 mode(member),
                 if member.guard {
-                    "включена"
+                    tr(lang, "включена")
                 } else {
-                    "выключена"
+                    tr(lang, "выключена")
                 }
             );
             if let Some(task) = task_line(&member.id) {
                 text.push_str(&format!("\n{task}"));
             }
             if let Some(error) = &state.last_error {
-                text.push_str(&format!("\n🔴 ошибка: {}", safe(error)));
+                text.push_str(&i18n::render(
+                    lang,
+                    "\n🔴 ошибка: {error}",
+                    &[("error", &safe(error))],
+                ));
             }
             if let Some(recent) = self.recent.get(&member.id) {
-                text.push_str("\n\nПоследнее:");
+                text.push_str(tr(lang, "\n\nПоследнее:"));
                 for item in recent {
                     text.push_str(&format!("\n{}", safe(item)));
                 }
             }
             let mut rows = vec![vec![
-                json!({"text":"← Назад","callback_data":format!("ui:team:{key}")}),
+                json!({"text":tr(lang, "← Назад"),"callback_data":format!("ui:team:{key}")}),
             ]];
             if self.config.prompts {
                 rows.push(vec![
-                    json!({"text":"💬 Написать","callback_data":format!("ui:write:{key}")}),
+                    json!({"text":tr(lang, "💬 Написать"),"callback_data":format!("ui:write:{key}")}),
                 ]);
             }
             rows.push(vec![
-                json!({"text":"📋 Его задачи","callback_data":format!("ui:tasks:{key}")}),
+                json!({"text":tr(lang, "📋 Его задачи"),"callback_data":format!("ui:tasks:{key}")}),
             ]);
             if state.busy {
                 rows.push(vec![
-                    json!({"text":"⏹ Стоп","callback_data":format!("ui:stop:{key}")}),
+                    json!({"text":tr(lang, "⏹ Стоп"),"callback_data":format!("ui:stop:{key}")}),
                 ]);
             }
             if state.last_error.is_some() {
                 rows.push(vec![
-                    json!({"text":"🔄 Перезапустить","callback_data":format!("ui:restart:{key}")}),
+                    json!({"text":tr(lang, "🔄 Перезапустить"),"callback_data":format!("ui:restart:{key}")}),
                 ]);
             }
             (text, json!({"inline_keyboard":rows}))
         } else {
-            let mut text = "<b>👥 Команда</b>".to_owned();
+            let mut text = tr(lang, "<b>👥 Команда</b>").to_owned();
             let mut buttons = Vec::new();
             for (index, member) in self.team.members.iter().enumerate() {
                 let state = self
@@ -1112,17 +1182,25 @@ impl Bridge {
                 if state.busy {
                     text.push_str(&format!(
                         "\n{}",
-                        task_line(&member.id).unwrap_or_else(|| "▸ работает над запросом".into())
+                        task_line(&member.id).unwrap_or_else(|| tr(
+                            lang,
+                            "▸ работает над запросом"
+                        )
+                        .into())
                     ));
                 }
                 if !state.pending.is_empty() {
-                    text.push_str(&format!("\n🟡 ждёт вас: {} запросов", state.pending.len()));
+                    text.push_str(&i18n::render(
+                        lang,
+                        "\n🟡 ждёт вас: {count} запросов",
+                        &[("count", &state.pending.len().to_string())],
+                    ));
                 }
                 buttons.push(json!({"text":member.id.as_str(),"callback_data":format!("ui:agent:{key}:{index}")}));
             }
             let mut rows: Vec<Vec<Value>> = buttons.chunks(2).map(|row| row.to_vec()).collect();
             rows.push(vec![
-                json!({"text":"🔄 Обновить","callback_data":format!("ui:team:{key}")}),
+                json!({"text":tr(lang, "🔄 Обновить"),"callback_data":format!("ui:team:{key}")}),
             ]);
             (text, json!({"inline_keyboard":rows}))
         }
@@ -1130,7 +1208,7 @@ impl Bridge {
     async fn open_team(&mut self, chat: i64, agent: Option<AgentId>, existing: Option<i64>) {
         self.next_key = self.next_key.wrapping_add(1);
         let key = self.next_key;
-        let (text, keyboard) = self.screen_content(agent.as_ref(), key);
+        let (text, keyboard) = self.screen_content_for(self.language(chat), agent.as_ref(), key);
         let method = if existing.is_some() {
             "editMessageText"
         } else {
@@ -1180,7 +1258,8 @@ impl Bridge {
             })
             .collect();
         for (chat, message, key, agent, old) in screens {
-            let (text, keyboard) = self.screen_content(agent.as_ref(), key);
+            let (text, keyboard) =
+                self.screen_content_for(self.language(chat), agent.as_ref(), key);
             if text != old {
                 self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"parse_mode":"HTML","reply_markup":keyboard})).await;
                 if let Some(screen) = self.screens.get_mut(&chat) {
@@ -1193,26 +1272,31 @@ impl Bridge {
     async fn open_more(&mut self, chat: i64, existing: Option<i64>) {
         self.next_key = self.next_key.wrapping_add(1);
         let key = self.next_key;
-        let text = "<b>⚙ Ещё</b>";
+        let text = tr(self.language(chat), "<b>⚙ Ещё</b>");
         let mute = if self.muted.contains(&chat) {
-            "🔔 Звук"
+            tr(self.language(chat), "🔔 Звук")
         } else {
-            "🔕 Тишина"
+            tr(self.language(chat), "🔕 Тишина")
         };
         let mut rows = vec![
             vec![
-                json!({"text":"📊 Статистика","callback_data":"s:st"}),
-                json!({"text":"⚙ Запуск workflow","callback_data":"s:w"}),
+                json!({"text":tr(self.language(chat), "📊 Статистика"),"callback_data":"s:st"}),
+                json!({"text":tr(self.language(chat), "⚙ Запуск workflow"),"callback_data":"s:w"}),
             ],
             vec![
-                json!({"text":"📜 Что делал агент","callback_data":"s:lg"}),
-                json!({"text":"⬇ Экспорт","callback_data":"s:ex"}),
+                json!({"text":tr(self.language(chat), "📜 Что делал агент"),"callback_data":"s:lg"}),
+                json!({"text":tr(self.language(chat), "⬇ Экспорт"),"callback_data":"s:ex"}),
             ],
             vec![
                 json!({"text":mute,"callback_data":format!("ui:mute:{key}")}),
-                json!({"text":"ℹ Помощь","callback_data":"s:help"}),
+                json!({"text":tr(self.language(chat), "ℹ Помощь"),"callback_data":"s:help"}),
             ],
-            vec![json!({"text":"← Назад","callback_data":format!("ui:team:{key}")})],
+            vec![
+                json!({"text":tr(self.language(chat), "Язык"),"callback_data":format!("ui:lang:{key}")}),
+            ],
+            vec![
+                json!({"text":tr(self.language(chat), "← Назад"),"callback_data":format!("ui:team:{key}")}),
+            ],
         ];
         if let Some(projects) = self
             .control
@@ -1260,7 +1344,7 @@ impl Bridge {
             })
             .collect();
         pending.sort_by_key(|(id, _)| **id);
-        let mut text = "<b>🔐 Запросы</b>".to_owned();
+        let mut text = tr(self.language(chat), "<b>🔐 Запросы</b>").to_owned();
         let mut rows = Vec::new();
         for (request_key, request) in pending {
             text.push_str(&format!(
@@ -1268,17 +1352,17 @@ impl Bridge {
                 message_text(request.agent.as_str(), &self.config.token, 40),
                 message_text(&request.detail, &self.config.token, 120)
             ));
-            rows.push(vec![json!({"text":format!("Показать: {}", request.agent),"callback_data":format!("ui:request:{key}:{request_key}")})]);
+            rows.push(vec![json!({"text":i18n::render(self.language(chat), "Показать: {agent}", &[("agent", request.agent.as_str())]),"callback_data":format!("ui:request:{key}:{request_key}")})]);
         }
         if rows.is_empty() {
-            text = "Ничего не ждёт вашего решения ✔".into();
+            text = tr(self.language(chat), "Ничего не ждёт вашего решения ✔").into();
         }
         rows.insert(
             0,
-            vec![json!({"text":"← Назад","callback_data":format!("ui:team:{key}")})],
+            vec![json!({"text":tr(self.language(chat), "← Назад"),"callback_data":format!("ui:team:{key}")})],
         );
         rows.push(vec![
-            json!({"text":"🔄 Обновить","callback_data":format!("ui:requests:{key}")}),
+            json!({"text":tr(self.language(chat), "🔄 Обновить"),"callback_data":format!("ui:requests:{key}")}),
         ]);
         let mut payload = json!({"chat_id":chat,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}});
         let method = if let Some(message) = existing {
@@ -1384,19 +1468,26 @@ impl Bridge {
             self.draft_feedback(
                 chat,
                 message,
-                "Отправка заданий из Telegram выключена владельцем",
+                tr(
+                    self.language(chat),
+                    "Отправка заданий из Telegram выключена владельцем",
+                ),
             )
             .await;
             return;
         }
         let Some(draft) = self.drafts.get(&chat) else {
-            self.queue(chat, "Задание устарело", None);
+            self.queue(chat, tr(self.language(chat), "Задание устарело"), None);
             return;
         };
         if draft.expires <= tokio::time::Instant::now() {
             let message = self.drafts.remove(&chat).and_then(|draft| draft.message);
-            self.draft_feedback(chat, message, "Время ввода истекло")
-                .await;
+            self.draft_feedback(
+                chat,
+                message,
+                tr(self.language(chat), "Время ввода истекло"),
+            )
+            .await;
             return;
         }
         let Some(text) = draft.text.clone() else {
@@ -1407,7 +1498,7 @@ impl Bridge {
         let message = draft.message;
         let Some(actor) = self.agents.get(&agent).cloned() else {
             self.drafts.remove(&chat);
-            self.draft_feedback(chat, message, "Нет такого агента")
+            self.draft_feedback(chat, message, tr(self.language(chat), "Нет такого агента"))
                 .await;
             return;
         };
@@ -1416,7 +1507,7 @@ impl Bridge {
             .get(&agent)
             .is_some_and(|member| member.mode == Some(crate::team::AccessMode::Bypass));
         if bypass && !self.bypass_confirmed.contains(&agent) && !confirmed {
-            let message = self.prompt_offer(chat, &format!("⚠ У {agent} режим BYPASS: его команды выполняются без запросов и без песочницы. Отправить?"), json!([[{"text":"Да, отправить","callback_data":format!("draft:confirm:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+            let message = self.prompt_offer(chat, &i18n::render(self.language(chat), "⚠ У {agent} режим BYPASS: его команды выполняются без запросов и без песочницы. Отправить?", &[("agent", agent.as_str())]), json!([[{"text":tr(self.language(chat), "Да, отправить"),"callback_data":format!("draft:confirm:{key}")},{"text":tr(self.language(chat), "Отмена"),"callback_data":format!("draft:cancel:{key}")} ]]), message).await;
             if let Some(draft) = self.drafts.get_mut(&chat) {
                 draft.message = message;
             }
@@ -1426,7 +1517,7 @@ impl Bridge {
             self.bypass_confirmed.insert(agent.clone());
         }
         if actor.state().busy && !stopped {
-            let message = self.prompt_offer(chat, &format!("{agent} сейчас занят."), json!([[{"text":"⏹ Остановить и отправить","callback_data":format!("draft:stop:{key}")},{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+            let message = self.prompt_offer(chat, &i18n::render(self.language(chat), "{agent} сейчас занят.", &[("agent", agent.as_str())]), json!([[{"text":tr(self.language(chat), "⏹ Остановить и отправить"),"callback_data":format!("draft:stop:{key}")},{"text":tr(self.language(chat), "Отмена"),"callback_data":format!("draft:cancel:{key}")} ]]), message).await;
             if let Some(draft) = self.drafts.get_mut(&chat) {
                 draft.message = message;
             }
@@ -1434,8 +1525,12 @@ impl Bridge {
         }
         if stopped && actor.state().busy {
             if actor.interrupt().await.is_err() {
-                self.draft_feedback(chat, message, "Не удалось остановить агента")
-                    .await;
+                self.draft_feedback(
+                    chat,
+                    message,
+                    tr(self.language(chat), "Не удалось остановить агента"),
+                )
+                .await;
                 return;
             }
             let idle = tokio::time::timeout(Duration::from_secs(15), async {
@@ -1445,8 +1540,12 @@ impl Bridge {
             })
             .await;
             if idle.is_err() {
-                self.draft_feedback(chat, message, "Агент не остановился")
-                    .await;
+                self.draft_feedback(
+                    chat,
+                    message,
+                    tr(self.language(chat), "Агент не остановился"),
+                )
+                .await;
                 return;
             }
         }
@@ -1454,16 +1553,36 @@ impl Bridge {
             Ok(()) => {
                 self.drafts.remove(&chat);
                 if let Some(message) = message {
-                    self.edit(vec![(chat, message, format!("✔ Передано {agent}"))])
-                        .await;
+                    self.edit(vec![(
+                        chat,
+                        message,
+                        i18n::render(
+                            self.language(chat),
+                            "✔ Передано {agent}",
+                            &[("agent", agent.as_str())],
+                        ),
+                    )])
+                    .await;
                     self.screens.remove(&chat);
                 } else {
-                    self.queue(chat, &format!("✔ Передано {agent}"), None);
+                    self.queue(
+                        chat,
+                        &i18n::render(
+                            self.language(chat),
+                            "✔ Передано {agent}",
+                            &[("agent", agent.as_str())],
+                        ),
+                        None,
+                    );
                 }
             }
             Err(_) => {
-                self.draft_feedback(chat, message, "Не удалось передать задание")
-                    .await
+                self.draft_feedback(
+                    chat,
+                    message,
+                    tr(self.language(chat), "Не удалось передать задание"),
+                )
+                .await
             }
         }
     }
@@ -1489,7 +1608,11 @@ impl Bridge {
                 != Some("private")
                 || callback.pointer("/message/chat/id").and_then(Value::as_i64) != user
             {
-                self.answer(id, "нет доступа").await;
+                self.answer(
+                    id,
+                    tr(self.language(user.unwrap_or_default()), "нет доступа"),
+                )
+                .await;
                 return;
             }
             let data = callback.get("data").and_then(Value::as_str).unwrap_or("");
@@ -1502,7 +1625,11 @@ impl Bridge {
                     .get(&chat)
                     .is_some_and(|draft| Some(draft.key) == key)
                 {
-                    self.answer(id, "Задание устарело").await;
+                    self.answer(
+                        id,
+                        tr(self.language(user.unwrap_or_default()), "Задание устарело"),
+                    )
+                    .await;
                     return;
                 }
                 match parts.get(1).copied() {
@@ -1511,7 +1638,11 @@ impl Bridge {
                         if let Some(message) = message {
                             self.open_team(chat, None, Some(message)).await;
                         } else {
-                            self.queue(chat, "Отменено", None);
+                            self.queue(
+                                chat,
+                                tr(self.language(user.unwrap_or_default()), "Отменено"),
+                                None,
+                            );
                         }
                     }
                     Some("confirm") => self.submit_draft(chat, false, true).await,
@@ -1542,7 +1673,14 @@ impl Bridge {
                 let key = parts.get(2).and_then(|v| v.parse::<u64>().ok());
                 let screen = self.screens.get(&chat);
                 if !screen.is_some_and(|s| Some(s.key) == key) {
-                    self.answer(id, "Экран устарел - открыл заново").await;
+                    self.answer(
+                        id,
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Экран устарел - открыл заново",
+                        ),
+                    )
+                    .await;
                     let message = callback
                         .pointer("/message/message_id")
                         .and_then(Value::as_i64);
@@ -1566,13 +1704,33 @@ impl Bridge {
                                         actor.state().pending.contains(&pending.id)
                                     })
                                 })
-                                .map(|pending| (request, pending.text.clone()))
+                                .and_then(|pending| {
+                                    pending
+                                        .texts
+                                        .get(&chat)
+                                        .cloned()
+                                        .map(|text| (request, text))
+                                })
                         });
                         if let Some((request, text)) = card {
                             self.queue_html(chat, text, Some(request));
                         } else {
                             self.open_requests(chat, message).await;
                         }
+                    }
+                    Some("lang") => {
+                        match self.toggle_language(chat) {
+                            Ok(lang) => self.queue(chat, tr(lang, "Язык: русский"), None),
+                            Err(_) => self.queue(
+                                chat,
+                                tr(
+                                    self.language(user.unwrap_or_default()),
+                                    "Не удалось сохранить язык",
+                                ),
+                                None,
+                            ),
+                        }
+                        self.open_more(chat, message).await;
                     }
                     Some("mute") => {
                         if !self.muted.remove(&chat) {
@@ -1621,7 +1779,7 @@ impl Bridge {
                                     message,
                                 },
                             );
-                            self.prompt_offer(chat, &format!("Что передать {agent}? Следующее сообщение уйдёт ему как задание."), json!([[{"text":"Отмена","callback_data":format!("draft:cancel:{key}")} ]]), message).await;
+                            self.prompt_offer(chat, &i18n::render(self.language(chat), "Что передать {agent}? Следующее сообщение уйдёт ему как задание.", &[("agent", agent.as_str())]), json!([[{"text":tr(self.language(user.unwrap_or_default()), "Отмена"),"callback_data":format!("draft:cancel:{key}")} ]]), message).await;
                             if let Some(screen) = self.screens.get_mut(&chat) {
                                 screen.refresh = false;
                             }
@@ -1645,7 +1803,7 @@ impl Bridge {
                                 })
                                 .collect::<Vec<_>>();
                             let text = if tasks.is_empty() {
-                                "Нет задач".to_owned()
+                                tr(self.language(user.unwrap_or_default()), "Нет задач").to_owned()
                             } else {
                                 tasks.join("\n")
                             };
@@ -1656,7 +1814,7 @@ impl Bridge {
                                 .iter()
                                 .position(|member| member.id == agent)
                                 .unwrap_or(0);
-                            self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"reply_markup":{"inline_keyboard":[[{"text":"← Назад","callback_data":format!("ui:agent:{}:{member_index}", key.unwrap_or_default())}]]}})).await;
+                            self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"reply_markup":{"inline_keyboard":[[{"text":tr(self.language(user.unwrap_or_default()), "← Назад"),"callback_data":format!("ui:agent:{}:{member_index}", key.unwrap_or_default())}]]}})).await;
                         }
                     }
                     _ => {}
@@ -1673,15 +1831,27 @@ impl Bridge {
                         .zip(data.get(1..).and_then(|s| s.parse::<u64>().ok()))
                 });
             let Some((action, key)) = parsed else {
-                self.answer(id, "запрос недоступен").await;
+                self.answer(
+                    id,
+                    tr(self.language(user.unwrap_or_default()), "запрос недоступен"),
+                )
+                .await;
                 return;
             };
             if !matches!(action, "a" | "d" | "c" | "n" | "f") {
-                self.answer(id, "запрос недоступен").await;
+                self.answer(
+                    id,
+                    tr(self.language(user.unwrap_or_default()), "запрос недоступен"),
+                )
+                .await;
                 return;
             }
             let Some(pending) = self.pending.get(&key) else {
-                self.answer(id, "уже решено").await;
+                self.answer(
+                    id,
+                    tr(self.language(user.unwrap_or_default()), "уже решено"),
+                )
+                .await;
                 return;
             };
             if action == "f" {
@@ -1706,7 +1876,7 @@ impl Bridge {
                     pending.confirming.insert(chat);
                 }
                 if let Some(message) = message {
-                    self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":"Точно разрешить опасную команду?","reply_markup":{"inline_keyboard":[[{"text":"✅ Да, разрешить","callback_data":format!("perm:a:{key}")},{"text":"← Нет","callback_data":format!("perm:n:{key}")}]]}})).await;
+                    self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":tr(self.language(user.unwrap_or_default()), "Точно разрешить опасную команду?"),"reply_markup":{"inline_keyboard":[[{"text":tr(self.language(user.unwrap_or_default()), "✅ Да, разрешить"),"callback_data":format!("perm:a:{key}")},{"text":tr(self.language(user.unwrap_or_default()), "← Нет"),"callback_data":format!("perm:n:{key}")}]]}})).await;
                 }
                 self.answer(id, "").await;
                 return;
@@ -1728,7 +1898,7 @@ impl Bridge {
                         .map(|message| {
                             (
                                 message,
-                                pending.text.clone(),
+                                pending.texts.get(&chat).cloned().unwrap_or_default(),
                                 pending.detail.chars().count() > 600,
                             )
                         })
@@ -1737,22 +1907,36 @@ impl Bridge {
                 };
                 if let Some((message, text, long)) = data {
                     let mut rows = vec![vec![
-                        json!({"text":"⛔ Отклонить","callback_data":format!("perm:d:{key}")}),
-                        json!({"text":"Разрешить всё равно…","callback_data":format!("perm:c:{key}")}),
+                        json!({"text":tr(self.language(chat), "⛔ Отклонить"),"callback_data":format!("perm:d:{key}")}),
+                        json!({"text":tr(self.language(chat), "Разрешить всё равно…"),"callback_data":format!("perm:c:{key}")}),
                     ]];
                     if long {
-                        rows.push(vec![json!({"text":"Показать полностью","callback_data":format!("perm:f:{key}")})]);
+                        rows.push(vec![json!({"text":tr(self.language(chat), "Показать полностью"),"callback_data":format!("perm:f:{key}")})]);
                     }
                     self.retry_request("editMessageText", json!({"chat_id":chat,"message_id":message,"text":text,"parse_mode":"HTML","reply_markup":{"inline_keyboard":rows}})).await;
                 }
-                self.answer(id, "Запрос остаётся открытым").await;
+                self.answer(
+                    id,
+                    tr(
+                        self.language(user.unwrap_or_default()),
+                        "Запрос остаётся открытым",
+                    ),
+                )
+                .await;
                 return;
             }
             if action == "a"
                 && pending.guarded
                 && !pending.confirming.contains(&user.unwrap_or_default())
             {
-                self.answer(id, "Подтвердите опасную команду").await;
+                self.answer(
+                    id,
+                    tr(
+                        self.language(user.unwrap_or_default()),
+                        "Подтвердите опасную команду",
+                    ),
+                )
+                .await;
                 return;
             }
             let allow = action == "a";
@@ -1764,26 +1948,25 @@ impl Bridge {
                 self.answer(
                     id,
                     if allow {
-                        "разрешено"
+                        tr(self.language(user.unwrap_or_default()), "разрешено")
                     } else {
-                        "отклонено"
+                        tr(self.language(user.unwrap_or_default()), "отклонено")
                     },
                 )
                 .await;
                 if let Some(pending) = self.pending.remove(&key) {
-                    let label = format!(
-                        "{} · {} · {}: {}",
-                        own_decision(allow),
-                        format_time(now_ms(), now_ms()),
-                        pending.agent,
-                        pending.detail.chars().take(100).collect::<String>()
-                    );
                     self.edit(
                         pending
                             .messages
                             .into_iter()
                             .flat_map(|(chat, messages)| {
-                                let label = label.clone();
+                                let label = format!(
+                                    "{} · {} · {}: {}",
+                                    own_decision_for(self.language(chat), allow),
+                                    format_time(now_ms(), now_ms()),
+                                    pending.agent,
+                                    pending.detail.chars().take(100).collect::<String>()
+                                );
                                 messages
                                     .into_iter()
                                     .map(move |message| (chat, message, label.clone()))
@@ -1793,7 +1976,11 @@ impl Bridge {
                     .await;
                 }
             } else {
-                self.answer(id, "уже решено").await;
+                self.answer(
+                    id,
+                    tr(self.language(user.unwrap_or_default()), "уже решено"),
+                )
+                .await;
             }
         } else if let Some(message) = update.get("message") {
             let user = message.pointer("/from/id").and_then(Value::as_i64);
@@ -1814,7 +2001,16 @@ impl Bridge {
             let is_menu = raw.starts_with('/')
                 || matches!(
                     raw,
-                    "👥 Команда" | "🔐 Запросы" | "📋 Доска" | "✉ Почта" | "⚙ Ещё"
+                    "👥 Команда"
+                        | "🔐 Запросы"
+                        | "📋 Доска"
+                        | "✉ Почта"
+                        | "⚙ Ещё"
+                        | "👥 Team"
+                        | "🔐 Requests"
+                        | "📋 Board"
+                        | "✉ Mail"
+                        | "⚙ More"
                 );
             // An answer must not overtake the files sent for it.
             if !is_menu && self.hold_text(chat, raw, true) {
@@ -1827,7 +2023,14 @@ impl Bridge {
             if !is_menu && self.drafts.contains_key(&chat) {
                 let text = raw.trim();
                 if text.is_empty() || text.chars().count() > 8000 {
-                    self.queue(chat, "Введите текст задания длиной до 8000 символов", None);
+                    self.queue(
+                        chat,
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Введите текст задания длиной до 8000 символов",
+                        ),
+                        None,
+                    );
                     return;
                 }
                 if let Some(draft) = self.drafts.get_mut(&chat) {
@@ -1853,13 +2056,29 @@ impl Bridge {
                 && let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone())
             {
                 let answer = if !self.config.prompts {
-                    "Отправка заданий из Telegram выключена владельцем".to_owned()
+                    tr(
+                        self.language(user.unwrap_or_default()),
+                        "Отправка заданий из Telegram выключена владельцем",
+                    )
+                    .to_owned()
                 } else if raw.chars().count() > 8000 {
-                    "Сообщение длиннее 8000 символов".to_owned()
+                    tr(
+                        self.language(user.unwrap_or_default()),
+                        "Сообщение длиннее 8000 символов",
+                    )
+                    .to_owned()
                 } else {
                     match runs.message(raw) {
-                        Ok(()) => "🧭 Принял, разбираю…".to_owned(),
-                        Err(error) => format!("Не получилось: {error}"),
+                        Ok(()) => tr(
+                            self.language(user.unwrap_or_default()),
+                            "🧭 Принял, разбираю…",
+                        )
+                        .to_owned(),
+                        Err(error) => i18n::render(
+                            self.language(chat),
+                            "Не получилось: {error}",
+                            &[("error", &error.to_string())],
+                        ),
                     }
                 };
                 self.queue(chat, &answer, None);
@@ -1869,18 +2088,35 @@ impl Bridge {
                 if !self.config.prompts {
                     self.queue(
                         chat,
-                        "Отправка заданий из Telegram выключена владельцем",
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Отправка заданий из Telegram выключена владельцем",
+                        ),
                         None,
                     );
                     return;
                 }
                 let Some((agent, text)) = args.trim().split_once(char::is_whitespace) else {
-                    self.queue(chat, "Укажите имя агента и текст задания", None);
+                    self.queue(
+                        chat,
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Укажите имя агента и текст задания",
+                        ),
+                        None,
+                    );
                     return;
                 };
                 let text = text.trim();
                 if text.is_empty() || text.chars().count() > 8000 {
-                    self.queue(chat, "Введите текст задания длиной до 8000 символов", None);
+                    self.queue(
+                        chat,
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Введите текст задания длиной до 8000 символов",
+                        ),
+                        None,
+                    );
                     return;
                 }
                 self.next_key = self.next_key.wrapping_add(1);
@@ -1897,15 +2133,29 @@ impl Bridge {
                 self.submit_draft(chat, false, false).await;
                 return;
             }
-            if matches!(raw, "/team" | "/status" | "👥 Команда") {
+            if raw == "/lang" {
+                match self.toggle_language(chat) {
+                    Ok(lang) => self.queue(chat, tr(lang, "Язык: русский"), None),
+                    Err(_) => self.queue(
+                        chat,
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Не удалось сохранить язык",
+                        ),
+                        None,
+                    ),
+                }
+                return;
+            }
+            if matches!(raw, "/team" | "/status" | "👥 Команда" | "👥 Team") {
                 self.open_team(chat, None, None).await;
                 return;
             }
-            if matches!(raw, "/more" | "⚙ Ещё") {
+            if matches!(raw, "/more" | "⚙ Ещё" | "⚙ More") {
                 self.open_more(chat, None).await;
                 return;
             }
-            if matches!(raw, "/requests" | "🔐 Запросы") {
+            if matches!(raw, "/requests" | "🔐 Запросы" | "🔐 Requests") {
                 self.open_requests(chat, None).await;
                 return;
             }
@@ -1918,7 +2168,11 @@ impl Bridge {
                 if self.team.get(&agent).is_some() {
                     self.open_team(chat, Some(agent), None).await;
                 } else {
-                    self.queue(chat, "Нет такого агента", None);
+                    self.queue(
+                        chat,
+                        tr(self.language(user.unwrap_or_default()), "Нет такого агента"),
+                        None,
+                    );
                 }
                 return;
             }
@@ -1928,26 +2182,34 @@ impl Bridge {
                 .unwrap_or("")
                 .split_whitespace();
             let command = match raw {
-                "📋 Доска" => "/board",
-                "✉ Почта" => "/mail",
+                "📋 Доска" | "📋 Board" => "/board",
+                "✉ Почта" | "✉ Mail" => "/mail",
                 "🔐 Запросы" => "/requests",
                 "⚙ Ещё" => "/more",
                 _ => words.next().unwrap_or("").split('@').next().unwrap_or(""),
             };
             let answer = match command {
                 "/start" | "/help" => screens::help_text(),
-                "/ask" => "Укажите агента и задание: /ask <имя> <текст>".to_owned(),
+                "/ask" => tr(
+                    self.language(user.unwrap_or_default()),
+                    "Укажите агента и задание: /ask <имя> <текст>",
+                )
+                .to_owned(),
                 "/mute" => {
                     self.muted.insert(chat);
-                    "Тишина включена".to_owned()
+                    tr(self.language(user.unwrap_or_default()), "Тишина включена").to_owned()
                 }
                 "/unmute" => {
                     self.muted.remove(&chat);
-                    "Звук включён".to_owned()
+                    tr(self.language(user.unwrap_or_default()), "Звук включён").to_owned()
                 }
                 "/requests" => {
                     if self.pending.is_empty() {
-                        "Ничего не ждёт вашего решения ✔".to_owned()
+                        tr(
+                            self.language(user.unwrap_or_default()),
+                            "Ничего не ждёт вашего решения ✔",
+                        )
+                        .to_owned()
                     } else {
                         let list = self
                             .pending
@@ -1961,7 +2223,11 @@ impl Bridge {
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
-                        format!("Ожидают вашего решения (карточки присланы выше):\n{list}")
+                        i18n::render(
+                            self.language(chat),
+                            "Ожидают вашего решения (карточки присланы выше):\n{list}",
+                            &[("list", &list)],
+                        )
                     }
                 }
                 "/status" => self
@@ -2000,14 +2266,19 @@ impl Bridge {
                     .and_then(|id| self.agents.get(&AgentId::from(id)))
                 {
                     Some(actor) => match actor.interrupt().await {
-                        Ok(()) => "остановлено",
-                        Err(HubError::NotBusy) => "не занят",
-                        Err(_) => "не удалось остановить",
+                        Ok(()) => tr(self.language(user.unwrap_or_default()), "остановлено"),
+                        Err(HubError::NotBusy) => {
+                            tr(self.language(user.unwrap_or_default()), "не занят")
+                        }
+                        Err(_) => tr(
+                            self.language(user.unwrap_or_default()),
+                            "не удалось остановить",
+                        ),
                     }
                     .into(),
-                    None => "нет такого агента".into(),
+                    None => tr(self.language(user.unwrap_or_default()), "нет такого агента").into(),
                 },
-                _ => "Используйте /help".into(),
+                _ => tr(self.language(user.unwrap_or_default()), "Используйте /help").into(),
             };
             self.queue(chat, &answer, None);
         }
@@ -2150,6 +2421,35 @@ pub async fn run(
     let (history, mut events) = hub.subscribe();
     let mut bridge = Bridge::with_hub(config.clone(), agents, team, hub.clone());
     bridge.control = control;
+    let state_dir = bridge
+        .control
+        .as_ref()
+        .and_then(|c| c.runs.as_ref())
+        .map(|runs| runs.home().state_dir())
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|cwd| cwd.join(".agentsflow"))
+        });
+    if let Some(path) = state_dir.map(|dir| dir.join("telegram-languages.json")) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(saved) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
+                bridge.languages = saved
+                    .into_iter()
+                    .filter_map(|(id, lang)| {
+                        let id = id.parse().ok()?;
+                        let lang = match lang.as_str() {
+                            "ru" => Lang::Ru,
+                            "en" => Lang::En,
+                            _ => return None,
+                        };
+                        Some((id, lang))
+                    })
+                    .collect();
+            }
+        }
+        bridge.language_file = Some(path);
+    }
     if let Some(name) = bridge
         .control
         .as_ref()
