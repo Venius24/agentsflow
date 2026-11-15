@@ -251,6 +251,34 @@ pub(super) async fn task_result(
     }
 }
 
+/// Everything the task changed, grouped by file: the git branch of its clone
+/// against the base, or the agents' diff events ([`crate::review`]).
+pub(super) async fn task_diff(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let Some(task) = state.hub.task(&id).filter(|task| task.work.is_some()) else {
+        return task_failure(TaskError::NotFound);
+    };
+    let home = runs.home();
+    let (history, _) = state.hub.subscribe();
+    // git runs with a timeout, but still off the async workers.
+    match tokio::task::spawn_blocking(move || crate::review::task_diff(&home, &history, &task))
+        .await
+    {
+        Ok(diff) => Json(diff).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"не удалось собрать правки"})),
+        )
+            .into_response(),
+    }
+}
+
 pub(super) async fn list_runs(State(state): State<AppState>) -> Response {
     match runs(&state) {
         Ok(runs) => Json(json!({"runs":runs.running()})).into_response(),

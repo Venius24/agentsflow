@@ -16,6 +16,7 @@ mod mentor;
 mod orchestrator;
 mod projectmem;
 mod projects;
+mod review;
 mod rules;
 mod runs;
 mod runtime;

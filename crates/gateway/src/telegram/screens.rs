@@ -426,6 +426,7 @@ impl Bridge {
         let id = &task.id;
         let mut rows = Vec::new();
         rows.extend(self.file_row(id));
+        rows.extend(self.diff_row(id));
         match work.state {
             WorkState::Running => rows.push(vec![button("⏹ Стоп", format!("s:ta:{id}:stop"))]),
             WorkState::Review => {
@@ -1984,6 +1985,7 @@ impl Bridge {
                     .await
             }
             "fd" => flash = self.send_file(chat, arg(2), number(3).unwrap_or(0)),
+            "dv" => flash = self.send_diff(chat, arg(2)).await,
             "fr" => self.open_results(chat, message, number(2).unwrap_or(0)).await,
             "fx" => {
                 flash = self.cancel_files(chat);
