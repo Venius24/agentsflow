@@ -5,10 +5,12 @@ use super::*;
 use crate::hub::{MailError, MailMsg, TaskError, TaskPatch};
 use agentsflow_events::{TaskSnapshot, TaskStatus};
 
-pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. Файлы присылайте с подписью или следующим сообщением, до 20 МБ. 📂 /files — результаты и файлы задач. /rules — правила отделов, /spend — расходы, /mentor — наставник (сильная модель ведёт и проверяет задачи), /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
-
-pub(super) fn help_text() -> String {
-    format!("{HELP}\nВерсия: {}", env!("CARGO_PKG_VERSION"))
+pub(super) fn help_text(lang: Lang) -> String {
+    i18n::render(
+        lang,
+        "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. Файлы присылайте с подписью или следующим сообщением, до 20 МБ. 📂 /files — результаты и файлы задач. /rules — правила отделов, /spend — расходы, /mentor — наставник (сильная модель ведёт и проверяет задачи), /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.\nВерсия: {version}",
+        &[("version", env!("CARGO_PKG_VERSION"))],
+    )
 }
 
 const STATUSES: [TaskStatus; 6] = [
@@ -22,33 +24,33 @@ const STATUSES: [TaskStatus; 6] = [
 const PAGE: usize = 8;
 const MAIL_PAGE: usize = 6;
 
-pub(super) fn status_label(status: &TaskStatus) -> &'static str {
+pub(super) fn status_label(status: &TaskStatus, lang: Lang) -> &'static str {
     match status {
-        TaskStatus::Backlog => "Очередь",
-        TaskStatus::Todo => "К выполнению",
-        TaskStatus::InProgress => "В работе",
-        TaskStatus::Review => "На проверке",
-        TaskStatus::Done => "Готово",
-        TaskStatus::Blocked => "Застряла",
-        TaskStatus::Archived => "Архив",
+        TaskStatus::Backlog => tr(lang, "Очередь"),
+        TaskStatus::Todo => tr(lang, "К выполнению"),
+        TaskStatus::InProgress => tr(lang, "В работе"),
+        TaskStatus::Review => tr(lang, "На проверке"),
+        TaskStatus::Done => tr(lang, "Готово"),
+        TaskStatus::Blocked => tr(lang, "Застряла"),
+        TaskStatus::Archived => tr(lang, "Архив"),
     }
 }
-pub(super) fn work_state_label(state: agentsflow_events::WorkState) -> &'static str {
+pub(super) fn work_state_label(state: agentsflow_events::WorkState, lang: Lang) -> &'static str {
     use agentsflow_events::WorkState;
     match state {
-        WorkState::Queued => "в очереди",
-        WorkState::Waiting => "ждёт вашего ответа",
-        WorkState::Running => "работает",
-        WorkState::Stuck => "застряла",
-        WorkState::Review => "ждёт приёмки",
-        WorkState::Done => "готово",
-        WorkState::Cancelled => "закрыта",
+        WorkState::Queued => tr(lang, "в очереди"),
+        WorkState::Waiting => tr(lang, "ждёт вашего ответа"),
+        WorkState::Running => tr(lang, "работает"),
+        WorkState::Stuck => tr(lang, "застряла"),
+        WorkState::Review => tr(lang, "ждёт приёмки"),
+        WorkState::Done => tr(lang, "готово"),
+        WorkState::Cancelled => tr(lang, "закрыта"),
     }
 }
-fn short_label(status: &TaskStatus) -> &'static str {
+fn short_label(status: &TaskStatus, lang: Lang) -> &'static str {
     match status {
-        TaskStatus::Review => "Проверка",
-        other => status_label(other),
+        TaskStatus::Review => tr(lang, "Проверка"),
+        other => status_label(other, lang),
     }
 }
 pub(super) fn status_icon(status: &TaskStatus) -> &'static str {
@@ -71,41 +73,45 @@ fn bar(progress: u8) -> String {
         progress
     )
 }
-fn task_error_text(error: &TaskError) -> String {
+fn task_error_text(error: &TaskError, lang: Lang) -> String {
     match error {
-        TaskError::NotFound => "Задача не найдена".into(),
-        TaskError::Limit => "Слишком много задач на доске".into(),
-        TaskError::Forbidden => "Эту задачу нельзя менять".into(),
-        TaskError::MailDisabled => "Почта выключена".into(),
-        TaskError::NoAssignee => "Нужен исполнитель".into(),
-        TaskError::Mail(error) => mail_error_text(error).into(),
+        TaskError::NotFound => tr(lang, "Задача не найдена").into(),
+        TaskError::Limit => tr(lang, "Слишком много задач на доске").into(),
+        TaskError::Forbidden => tr(lang, "Эту задачу нельзя менять").into(),
+        TaskError::MailDisabled => tr(lang, "Почта выключена").into(),
+        TaskError::NoAssignee => tr(lang, "Нужен исполнитель").into(),
+        TaskError::Mail(error) => mail_error_text(error, lang).into(),
         TaskError::Invalid(text) => match *text {
-            "title must contain 1 to 200 characters" => "Название: от 1 до 200 символов".into(),
-            "description exceeds 8000 characters" => "Описание длиннее 8000 символов".into(),
-            _ => format!("Не принято: {text}"),
+            "title must contain 1 to 200 characters" => {
+                tr(lang, "Название: от 1 до 200 символов").into()
+            }
+            "description exceeds 8000 characters" => {
+                tr(lang, "Описание длиннее 8000 символов").into()
+            }
+            _ => i18n::render(lang, "Не принято: {text}", &[("text", text)]),
         },
     }
 }
-fn mail_error_text(error: &MailError) -> &'static str {
+fn mail_error_text(error: &MailError, lang: Lang) -> &'static str {
     match error {
-        MailError::SameAgent => "Отправитель и получатель совпадают",
-        MailError::Subject => "Тема: от 1 до 200 символов",
-        MailError::Body => "Текст письма: от 1 символа, не более 64 КБ",
-        MailError::UnknownThread => "Такой переписки нет",
-        MailError::ThreadLimit => "В этой переписке исчерпан лимит писем",
+        MailError::SameAgent => tr(lang, "Отправитель и получатель совпадают"),
+        MailError::Subject => tr(lang, "Тема: от 1 до 200 символов"),
+        MailError::Body => tr(lang, "Текст письма: от 1 символа, не более 64 КБ"),
+        MailError::UnknownThread => tr(lang, "Такой переписки нет"),
+        MailError::ThreadLimit => tr(lang, "В этой переписке исчерпан лимит писем"),
     }
 }
 fn button(text: &str, data: impl Into<String>) -> Value {
     json!({"text":text,"callback_data":data.into()})
 }
-fn event_line(event: &Event) -> Option<String> {
+fn event_line(event: &Event, lang: Lang) -> Option<String> {
     let clip = |text: &str, n: usize| text.chars().take(n).collect::<String>();
     Some(match event {
         Event::Message {
             role: Role::User,
             text,
             delta: false,
-        } => format!("💬 вы: {}", clip(text, 140)),
+        } => i18n::render(lang, "💬 вы: {text}", &[("text", &clip(text, 140))]),
         Event::Message {
             role: Role::Assistant,
             text,
@@ -122,14 +128,26 @@ fn event_line(event: &Event) -> Option<String> {
             is_error: true,
             output,
             ..
-        } => format!("⚠ ошибка команды: {}", clip(output, 100)),
-        Event::Diff { path, .. } => format!("✏ правка файла: {}", clip(path, 100)),
-        Event::PermissionRequest { tool, .. } => format!("🔐 запрос разрешения: {tool}"),
-        Event::PermissionResolved { allow: true, .. } => "✅ разрешено".into(),
-        Event::PermissionResolved { allow: false, .. } => "⛔ отклонено".into(),
-        Event::Done { reason } if reason.starts_with("interrupted") => "⏹ ход остановлен".into(),
-        Event::Done { reason } if reason == "error" => "❌ ход закончился ошибкой".into(),
-        Event::Done { .. } => "✔ ход закончен".into(),
+        } => i18n::render(
+            lang,
+            "⚠ ошибка команды: {output}",
+            &[("output", &clip(output, 100))],
+        ),
+        Event::Diff { path, .. } => i18n::render(
+            lang,
+            "✏ правка файла: {path}",
+            &[("path", &clip(path, 100))],
+        ),
+        Event::PermissionRequest { tool, .. } => {
+            i18n::render(lang, "🔐 запрос разрешения: {tool}", &[("tool", tool)])
+        }
+        Event::PermissionResolved { allow: true, .. } => tr(lang, "✅ разрешено").into(),
+        Event::PermissionResolved { allow: false, .. } => tr(lang, "⛔ отклонено").into(),
+        Event::Done { reason } if reason.starts_with("interrupted") => {
+            tr(lang, "⏹ ход остановлен").into()
+        }
+        Event::Done { reason } if reason == "error" => tr(lang, "❌ ход закончился ошибкой").into(),
+        Event::Done { .. } => tr(lang, "✔ ход закончен").into(),
         Event::Error { message } => format!("❌ {}", clip(message, 140)),
         _ => return None,
     })
@@ -157,7 +175,13 @@ pub(super) struct WorkflowView {
     pub name: String,
     pub steps_started: usize,
     pub step: Option<String>,
-    pub result: Option<String>,
+    result: Option<WorkflowResult>,
+}
+
+enum WorkflowResult {
+    Finished(String),
+    Stopped(String),
+    Failed(String, String),
 }
 
 struct Thread {
@@ -261,14 +285,21 @@ impl Bridge {
         let summary = STATUSES
             .iter()
             .zip(counts)
-            .map(|(s, n)| format!("{} {n}", short_label(s)))
+            .map(|(s, n)| format!("{} {n}", short_label(s, self.language(chat))))
             .collect::<Vec<_>>()
             .join(" · ");
-        let mut text = format!(
-            "<b>📋 Доска</b>\n{summary}\n\n<b>{} {}</b> ({})",
-            status_icon(&STATUSES[column]),
-            status_label(&STATUSES[column]),
-            items.len()
+        let mut text = i18n::render(
+            self.language(chat),
+            "<b>📋 Доска</b>\n{summary}\n\n<b>{icon} {status}</b> ({count})",
+            &[
+                ("icon", status_icon(&STATUSES[column])),
+                (
+                    "status",
+                    status_label(&STATUSES[column], self.language(chat)),
+                ),
+                ("count", &(items.len()).to_string()),
+                ("summary", &summary),
+            ],
         );
         let mut numbers = Vec::new();
         for (offset, task) in items.iter().skip(page * PAGE).take(PAGE).enumerate() {
@@ -280,7 +311,7 @@ impl Bridge {
                 self.safe(
                     task.assignee
                         .as_ref()
-                        .map_or("не назначена", AgentId::as_str),
+                        .map_or(tr(self.language(chat), "не назначена"), AgentId::as_str),
                     40
                 ),
                 bar(task.progress)
@@ -288,7 +319,7 @@ impl Bridge {
             numbers.push(button(&number.to_string(), format!("s:t:{}", task.id)));
         }
         if items.is_empty() {
-            text.push_str("\nПусто");
+            text.push_str(tr(self.language(chat), "\nПусто"));
         }
         let mut rows: Vec<Vec<Value>> = STATUSES
             .iter()
@@ -299,7 +330,7 @@ impl Bridge {
                     &format!(
                         "{}{} {count}",
                         if index == column { "• " } else { "" },
-                        short_label(status)
+                        short_label(status, self.language(chat))
                     ),
                     format!("s:b:{index}:0"),
                 )
@@ -311,17 +342,26 @@ impl Bridge {
         rows.extend(numbers.chunks(4).map(<[Value]>::to_vec));
         let mut nav = Vec::new();
         if page > 0 {
-            nav.push(button("◂ Раньше", format!("s:b:{column}:{}", page - 1)));
+            nav.push(button(
+                tr(self.language(chat), "◂ Раньше"),
+                format!("s:b:{column}:{}", page - 1),
+            ));
         }
         if page + 1 < pages {
-            nav.push(button("Дальше ▸", format!("s:b:{column}:{}", page + 1)));
+            nav.push(button(
+                tr(self.language(chat), "Дальше ▸"),
+                format!("s:b:{column}:{}", page + 1),
+            ));
         }
         if !nav.is_empty() {
             rows.push(nav);
         }
         rows.push(vec![
-            button("＋ Новая задача", "s:nt"),
-            button("🔄 Обновить", format!("s:b:{column}:{page}")),
+            button(tr(self.language(chat), "＋ Новая задача"), "s:nt"),
+            button(
+                tr(self.language(chat), "🔄 Обновить"),
+                format!("s:b:{column}:{page}"),
+            ),
         ]);
         self.show(chat, existing, text, rows).await;
     }
@@ -332,38 +372,59 @@ impl Bridge {
         task: &TaskSnapshot,
         work: &agentsflow_events::WorkInfo,
         flash: &str,
+        lang: Lang,
     ) -> (String, Vec<Vec<Value>>) {
         use agentsflow_events::{Risk, WorkState};
         let mut text = String::new();
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 200)));
         }
-        text.push_str(&format!(
-            "{} <b>{}</b>\nОтдел: {} · {} · {}\nПотрачено: {}",
-            status_icon(&task.status),
-            self.safe(&task.title, 200),
-            self.safe(&work.department, 40),
-            work_state_label(work.state),
-            if work.risk == Risk::External {
-                "наружу, принимаете вы"
-            } else {
-                "внутреннее"
-            },
-            crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens)
+        text.push_str(&i18n::render(
+            lang,
+            "{icon} <b>{title}</b>\nОтдел: {department} · {state} · {risk}\nПотрачено: {spent}",
+            &[
+                ("icon", status_icon(&task.status)),
+                ("title", &(self.safe(&task.title, 200)).to_string()),
+                ("department", &(self.safe(&work.department, 40)).to_string()),
+                ("state", work_state_label(work.state, lang)),
+                (
+                    "risk",
+                    if work.risk == Risk::External {
+                        tr(lang, "наружу, принимаете вы")
+                    } else {
+                        tr(lang, "внутреннее")
+                    },
+                ),
+                (
+                    "spent",
+                    &(crate::ledger::spent(work.cost_usd, work.input_tokens, work.output_tokens))
+                        .to_string(),
+                ),
+            ],
         ));
         if let Some(reason) = work
             .stuck_reason
             .as_ref()
             .filter(|_| work.state == WorkState::Stuck)
         {
-            text.push_str(&format!("\nПричина: {}", self.safe(reason, 300)));
+            text.push_str(&i18n::render(
+                lang,
+                "\nПричина: {reason}",
+                &[("reason", &(self.safe(reason, 300)).to_string())],
+            ));
         }
         if let Some(proposal) = &work.proposal {
-            text.push_str(&format!(
-                "\nЖдёт нового отдела <b>{}</b> (<code>{}</code>): {}",
-                self.safe(&proposal.title, 80),
-                self.safe(&proposal.id, 40),
-                self.safe(&proposal.description, 300)
+            text.push_str(&i18n::render(
+                lang,
+                "\nЖдёт нового отдела <b>{title}</b> (<code>{id}</code>): {description}",
+                &[
+                    ("title", &(self.safe(&proposal.title, 80)).to_string()),
+                    ("id", &(self.safe(&proposal.id, 40)).to_string()),
+                    (
+                        "description",
+                        &(self.safe(&proposal.description, 300)).to_string(),
+                    ),
+                ],
             ));
         }
         for question in &work.questions {
@@ -377,10 +438,18 @@ impl Bridge {
             }
         }
         for note in &work.review_notes {
-            text.push_str(&format!("\nЗамечание: {}", self.safe(note, 300)));
+            text.push_str(&i18n::render(
+                lang,
+                "\nЗамечание: {note}",
+                &[("note", &(self.safe(note, 300)).to_string())],
+            ));
         }
         if let Some(parent) = work.parent.as_ref().and_then(|id| self.hub.task(id)) {
-            text.push_str(&format!("\nЗаказ для «{}»", self.safe(&parent.title, 120)));
+            text.push_str(&i18n::render(
+                lang,
+                "\nЗаказ для «{title}»",
+                &[("title", &(self.safe(&parent.title, 120)).to_string())],
+            ));
         }
         for child in self.hub.tasks(true).into_iter().filter(|t| {
             t.work
@@ -390,10 +459,14 @@ impl Bridge {
             let state = child
                 .work
                 .as_ref()
-                .map_or("", |w| work_state_label(w.state));
-            text.push_str(&format!(
-                "\nЗаказ: «{}» · {state}",
-                self.safe(&child.title, 120)
+                .map_or("", |w| work_state_label(w.state, lang));
+            text.push_str(&i18n::render(
+                lang,
+                "\nЗаказ: «{title}» · {state}",
+                &[
+                    ("title", &(self.safe(&child.title, 120)).to_string()),
+                    ("state", state),
+                ],
             ));
         }
         if !task.description.is_empty() {
@@ -405,102 +478,136 @@ impl Bridge {
                 .iter()
                 .map(|file| file.rsplit('/').next().unwrap_or(file))
                 .collect();
-            text.push_str(&format!(
-                "\n📎 От вас: {}",
-                self.safe(&names.join(", "), 300)
+            text.push_str(&i18n::render(
+                lang,
+                "\n📎 От вас: {files}",
+                &[("files", &(self.safe(&names.join(", "), 300)).to_string())],
             ));
         }
         if !work.result_summary.is_empty() {
-            text.push_str(&format!(
-                "\n\n<b>Итог</b>\n{}",
-                self.safe(&work.result_summary, 900)
+            text.push_str(&i18n::render(
+                lang,
+                "\n\n<b>Итог</b>\n{result}",
+                &[(
+                    "result",
+                    &(self.safe(&work.result_summary, 900)).to_string(),
+                )],
             ));
         }
         if let Some(path) = &work.result_path {
-            text.push_str(&format!("\nФайл: <code>{}</code>", self.safe(path, 200)));
+            text.push_str(&i18n::render(
+                lang,
+                "\nФайл: <code>{path}</code>",
+                &[("path", &(self.safe(path, 200)).to_string())],
+            ));
         }
-        text.push_str(&format!(
-            "\nОбновлено {}",
-            format_time(task.updated_ms, now_ms())
+        text.push_str(&i18n::render(
+            lang,
+            "\nОбновлено {time}",
+            &[(
+                "time",
+                &(format_time(task.updated_ms, now_ms())).to_string(),
+            )],
         ));
         let id = &task.id;
         let mut rows = Vec::new();
-        rows.extend(self.file_row(id));
-        rows.extend(self.diff_row(id));
+        rows.extend(self.file_row(id, lang));
+        rows.extend(self.diff_row(id, lang));
         match work.state {
-            WorkState::Running => rows.push(vec![button("⏹ Стоп", format!("s:ta:{id}:stop"))]),
+            WorkState::Running => {
+                rows.push(vec![button(tr(lang, "⏹ Стоп"), format!("s:ta:{id}:stop"))])
+            }
             WorkState::Review => {
                 rows.push(vec![
-                    button("✅ Принять", format!("s:ta:{id}:acc")),
-                    button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
+                    button(tr(lang, "✅ Принять"), format!("s:ta:{id}:acc")),
+                    button(tr(lang, "🔁 Ещё круг"), format!("s:ta:{id}:rq")),
                 ]);
                 rows.push(vec![button(
-                    "✍ Вернуть с замечанием",
+                    tr(lang, "✍ Вернуть с замечанием"),
                     format!("s:ta:{id}:rn"),
                 )]);
             }
             WorkState::Stuck => {
                 rows.push(vec![
-                    button("🔁 Ещё круг", format!("s:ta:{id}:rq")),
-                    button("✅ Принять как есть", format!("s:ta:{id}:acc")),
+                    button(tr(lang, "🔁 Ещё круг"), format!("s:ta:{id}:rq")),
+                    button(tr(lang, "✅ Принять как есть"), format!("s:ta:{id}:acc")),
                 ]);
                 rows.push(vec![button(
-                    "✍ Ещё круг с замечанием",
+                    tr(lang, "✍ Ещё круг с замечанием"),
                     format!("s:ta:{id}:rn"),
                 )]);
             }
-            WorkState::Done | WorkState::Cancelled => {
-                rows.push(vec![button("🔁 Запустить снова", format!("s:ta:{id}:rq"))])
-            }
+            WorkState::Done | WorkState::Cancelled => rows.push(vec![button(
+                tr(lang, "🔁 Запустить снова"),
+                format!("s:ta:{id}:rq"),
+            )]),
             WorkState::Waiting if work.proposal.is_some() => rows.push(vec![
-                button("✅ Создать отдел", format!("s:ta:{id}:pc")),
-                button("В общий отдел", format!("s:ta:{id}:pg")),
+                button(tr(lang, "✅ Создать отдел"), format!("s:ta:{id}:pc")),
+                button(tr(lang, "В общий отдел"), format!("s:ta:{id}:pg")),
             ]),
-            WorkState::Waiting if work.questions.iter().any(|q| q.answer.is_none()) => {
-                rows.push(vec![button("✍ Ответить", format!("s:ta:{id}:ans"))])
-            }
+            WorkState::Waiting if work.questions.iter().any(|q| q.answer.is_none()) => rows.push(
+                vec![button(tr(lang, "✍ Ответить"), format!("s:ta:{id}:ans"))],
+            ),
             WorkState::Queued | WorkState::Waiting => {}
         }
         if work.state != WorkState::Running && work.state != WorkState::Cancelled {
-            rows.push(vec![button("🗄 Закрыть", format!("s:ta:{id}:ar"))]);
+            rows.push(vec![button(tr(lang, "🗄 Закрыть"), format!("s:ta:{id}:ar"))]);
         }
         let column = STATUSES.iter().position(|s| *s == task.status).unwrap_or(9);
-        rows.push(vec![button("← К доске", format!("s:b:{column}:0"))]);
+        rows.push(vec![button(
+            tr(lang, "← К доске"),
+            format!("s:b:{column}:0"),
+        )]);
         (text, rows)
     }
-    fn task_card(&self, task: &TaskSnapshot, flash: &str) -> (String, Vec<Vec<Value>>) {
+    fn task_card(&self, task: &TaskSnapshot, flash: &str, lang: Lang) -> (String, Vec<Vec<Value>>) {
         if let Some(work) = &task.work {
-            return self.work_card(task, work, flash);
+            return self.work_card(task, work, flash, lang);
         }
         let mut text = String::new();
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 200)));
         }
-        text.push_str(&format!(
-            "{} <b>{}</b>\n{}\nИсполнитель: {}\n{}",
-            status_icon(&task.status),
-            self.safe(&task.title, 200),
-            status_label(&task.status),
-            self.safe(
-                task.assignee
-                    .as_ref()
-                    .map_or("не назначена", AgentId::as_str),
-                40
-            ),
-            bar(task.progress)
+        text.push_str(&i18n::render(
+            lang,
+            "{icon} <b>{title}</b>\n{status}\nИсполнитель: {assignee}\n{progress}",
+            &[
+                ("icon", status_icon(&task.status)),
+                ("title", &(self.safe(&task.title, 200)).to_string()),
+                ("status", status_label(&task.status, lang)),
+                (
+                    "assignee",
+                    &(self.safe(
+                        task.assignee
+                            .as_ref()
+                            .map_or(tr(lang, "не назначена"), AgentId::as_str),
+                        40,
+                    ))
+                    .to_string(),
+                ),
+                ("progress", &(bar(task.progress)).to_string()),
+            ],
         ));
         if !task.description.is_empty() {
             text.push_str(&format!("\n\n{}", self.safe(&task.description, 600)));
         }
         if !task.note.is_empty() {
-            text.push_str(&format!("\nПримечание: {}", self.safe(&task.note, 300)));
+            text.push_str(&i18n::render(
+                lang,
+                "\nПримечание: {note}",
+                &[("note", &(self.safe(&task.note, 300)).to_string())],
+            ));
         }
-        text.push_str(&format!(
-            "\nОбновлено {}",
-            format_time(task.updated_ms, now_ms())
+        text.push_str(&i18n::render(
+            lang,
+            "\nОбновлено {time}",
+            &[(
+                "time",
+                &(format_time(task.updated_ms, now_ms())).to_string(),
+            )],
         ));
         if task.thread.is_some() {
-            text.push_str("\nСвязана с перепиской");
+            text.push_str(tr(lang, "\nСвязана с перепиской"));
         }
         let id = &task.id;
         let mut rows = Vec::new();
@@ -510,25 +617,31 @@ impl Bridge {
                 TaskStatus::Backlog | TaskStatus::Todo | TaskStatus::Blocked
             )
         {
-            rows.push(vec![button("▶ Запустить", format!("s:ta:{id}:run"))]);
+            rows.push(vec![button(
+                tr(lang, "▶ Запустить"),
+                format!("s:ta:{id}:run"),
+            )]);
         }
         if task.status == TaskStatus::Review {
             rows.push(vec![
-                button("✅ Принять", format!("s:ta:{id}:acc")),
-                button("↩ Вернуть в работу", format!("s:ta:{id}:ret")),
+                button(tr(lang, "✅ Принять"), format!("s:ta:{id}:acc")),
+                button(tr(lang, "↩ Вернуть в работу"), format!("s:ta:{id}:ret")),
             ]);
         }
         rows.push(vec![
-            button("Статус ▸", format!("s:ta:{id}:sm")),
-            button("👤 Исполнитель ▸", format!("s:ta:{id}:am")),
+            button(tr(lang, "Статус ▸"), format!("s:ta:{id}:sm")),
+            button(tr(lang, "👤 Исполнитель ▸"), format!("s:ta:{id}:am")),
         ]);
         rows.push(vec![
-            button("✏ Название", format!("s:ta:{id}:et")),
-            button("✏ Описание", format!("s:ta:{id}:ed")),
+            button(tr(lang, "✏ Название"), format!("s:ta:{id}:et")),
+            button(tr(lang, "✏ Описание"), format!("s:ta:{id}:ed")),
         ]);
-        rows.push(vec![button("🗄 В архив", format!("s:ta:{id}:ar"))]);
+        rows.push(vec![button(tr(lang, "🗄 В архив"), format!("s:ta:{id}:ar"))]);
         let column = STATUSES.iter().position(|s| *s == task.status).unwrap_or(9);
-        rows.push(vec![button("← К доске", format!("s:b:{column}:0"))]);
+        rows.push(vec![button(
+            tr(lang, "← К доске"),
+            format!("s:b:{column}:0"),
+        )]);
         (text, rows)
     }
     pub(super) async fn open_task(
@@ -540,7 +653,7 @@ impl Bridge {
     ) {
         match self.hub.task(id) {
             Some(task) => {
-                let (text, rows) = self.task_card(&task, flash);
+                let (text, rows) = self.task_card(&task, flash, self.language(chat));
                 self.show(chat, existing, text, rows).await;
             }
             None => {
@@ -567,9 +680,9 @@ impl Bridge {
                     .and_then(|control| control.runs.as_ref())
                     .is_some_and(|runs| runs.stop(id));
                 Ok(if stopped {
-                    "Останавливаю"
+                    tr(self.language(chat), "Останавливаю")
                 } else {
-                    "Задача уже не выполняется"
+                    tr(self.language(chat), "Задача уже не выполняется")
                 })
             }
             "sw" | "sr" | "ss" | "cp" | "cd" => {
@@ -585,25 +698,29 @@ impl Bridge {
                     _ => runs.drop_comment(id),
                 });
                 Ok(match (action, done) {
-                    ("sw", true) => "Подожду ещё",
-                    ("sr", true) => "Перезапускаю шаг",
-                    ("ss", true) => "Останавливаю",
-                    ("cp", true) => "Публикую комментарий",
-                    ("cd", true) => "Комментарий не нужен",
-                    _ => "Запуск уже не идёт",
+                    ("sw", true) => tr(self.language(chat), "Подожду ещё"),
+                    ("sr", true) => tr(self.language(chat), "Перезапускаю шаг"),
+                    ("ss", true) => tr(self.language(chat), "Останавливаю"),
+                    ("cp", true) => tr(self.language(chat), "Публикую комментарий"),
+                    ("cd", true) => tr(self.language(chat), "Комментарий не нужен"),
+                    _ => tr(self.language(chat), "Запуск уже не идёт"),
                 })
             }
             "rq" => self
                 .hub
                 .update_task(AgentId::orchestrator(), id, patch(TaskStatus::Todo))
-                .map(|_| "Поставлено в очередь"),
+                .map(|_| tr(self.language(chat), "Поставлено в очередь")),
             "pc" | "pg" => {
                 let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
                     return String::new();
                 };
                 let flash = match runs.resolve_proposal(id, action == "pc") {
-                    Ok(department) if action == "pc" => format!("✔ Отдел {department} создан"),
-                    Ok(_) => "✔ Задачи переданы в общий отдел".to_owned(),
+                    Ok(department) if action == "pc" => i18n::render(
+                        self.language(chat),
+                        "✔ Отдел {department} создан",
+                        &[("department", &department)],
+                    ),
+                    Ok(_) => tr(self.language(chat), "✔ Задачи переданы в общий отдел").to_owned(),
                     Err(error) => error,
                 };
                 self.open_task(chat, message, id, &flash).await;
@@ -614,7 +731,7 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::ReturnNote(id.into()),
-                    "Что исправить? Следующее сообщение уйдёт отделу замечанием, задача пойдёт на новый круг.",
+                    tr(self.language(chat), "Что исправить? Следующее сообщение уйдёт отделу замечанием, задача пойдёт на новый круг."),
                     &format!("s:t:{id}"),
                 )
                 .await;
@@ -638,30 +755,40 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::Answer(id.into()),
-                    &format!("{questions}\n\nОтветьте одним сообщением на все вопросы."),
+                    &i18n::render(
+                        self.language(chat),
+                        "{questions}\n\nОтветьте одним сообщением на все вопросы.",
+                        &[("questions", &questions)],
+                    ),
                     &format!("s:t:{id}"),
                 )
                 .await;
                 return String::new();
             }
-            "run" => self.hub.dispatch_task(id).map(|_| "Запущено"),
+            "run" => self
+                .hub
+                .dispatch_task(id)
+                .map(|_| tr(self.language(chat), "Запущено")),
             "accy" => self
                 .hub
                 .update_task(AgentId::orchestrator(), id, patch(TaskStatus::Done))
-                .map(|_| "Принято"),
+                .map(|_| tr(self.language(chat), "Принято")),
             "ret" => self
                 .hub
                 .update_task(AgentId::orchestrator(), id, patch(TaskStatus::InProgress))
-                .map(|_| "Возвращено в работу"),
+                .map(|_| tr(self.language(chat), "Возвращено в работу")),
             "ary" => self
                 .hub
                 .update_task(AgentId::orchestrator(), id, patch(TaskStatus::Archived))
-                .map(|_| "Перенесено в архив"),
+                .map(|_| tr(self.language(chat), "Перенесено в архив")),
             "acc" | "ar" => {
                 let (question, yes) = if action == "acc" {
-                    ("Принять задачу как выполненную?", "accy")
+                    (
+                        tr(self.language(chat), "Принять задачу как выполненную?"),
+                        "accy",
+                    )
                 } else {
-                    ("Перенести задачу в архив?", "ary")
+                    (tr(self.language(chat), "Перенести задачу в архив?"), "ary")
                 };
                 let title = self.hub.task(id).map(|t| t.title).unwrap_or_default();
                 self.show(
@@ -669,8 +796,8 @@ impl Bridge {
                     message,
                     format!("{question}\n<b>{}</b>", self.safe(&title, 200)),
                     vec![vec![
-                        button("Да", format!("s:ta:{id}:{yes}")),
-                        button("Нет", format!("s:t:{id}")),
+                        button(tr(self.language(chat), "Да"), format!("s:ta:{id}:{yes}")),
+                        button(tr(self.language(chat), "Нет"), format!("s:t:{id}")),
                     ]],
                 )
                 .await;
@@ -682,7 +809,11 @@ impl Bridge {
                     .enumerate()
                     .map(|(index, status)| {
                         button(
-                            &format!("{} {}", status_icon(status), status_label(status)),
+                            &format!(
+                                "{} {}",
+                                status_icon(status),
+                                status_label(status, self.language(chat))
+                            ),
                             format!("s:ts:{id}:{index}"),
                         )
                     })
@@ -690,9 +821,17 @@ impl Bridge {
                     .chunks(2)
                     .map(<[Value]>::to_vec)
                     .collect();
-                rows.push(vec![button("← Назад", format!("s:t:{id}"))]);
-                self.show(chat, message, "Какой статус поставить?".into(), rows)
-                    .await;
+                rows.push(vec![button(
+                    tr(self.language(chat), "← Назад"),
+                    format!("s:t:{id}"),
+                )]);
+                self.show(
+                    chat,
+                    message,
+                    tr(self.language(chat), "Какой статус поставить?").into(),
+                    rows,
+                )
+                .await;
                 return String::new();
             }
             "am" => {
@@ -703,11 +842,22 @@ impl Bridge {
                     .enumerate()
                     .map(|(index, member)| button(member.id.as_str(), format!("s:tu:{id}:{index}")))
                     .collect();
-                buttons.push(button("не назначена", format!("s:tu:{id}:-")));
+                buttons.push(button(
+                    tr(self.language(chat), "не назначена"),
+                    format!("s:tu:{id}:-"),
+                ));
                 let mut rows: Vec<Vec<Value>> = buttons.chunks(2).map(<[Value]>::to_vec).collect();
-                rows.push(vec![button("← Назад", format!("s:t:{id}"))]);
-                self.show(chat, message, "Кому поручить задачу?".into(), rows)
-                    .await;
+                rows.push(vec![button(
+                    tr(self.language(chat), "← Назад"),
+                    format!("s:t:{id}"),
+                )]);
+                self.show(
+                    chat,
+                    message,
+                    tr(self.language(chat), "Кому поручить задачу?").into(),
+                    rows,
+                )
+                .await;
                 return String::new();
             }
             "et" => {
@@ -715,7 +865,10 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::EditTitle(id.into()),
-                    "Новое название задачи? Следующее сообщение заменит его.",
+                    tr(
+                        self.language(chat),
+                        "Новое название задачи? Следующее сообщение заменит его.",
+                    ),
                     &format!("s:t:{id}"),
                 )
                 .await;
@@ -726,7 +879,10 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::EditDescription(id.into()),
-                    "Новое описание задачи? Следующее сообщение заменит его.",
+                    tr(
+                        self.language(chat),
+                        "Новое описание задачи? Следующее сообщение заменит его.",
+                    ),
                     &format!("s:t:{id}"),
                 )
                 .await;
@@ -736,7 +892,7 @@ impl Bridge {
         };
         let flash = match result {
             Ok(text) => text.to_owned(),
-            Err(error) => task_error_text(&error),
+            Err(error) => task_error_text(&error, self.language(chat)),
         };
         self.open_task(chat, message, id, &flash).await;
         flash
@@ -754,7 +910,7 @@ impl Bridge {
                 chat,
                 message,
                 text.to_owned(),
-                vec![vec![button("Отмена", back)]],
+                vec![vec![button(tr(self.language(chat), "Отмена"), back)]],
             )
             .await;
         self.inputs.insert(
@@ -783,11 +939,15 @@ impl Bridge {
             Ok(task) => {
                 let (text, rows) = self.task_card(
                     &task,
-                    "✔ Задача создана. Назначьте исполнителя и запустите.",
+                    tr(
+                        self.language(chat),
+                        "✔ Задача создана. Назначьте исполнителя и запустите.",
+                    ),
+                    self.language(chat),
                 );
                 self.show(chat, existing, text, rows).await;
             }
-            Err(error) => self.queue(chat, &task_error_text(&error), None),
+            Err(error) => self.queue(chat, &task_error_text(&error, self.language(chat)), None),
         }
     }
 
@@ -823,12 +983,12 @@ impl Bridge {
             })
             .collect()
     }
-    fn route_names(&self, participants: &[AgentId]) -> String {
+    fn route_names(&self, participants: &[AgentId], lang: Lang) -> String {
         participants
             .iter()
             .map(|id| {
                 if *id == AgentId::orchestrator() {
-                    "вы".to_owned()
+                    tr(lang, "вы").to_owned()
                 } else {
                     self.safe(id.as_str(), 40)
                 }
@@ -841,7 +1001,7 @@ impl Bridge {
             self.show(
                 chat,
                 existing,
-                "<b>✉ Почта</b>\nПочта выключена".into(),
+                tr(self.language(chat), "<b>✉ Почта</b>\nПочта выключена").into(),
                 Vec::new(),
             )
             .await;
@@ -857,7 +1017,7 @@ impl Bridge {
         });
         let pages = threads.len().div_ceil(MAIL_PAGE).max(1);
         let page = page.min(pages - 1);
-        let mut text = "<b>✉ Почта</b>".to_owned();
+        let mut text = tr(self.language(chat), "<b>✉ Почта</b>").to_owned();
         let mut buttons = Vec::new();
         for (offset, thread) in threads
             .iter()
@@ -872,13 +1032,29 @@ impl Bridge {
                 .map_or(String::new(), |ts| {
                     format!(" · {}", format_time(*ts, now_ms()))
                 });
-            text.push_str(&format!(
-                "\n{}. ✉ <b>{}</b> · {} · {} п.{when}{}",
-                page * MAIL_PAGE + offset + 1,
-                self.route_names(&thread.participants()),
-                self.safe(&thread.subject, 60),
-                thread.messages.len(),
-                if self.unseen(thread) { " ●" } else { "" }
+            text.push_str(&i18n::render(
+                self.language(chat),
+                "\n{number}. ✉ <b>{participants}</b> · {subject} · {count} {unit}{when}{unseen}",
+                &[
+                    ("number", &(page * MAIL_PAGE + offset + 1).to_string()),
+                    (
+                        "participants",
+                        &self.route_names(&thread.participants(), self.language(chat)),
+                    ),
+                    ("subject", &self.safe(&thread.subject, 60)),
+                    ("count", &thread.messages.len().to_string()),
+                    (
+                        "unit",
+                        i18n::plural(
+                            self.language(chat),
+                            thread.messages.len() as u64,
+                            ["п.", "п.", "п."],
+                            ["message", "messages"],
+                        ),
+                    ),
+                    ("when", &when),
+                    ("unseen", if self.unseen(thread) { " ●" } else { "" }),
+                ],
             ));
             buttons.push(button(
                 &(page * MAIL_PAGE + offset + 1).to_string(),
@@ -886,22 +1062,31 @@ impl Bridge {
             ));
         }
         if threads.is_empty() {
-            text.push_str("\nПисем пока нет");
+            text.push_str(tr(self.language(chat), "\nПисем пока нет"));
         }
         let mut rows: Vec<Vec<Value>> = buttons.chunks(6).map(<[Value]>::to_vec).collect();
         let mut nav = Vec::new();
         if page > 0 {
-            nav.push(button("◂ Раньше", format!("s:m:{}", page - 1)));
+            nav.push(button(
+                tr(self.language(chat), "◂ Раньше"),
+                format!("s:m:{}", page - 1),
+            ));
         }
         if page + 1 < pages {
-            nav.push(button("Дальше ▸", format!("s:m:{}", page + 1)));
+            nav.push(button(
+                tr(self.language(chat), "Дальше ▸"),
+                format!("s:m:{}", page + 1),
+            ));
         }
         if !nav.is_empty() {
             rows.push(nav);
         }
         rows.push(vec![
-            button("✉ Новое письмо", "s:mn"),
-            button("🔄 Обновить", format!("s:m:{page}")),
+            button(tr(self.language(chat), "✉ Новое письмо"), "s:mn"),
+            button(
+                tr(self.language(chat), "🔄 Обновить"),
+                format!("s:m:{page}"),
+            ),
         ]);
         self.show(chat, existing, text, rows).await;
     }
@@ -922,7 +1107,7 @@ impl Bridge {
         let mut text = format!(
             "<b>✉ {}</b>\n{}",
             self.safe(&thread.subject, 120),
-            self.route_names(&thread.participants())
+            self.route_names(&thread.participants(), self.language(chat))
         );
         for message in &thread.messages[start..end] {
             let when = times.get(&message.id).map_or(String::new(), |ts| {
@@ -930,23 +1115,23 @@ impl Bridge {
             });
             text.push_str(&format!(
                 "\n\n<b>{} → {}</b>{when}\n{}",
-                self.route_names(std::slice::from_ref(&message.from)),
-                self.route_names(std::slice::from_ref(&message.to)),
+                self.route_names(std::slice::from_ref(&message.from), self.language(chat)),
+                self.route_names(std::slice::from_ref(&message.to), self.language(chat)),
                 self.safe(&message.body, 500)
             ));
         }
         let mut rows = Vec::new();
         if start > 0 {
             rows.push(vec![button(
-                "◂ Показать раньше",
+                tr(self.language(chat), "◂ Показать раньше"),
                 format!("s:mt:{id}:{}", older + 1),
             )]);
         }
         rows.push(vec![
-            button("↩ Ответить", format!("s:mr:{id}")),
-            button("✉ Новое письмо", "s:mn"),
+            button(tr(self.language(chat), "↩ Ответить"), format!("s:mr:{id}")),
+            button(tr(self.language(chat), "✉ Новое письмо"), "s:mn"),
         ]);
-        rows.push(vec![button("← Назад", "s:m:0")]);
+        rows.push(vec![button(tr(self.language(chat), "← Назад"), "s:m:0")]);
         self.show(chat, existing, text, rows).await;
     }
     /// A reply to a letter of the orchestrator: an answer to the one question
@@ -955,14 +1140,17 @@ impl Bridge {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
             self.queue(
                 chat,
-                "Оркестратор работает только в режиме serve --home",
+                tr(
+                    self.language(chat),
+                    "Оркестратор работает только в режиме serve --home",
+                ),
                 None,
             );
             return;
         };
         if let Some(id) = asked_in(letter, &self.hub.tasks(false)) {
             let flash = match runs.answer(&id, text) {
-                Ok(_) => "✔ Ответ записан".to_owned(),
+                Ok(_) => tr(self.language(chat), "✔ Ответ записан").to_owned(),
                 Err(error) => error,
             };
             self.open_task(chat, None, &id, &flash).await;
@@ -972,11 +1160,19 @@ impl Bridge {
         let message =
             format!("Ответ на твоё письмо «{subject}»:\n{quoted}\n\nХозяин отвечает: {text}");
         let answer = if !self.config.prompts {
-            "Отправка заданий из Telegram выключена владельцем".to_owned()
+            tr(
+                self.language(chat),
+                "Отправка заданий из Telegram выключена владельцем",
+            )
+            .to_owned()
         } else {
             match runs.message(&message) {
-                Ok(()) => "🧭 Принял, разбираю…".to_owned(),
-                Err(error) => format!("Не получилось: {error}"),
+                Ok(()) => tr(self.language(chat), "🧭 Принял, разбираю…").to_owned(),
+                Err(error) => i18n::render(
+                    self.language(chat),
+                    "Не получилось: {error}",
+                    &[("error", &error.to_string())],
+                ),
             }
         };
         self.queue(chat, &answer, None);
@@ -991,7 +1187,7 @@ impl Bridge {
         thread: Option<String>,
     ) {
         if !self.hub.mail_enabled() {
-            self.queue(chat, "Почта выключена", None);
+            self.queue(chat, tr(self.language(chat), "Почта выключена"), None);
             return;
         }
         match self.hub.send_mail(
@@ -1002,27 +1198,48 @@ impl Bridge {
             thread,
         ) {
             Ok(mail) => {
-                let text = format!("✔ Письмо отправлено: <b>{}</b>", self.safe(to.as_str(), 40));
+                let text = i18n::render(
+                    self.language(chat),
+                    "✔ Письмо отправлено: <b>{agent}</b>",
+                    &[("agent", &self.safe(to.as_str(), 40))],
+                );
                 self.show(
                     chat,
                     None,
                     text,
                     vec![vec![button(
-                        "Открыть переписку",
+                        tr(self.language(chat), "Открыть переписку"),
                         format!("s:mt:{}:0", mail.thread),
                     )]],
                 )
                 .await;
             }
-            Err(error) => self.queue(chat, mail_error_text(&error), None),
+            Err(error) => self.queue(chat, mail_error_text(&error, self.language(chat)), None),
         }
     }
 
     // ---------- workflow ----------
+    #[cfg(test)]
     fn workflow_text(&self) -> Option<(String, Vec<Vec<Value>>)> {
+        self.workflow_text_for(Lang::Ru)
+    }
+    fn workflow_text_for(&self, lang: Lang) -> Option<(String, Vec<Vec<Value>>)> {
         let view = self.wf.as_ref()?;
         if let Some(result) = &view.result {
-            return Some((self.safe(result, 400), Vec::new()));
+            let text = match result {
+                WorkflowResult::Finished(name) => {
+                    i18n::render(lang, "🔁 Workflow «{name}»: завершён", &[("name", name)])
+                }
+                WorkflowResult::Stopped(name) => {
+                    i18n::render(lang, "⏹ Workflow «{name}»: остановлен", &[("name", name)])
+                }
+                WorkflowResult::Failed(name, detail) => i18n::render(
+                    lang,
+                    "❌ Workflow «{name}»: с ошибкой: {detail}",
+                    &[("name", name), ("detail", detail)],
+                ),
+            };
+            return Some((self.safe(&text, 400), Vec::new()));
         }
         let agent = self.control.as_ref().and_then(|control| {
             let spec = control.specs.iter().find(|s| s.name == view.name)?;
@@ -1037,20 +1254,27 @@ impl Bridge {
             .as_ref()
             .and_then(|c| c.specs.iter().find(|s| s.name == view.name))
             .map_or(0, |s| s.step.len());
-        let step = view.step.as_deref().map_or("запуск".to_owned(), |s| {
-            format!(
-                "шаг {} из {total}: {}",
-                view.steps_started,
-                self.safe(s, 60)
-            )
-        });
+        let step = view
+            .step
+            .as_deref()
+            .map_or(tr(lang, "запуск").to_owned(), |s| {
+                i18n::render(
+                    lang,
+                    "шаг {step} из {total}: {name}",
+                    &[
+                        ("step", &view.steps_started.to_string()),
+                        ("total", &total.to_string()),
+                        ("name", &self.safe(s, 60)),
+                    ],
+                )
+            });
         Some((
             format!(
                 "⚙ <b>{}</b>: {step}{}",
                 self.safe(&view.name, 80),
                 agent.map_or(String::new(), |a| format!(" · {}", self.safe(&a, 40)))
             ),
-            vec![vec![button("⏹ Остановить", "s:wx")]],
+            vec![vec![button(tr(lang, "⏹ Остановить"), "s:wx")]],
         ))
     }
     pub(super) fn track_workflow(&mut self, event: &Event) {
@@ -1078,15 +1302,15 @@ impl Bridge {
             }
             WorkflowStatus::Finished => {
                 if let Some(view) = self.wf.as_mut() {
-                    view.result = Some(format!("🔁 Workflow «{name}»: завершён"));
+                    view.result = Some(WorkflowResult::Finished(name.clone()));
                 }
             }
             WorkflowStatus::Failed => {
                 if let Some(view) = self.wf.as_mut() {
                     view.result = Some(if detail == "stopped" {
-                        format!("⏹ Workflow «{name}»: остановлен")
+                        WorkflowResult::Stopped(name.clone())
                     } else {
-                        format!("❌ Workflow «{name}»: с ошибкой: {detail}")
+                        WorkflowResult::Failed(name.clone(), detail.clone())
                     });
                 }
             }
@@ -1094,21 +1318,21 @@ impl Bridge {
         }
     }
     pub(super) async fn refresh_workflow(&mut self) {
-        let Some((text, rows)) = self.workflow_text() else {
-            return;
-        };
         let finished = self.wf.as_ref().is_some_and(|v| v.result.is_some());
         let live: Vec<_> = self
             .wf_live
             .iter()
-            .filter(|(_, (_, old))| *old != text)
-            .map(|(chat, (message, _))| (*chat, *message))
+            .map(|(chat, (message, old))| (*chat, *message, old.clone()))
             .collect();
-        for (chat, message) in live {
-            self.show(chat, Some(message), text.clone(), rows.clone())
-                .await;
-            if let Some(entry) = self.wf_live.get_mut(&chat) {
-                entry.1 = text.clone();
+        for (chat, message, old) in live {
+            let Some((text, rows)) = self.workflow_text_for(self.language(chat)) else {
+                return;
+            };
+            if old != text {
+                self.show(chat, Some(message), text.clone(), rows).await;
+                if let Some(entry) = self.wf_live.get_mut(&chat) {
+                    entry.1 = text;
+                }
             }
         }
         if finished {
@@ -1120,7 +1344,7 @@ impl Bridge {
             self.show(
                 chat,
                 existing,
-                "<b>⚙ Workflow</b>\nЗапуск недоступен".into(),
+                tr(self.language(chat), "<b>⚙ Workflow</b>\nЗапуск недоступен").into(),
                 Vec::new(),
             )
             .await;
@@ -1128,7 +1352,7 @@ impl Bridge {
         };
         if control.manager.state().running {
             if let Some((text, rows)) = self
-                .workflow_text()
+                .workflow_text_for(self.language(chat))
                 .filter(|_| self.wf.as_ref().is_some_and(|v| v.result.is_none()))
             {
                 let message = self.show(chat, existing, text.clone(), rows).await;
@@ -1138,7 +1362,11 @@ impl Bridge {
                 return;
             }
         }
-        let mut text = "<b>⚙ Запуск workflow</b>\nВыберите сценарий:".to_owned();
+        let mut text = tr(
+            self.language(chat),
+            "<b>⚙ Запуск workflow</b>\nВыберите сценарий:",
+        )
+        .to_owned();
         let mut buttons = Vec::new();
         for (index, spec) in control.specs.iter().enumerate() {
             text.push_str(&format!(
@@ -1151,7 +1379,7 @@ impl Bridge {
             buttons.push(button(&spec.name, format!("s:ws:{index}")));
         }
         let mut rows: Vec<Vec<Value>> = buttons.chunks(2).map(<[Value]>::to_vec).collect();
-        rows.push(vec![button("← Назад", "s:more")]);
+        rows.push(vec![button(tr(self.language(chat), "← Назад"), "s:more")]);
         self.show(chat, existing, text, rows).await;
     }
     async fn confirm_workflow(
@@ -1182,17 +1410,23 @@ impl Bridge {
             })
             .unwrap_or_default();
         let preview: String = task.chars().take(300).collect();
-        let text = format!(
-            "Запустить «{}» с задачей:\n<pre>{}</pre>\nУчаствуют: {}",
-            self.safe(&spec.name, 60),
-            self.safe(&preview, 400),
-            agents
+        let text = i18n::render(
+            self.language(chat),
+            "Запустить «{name}» с задачей:\n<pre>{task}</pre>\nУчаствуют: {agents}",
+            &[
+                ("name", &self.safe(&spec.name, 60)),
+                ("task", &self.safe(&preview, 400)),
+                ("agents", &agents),
+            ],
         );
         self.show(
             chat,
             existing,
             text,
-            vec![vec![button("▶ Запустить", "s:wy"), button("Отмена", "s:w")]],
+            vec![vec![
+                button(tr(self.language(chat), "▶ Запустить"), "s:wy"),
+                button(tr(self.language(chat), "Отмена"), "s:w"),
+            ]],
         )
         .await;
         self.inputs.insert(
@@ -1212,10 +1446,10 @@ impl Bridge {
         task: String,
     ) -> String {
         let Some(control) = self.control.clone() else {
-            return "Запуск недоступен".into();
+            return tr(self.language(chat), "Запуск недоступен").into();
         };
         let Some(spec) = control.specs.get(index).cloned() else {
-            return "Такого workflow нет".into();
+            return tr(self.language(chat), "Такого workflow нет").into();
         };
         match control.manager.start(spec.clone(), task) {
             Ok(_) => {
@@ -1223,25 +1457,38 @@ impl Bridge {
                     name: spec.name.clone(),
                     ..WorkflowView::default()
                 });
-                if let Some((text, rows)) = self.workflow_text() {
+                if let Some((text, rows)) = self.workflow_text_for(self.language(chat)) {
                     if let Some(message) = self.show(chat, message, text.clone(), rows).await {
                         self.wf_live.insert(chat, (message, text));
                     }
                 }
-                "Запущено".into()
+                tr(self.language(chat), "Запущено").into()
             }
-            Err(crate::workflow::StartError::Busy) => "Workflow уже идёт".into(),
-            Err(crate::workflow::StartError::InvalidTeam(error)) => {
-                format!("Не подходит этой команде: {error}")
+            Err(crate::workflow::StartError::Busy) => {
+                tr(self.language(chat), "Workflow уже идёт").into()
             }
-            Err(crate::workflow::StartError::Closed) => "Сервис останавливается".into(),
+            Err(crate::workflow::StartError::InvalidTeam(error)) => i18n::render(
+                self.language(chat),
+                "Не подходит этой команде: {error}",
+                &[("error", &error.to_string())],
+            ),
+            Err(crate::workflow::StartError::Closed) => {
+                tr(self.language(chat), "Сервис останавливается").into()
+            }
         }
     }
 
     // ---------- расходы ----------
     pub(super) async fn open_spend(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
-            self.queue(chat, "Расходы есть только в режиме serve --home", None);
+            self.queue(
+                chat,
+                tr(
+                    self.language(chat),
+                    "Расходы есть только в режиме serve --home",
+                ),
+                None,
+            );
             return;
         };
         let home = runs.home();
@@ -1249,10 +1496,16 @@ impl Bridge {
         let tokens = runs.month_tokens();
         let tokens_of = |id: &str| {
             tokens.get(id).map_or(String::new(), |t| {
-                format!(
-                    " · {} → {} токенов",
-                    crate::ledger::tokens_short(t.input),
-                    crate::ledger::tokens_short(t.output)
+                i18n::render(
+                    self.language(chat),
+                    " · {input} → {output} токенов",
+                    &[
+                        ("input", &(crate::ledger::tokens_short(t.input)).to_string()),
+                        (
+                            "output",
+                            &(crate::ledger::tokens_short(t.output)).to_string(),
+                        ),
+                    ],
                 )
             })
         };
@@ -1260,9 +1513,10 @@ impl Bridge {
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 300)));
         }
-        text.push_str(&format!(
-            "<b>Расходы за {}</b> (UTC)\n",
-            crate::ledger::month_of(now_ms())
+        text.push_str(&i18n::render(
+            self.language(chat),
+            "<b>Расходы за {month}</b> (UTC)\n",
+            &[("month", &(crate::ledger::month_of(now_ms())).to_string())],
         ));
         let mut rows = Vec::new();
         let mut total = 0.0;
@@ -1279,18 +1533,37 @@ impl Bridge {
                     } else {
                         "•"
                     };
-                    text.push_str(&format!(
-                        "{mark} {title}: ${spent:.2} из ${limit:.2}{}\n",
-                        tokens_of(&dept.id)
+                    text.push_str(&i18n::render(
+                        self.language(chat),
+                        "{mark} {title}: ${spent} из ${limit}{tokens}\n",
+                        &[
+                            ("tokens", &(tokens_of(&dept.id)).to_string()),
+                            ("mark", mark),
+                            ("title", &title.to_string()),
+                            ("spent", &format!("{spent:.2}")),
+                            ("limit", &format!("{limit:.2}")),
+                        ],
                     ));
                     rows.push(vec![button(
-                        &format!("➕ Лимит {} до ${:.0}", dept.id, (limit * 1.5).ceil()),
+                        &i18n::render(
+                            self.language(chat),
+                            "➕ Лимит {department} до ${limit}",
+                            &[
+                                ("department", &(dept.id).to_string()),
+                                ("limit", &format!("{:.0}", (limit * 1.5).ceil())),
+                            ],
+                        ),
                         format!("s:spr:{}", dept.id),
                     )]);
                 }
-                None => text.push_str(&format!(
-                    "• {title}: ${spent:.2}, без лимита{}\n",
-                    tokens_of(&dept.id)
+                None => text.push_str(&i18n::render(
+                    self.language(chat),
+                    "• {title}: ${spent}, без лимита{tokens}\n",
+                    &[
+                        ("tokens", &(tokens_of(&dept.id)).to_string()),
+                        ("title", &title.to_string()),
+                        ("spent", &format!("{spent:.2}")),
+                    ],
                 )),
             }
         }
@@ -1299,18 +1572,19 @@ impl Bridge {
         let unpriced = tokens.values().fold((0, 0), |(i, o), t| {
             (i + t.unpriced_input, o + t.unpriced_output)
         });
-        text.push_str(&format!(
-            "• оркестратор: ${orchestrator:.2}{}\n\nВсего: ${total:.2}",
-            tokens_of("orchestrator")
+        text.push_str(&i18n::render(
+            self.language(chat),
+            "• оркестратор: ${orchestrator}{tokens}\n\nВсего: ${total}",
+            &[
+                ("tokens", &(tokens_of("orchestrator")).to_string()),
+                ("orchestrator", &format!("{orchestrator:.2}")),
+                ("total", &format!("{total:.2}")),
+            ],
         ));
         if unpriced != (0, 0) {
-            text.push_str(&format!(
-                "\nБез цены (Codex, нет [prices.codex]): {} → {} токенов, в долларах не учтены.",
-                crate::ledger::tokens_short(unpriced.0),
-                crate::ledger::tokens_short(unpriced.1)
-            ));
+            text.push_str(&i18n::render(self.language(chat), "\nБез цены (Codex, нет [prices.codex]): {input} → {output} токенов, в долларах не учтены.", &[("input", &(crate::ledger::tokens_short(unpriced.0)).to_string()), ("output", &(crate::ledger::tokens_short(unpriced.1)).to_string())]));
         }
-        rows.push(vec![button("🔄 Обновить", "s:sp")]);
+        rows.push(vec![button(tr(self.language(chat), "🔄 Обновить"), "s:sp")]);
         self.show(chat, existing, text, rows).await;
     }
 
@@ -1318,7 +1592,14 @@ impl Bridge {
 
     pub(super) async fn open_mentor(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
-            self.queue(chat, "Наставник есть только в режиме serve --home", None);
+            self.queue(
+                chat,
+                tr(
+                    self.language(chat),
+                    "Наставник есть только в режиме serve --home",
+                ),
+                None,
+            );
             return;
         };
         let current = crate::mentor::load(&runs.home().root);
@@ -1331,12 +1612,7 @@ impl Bridge {
                 self.safe(flash, 300)
             ));
         }
-        text.push_str(&format!(
-            "<b>🧭 Наставник: {}</b>
-
-Сильная модель держит замысел задачи: пишет постановку              исполнителю и сама проверяет результат. Исполнители остаются прежними. Мелкие              задачи идут без наставника. Выбор действует на задачи, запущенные после него.",
-            current.map_or("выключен", |preset| preset.title)
-        ));
+        text.push_str(&i18n::render(self.language(chat), "<b>🧭 Наставник: {mentor}</b>\n\nСильная модель держит замысел задачи: пишет постановку              исполнителю и сама проверяет результат. Исполнители остаются прежними. Мелкие              задачи идут без наставника. Выбор действует на задачи, запущенные после него.", &[("mentor", current.map_or(tr(self.language(chat), "выключен"), |preset| preset.title))]));
         let mark = |on: bool, title: &str| {
             if on {
                 format!("✅ {title}")
@@ -1354,7 +1630,7 @@ impl Bridge {
             })
             .collect();
         rows.push(vec![button(
-            &mark(current.is_none(), "Выключить"),
+            &mark(current.is_none(), tr(self.language(chat), "Выключить")),
             format!("s:mtr:{}", crate::mentor::OFF),
         )]);
         self.show(chat, existing, text, rows).await;
@@ -1363,7 +1639,14 @@ impl Bridge {
     // ---------- расписания ----------
     pub(super) async fn open_schedules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
-            self.queue(chat, "Расписания есть только в режиме serve --home", None);
+            self.queue(
+                chat,
+                tr(
+                    self.language(chat),
+                    "Расписания есть только в режиме serve --home",
+                ),
+                None,
+            );
             return;
         };
         let home = runs.home();
@@ -1378,21 +1661,33 @@ impl Bridge {
         if !flash.is_empty() {
             text.push_str(&format!("{}\n\n", self.safe(flash, 300)));
         }
-        text.push_str(&format!(
-            "<b>Расписания</b> (время {})\n",
-            self.safe(&home.config.utc_offset, 10)
+        text.push_str(&i18n::render(
+            self.language(chat),
+            "<b>Расписания</b> (время {offset})\n",
+            &[(
+                "offset",
+                &(self.safe(&home.config.utc_offset, 10)).to_string(),
+            )],
         ));
         let list = runs.schedules();
         if list.is_empty() {
-            text.push_str("нет. Добавьте [[schedule]] в department.toml отдела.\n");
+            text.push_str(tr(
+                self.language(chat),
+                "нет. Добавьте [[schedule]] в department.toml отдела.\n",
+            ));
         }
         let mut rows = Vec::new();
         for item in list.iter().take(10) {
             let state = if item.paused {
-                "⏸ пауза".to_owned()
+                tr(self.language(chat), "⏸ пауза").to_owned()
             } else {
-                item.next_ms
-                    .map_or("—".to_owned(), |ms| format!("следующая {}", local(ms)))
+                item.next_ms.map_or("—".to_owned(), |ms| {
+                    i18n::render(
+                        self.language(chat),
+                        "следующая {time}",
+                        &[("time", &(local(ms)).to_string())],
+                    )
+                })
             };
             text.push_str(&format!(
                 "\n<b>{}</b> · {} · <code>{}</code>\n{state}\n",
@@ -1401,23 +1696,42 @@ impl Bridge {
                 self.safe(&item.cron, 40)
             ));
             let toggle = if item.paused {
-                button("▶ Возобновить", format!("s:sc:{}:r", item.key))
+                button(
+                    tr(self.language(chat), "▶ Возобновить"),
+                    format!("s:sc:{}:r", item.key),
+                )
             } else {
-                button("⏸ Пауза", format!("s:sc:{}:p", item.key))
+                button(
+                    tr(self.language(chat), "⏸ Пауза"),
+                    format!("s:sc:{}:p", item.key),
+                )
             };
             rows.push(vec![
                 toggle,
-                button("⚡ Сейчас", format!("s:sc:{}:n", item.key)),
+                button(
+                    tr(self.language(chat), "⚡ Сейчас"),
+                    format!("s:sc:{}:n", item.key),
+                ),
             ]);
         }
-        rows.push(vec![button("🔄 Обновить", "s:sch")]);
+        rows.push(vec![button(
+            tr(self.language(chat), "🔄 Обновить"),
+            "s:sch",
+        )]);
         self.show(chat, existing, text, rows).await;
     }
 
     // ---------- правила отделов ----------
     pub(super) async fn open_rules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
-            self.queue(chat, "Правила есть только в режиме serve --home", None);
+            self.queue(
+                chat,
+                tr(
+                    self.language(chat),
+                    "Правила есть только в режиме serve --home",
+                ),
+                None,
+            );
             return;
         };
         let mut text = String::new();
@@ -1430,16 +1744,10 @@ impl Bridge {
             ));
         }
         let mut rows = Vec::new();
-        text.push_str(
-            "<b>Предложения правил</b>
-",
-        );
+        text.push_str(tr(self.language(chat), "<b>Предложения правил</b>\n"));
         let proposals = runs.rule_proposals();
         if proposals.is_empty() {
-            text.push_str(
-                "нет
-",
-            );
+            text.push_str(tr(self.language(chat), "нет\n"));
         }
         for proposal in proposals.iter().take(6) {
             text.push_str(&format!(
@@ -1451,22 +1759,22 @@ impl Bridge {
             ));
             rows.push(vec![
                 button(
-                    &format!("✅ Добавить в {}", proposal.target),
+                    &i18n::render(
+                        self.language(chat),
+                        "✅ Добавить в {department}",
+                        &[("department", &(proposal.target).to_string())],
+                    ),
                     format!("s:rl:{}:{}:a", proposal.target, proposal.id),
                 ),
                 button(
-                    "✖ Отклонить",
+                    tr(self.language(chat), "✖ Отклонить"),
                     format!("s:rl:{}:{}:r", proposal.target, proposal.id),
                 ),
             ]);
         }
         let recent = runs.recent_rules(6);
         if !recent.is_empty() {
-            text.push_str(
-                "
-<b>Последние правила</b>
-",
-            );
+            text.push_str(tr(self.language(chat), "\n<b>Последние правила</b>\n"));
         }
         for rule in &recent {
             text.push_str(&format!(
@@ -1476,7 +1784,11 @@ impl Bridge {
                 self.safe(&rule.subject, 150)
             ));
             rows.push(vec![button(
-                &format!("↩ Отменить {}", rule.commit),
+                &i18n::render(
+                    self.language(chat),
+                    "↩ Отменить {rule}",
+                    &[("rule", &(rule.commit).to_string())],
+                ),
                 format!("s:rv:{}", rule.commit),
             )]);
         }
@@ -1494,17 +1806,34 @@ impl Bridge {
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_owned))
                     .unwrap_or_default();
-                format!("{} {}", short_label(s), number(&format!("/tasks/{code}")))
+                format!(
+                    "{} {}",
+                    short_label(s, self.language(chat)),
+                    number(&format!("/tasks/{code}"))
+                )
             })
             .collect::<Vec<_>>()
             .join(" · ");
-        let mut text = format!(
-            "<b>📊 Статистика</b>\nЗадачи: {tasks}\nWorkflow: {} ({} успешно, {} с ошибкой, {} остановлено)\nПисем: {}",
-            number("/totals/workflows_total"),
-            number("/totals/workflows_finished"),
-            number("/totals/workflows_failed"),
-            number("/totals/workflows_stopped"),
-            number("/totals/mails_total"),
+        let mut text = i18n::render(
+            self.language(chat),
+            "<b>📊 Статистика</b>\nЗадачи: {tasks}\nWorkflow: {workflows} ({finished} успешно, {failed} с ошибкой, {stopped} остановлено)\nПисем: {mail}",
+            &[
+                (
+                    "workflows",
+                    &(number("/totals/workflows_total")).to_string(),
+                ),
+                (
+                    "finished",
+                    &(number("/totals/workflows_finished")).to_string(),
+                ),
+                ("failed", &(number("/totals/workflows_failed")).to_string()),
+                (
+                    "stopped",
+                    &(number("/totals/workflows_stopped")).to_string(),
+                ),
+                ("mail", &(number("/totals/mails_total")).to_string()),
+                ("tasks", &tasks.to_string()),
+            ],
         );
         let mut total_input = 0u64;
         let mut total_output = 0u64;
@@ -1523,41 +1852,54 @@ impl Bridge {
             total_cost += cost;
             let last = number(&format!("{base}/last_activity_ms"));
             let activity = if last == 0 {
-                "нет".to_owned()
+                tr(self.language(chat), "нет").to_owned()
             } else {
                 let minutes = now.saturating_sub(last) / 60_000;
                 if minutes < 1 {
-                    "только что".to_owned()
+                    tr(self.language(chat), "только что").to_owned()
                 } else {
-                    format!("{minutes} мин назад")
+                    i18n::render(
+                        self.language(chat),
+                        "{minutes} мин назад",
+                        &[("minutes", &minutes.to_string())],
+                    )
                 }
             };
-            text.push_str(&format!(
-                "\n{} <b>{}</b> · ходов {} · команд {} · запросов {} · отказов guard {} · работал {} мин · активность {activity}",
-                self.agent_status(&member.id),
-                self.safe(member.id.as_str(), 40),
-                number(&format!("{base}/turns")),
-                number(&format!("{base}/tool_calls")),
-                number(&format!("{base}/permission_requests")),
-                number(&format!("{base}/guard_denied")),
-                number(&format!("{base}/busy_ms")) / 60_000,
+            text.push_str(&i18n::render(self.language(chat), "\n{icon} <b>{agent}</b> · ходов {turns} · команд {commands} · запросов {requests} · отказов guard {denied} · работал {minutes} мин · активность {activity}", &[("icon", self.agent_status(&member.id)), ("agent", &(self.safe(member.id.as_str(), 40)).to_string()), ("turns", &(number(&format!("{base}/turns"))).to_string()), ("commands", &(number(&format!("{base}/tool_calls"))).to_string()), ("requests", &(number(&format!("{base}/permission_requests"))).to_string()), ("denied", &(number(&format!("{base}/guard_denied"))).to_string()), ("minutes", &(number(&format!("{base}/busy_ms")) / 60_000).to_string()), ("activity", &activity.to_string())]));
+            text.push_str(&i18n::render(
+                self.language(chat),
+                " · токенов {input}/{output}",
+                &[
+                    ("input", &input.to_string()),
+                    ("output", &output.to_string()),
+                ],
             ));
-            text.push_str(&format!(" · токенов {input}/{output}"));
             if cost > 0.0 {
                 text.push_str(&format!(" · ${cost:.2}"));
             }
         }
-        text.push_str(&format!("\nВсего токенов: {total_input}/{total_output}"));
+        text.push_str(&i18n::render(
+            self.language(chat),
+            "\nВсего токенов: {total_input}/{total_output}",
+            &[
+                ("total_input", &total_input.to_string()),
+                ("total_output", &total_output.to_string()),
+            ],
+        ));
         if total_cost > 0.0 {
-            text.push_str(&format!(" · стоимость (только Claude) ${total_cost:.2}"));
+            text.push_str(&i18n::render(
+                self.language(chat),
+                " · стоимость (только Claude) ${total_cost}",
+                &[("total_cost", &format!("{total_cost:.2}"))],
+            ));
         }
         self.show(
             chat,
             existing,
             text,
             vec![vec![
-                button("← Назад", "s:more"),
-                button("🔄 Обновить", "s:st"),
+                button(tr(self.language(chat), "← Назад"), "s:more"),
+                button(tr(self.language(chat), "🔄 Обновить"), "s:st"),
             ]],
         )
         .await;
@@ -1571,11 +1913,15 @@ impl Bridge {
             .map(|(index, member)| button(member.id.as_str(), format!("s:l:{index}:0:10")))
             .collect();
         let mut rows: Vec<Vec<Value>> = buttons.chunks(2).map(<[Value]>::to_vec).collect();
-        rows.push(vec![button("← Назад", "s:more")]);
+        rows.push(vec![button(tr(self.language(chat), "← Назад"), "s:more")]);
         self.show(
             chat,
             existing,
-            "<b>📜 Что делал агент</b>\nВыберите агента:".into(),
+            tr(
+                self.language(chat),
+                "<b>📜 Что делал агент</b>\nВыберите агента:",
+            )
+            .into(),
             rows,
         )
         .await;
@@ -1593,14 +1939,14 @@ impl Bridge {
         let lines: Vec<String> = history
             .iter()
             .filter(|e| e.agent == *agent)
-            .filter_map(|e| event_line(&e.event).map(|l| (e.ts_ms, l)))
+            .filter_map(|e| event_line(&e.event, self.language(chat)).map(|l| (e.ts_ms, l)))
             .map(|(ts, line)| format!("{} {}", format_time(ts, now_ms()), line))
             .collect();
         let end = lines.len().saturating_sub(page * size);
         let start = end.saturating_sub(size);
         let mut text = format!("<b>📜 {}</b>", self.safe(agent.as_str(), 40));
         if end == 0 {
-            text.push_str("\nПока нет событий");
+            text.push_str(tr(self.language(chat), "\nПока нет событий"));
         }
         for line in lines[start..end].iter().rev() {
             text.push_str(&format!("\n{}", self.safe(line, 200)));
@@ -1614,13 +1960,16 @@ impl Bridge {
         let mut rows = Vec::new();
         if start > 0 {
             rows.push(vec![button(
-                "Дальше ▸",
+                tr(self.language(chat), "Дальше ▸"),
                 format!("s:l:{index}:{}:{size}", page + 1),
             )]);
         }
         rows.push(vec![
-            button("← Назад", "s:lg"),
-            button("🔄 Обновить", format!("s:l:{index}:{page}:{size}")),
+            button(tr(self.language(chat), "← Назад"), "s:lg"),
+            button(
+                tr(self.language(chat), "🔄 Обновить"),
+                format!("s:l:{index}:{page}:{size}"),
+            ),
         ]);
         self.show(chat, existing, text, rows).await;
     }
@@ -1628,10 +1977,14 @@ impl Bridge {
         self.show(
             chat,
             existing,
-            "<b>⬇ Экспорт</b>\nВ каком виде прислать переписку и историю?".into(),
+            tr(
+                self.language(chat),
+                "<b>⬇ Экспорт</b>\nВ каком виде прислать переписку и историю?",
+            )
+            .into(),
             vec![
                 vec![button("Markdown", "s:ex:md"), button("JSONL", "s:ex:jsonl")],
-                vec![button("← Назад", "s:more")],
+                vec![button(tr(self.language(chat), "← Назад"), "s:more")],
             ],
         )
         .await;
@@ -1644,16 +1997,16 @@ impl Bridge {
         confirmed: bool,
     ) -> String {
         if !matches!(format, "md" | "jsonl") {
-            return "Формат: md или jsonl".into();
+            return tr(self.language(chat), "Формат: md или jsonl").into();
         }
         if !self.exported && !confirmed {
             self.show(
                 chat,
                 existing,
-                "Файл содержит всю переписку и команды и пройдёт через серверы Telegram. Отправить?".into(),
+                tr(self.language(chat), "Файл содержит всю переписку и команды и пройдёт через серверы Telegram. Отправить?").into(),
                 vec![vec![
-                    button("Да", format!("s:exy:{format}")),
-                    button("Отмена", "s:more"),
+                    button(tr(self.language(chat), "Да"), format!("s:exy:{format}")),
+                    button(tr(self.language(chat), "Отмена"), "s:more"),
                 ]],
             )
             .await;
@@ -1673,26 +2026,30 @@ impl Bridge {
         }
         .replace(&self.config.token, "[redacted]");
         if content.len() > 45 * 1024 * 1024 {
-            return "Файл больше 45 МБ - Telegram его не примет".into();
+            return tr(
+                self.language(chat),
+                "Файл больше 45 МБ - Telegram его не примет",
+            )
+            .into();
         }
         let path = std::env::temp_dir().join(format!("agentsflow-{}.{format}", now_ms()));
         let file = TemporaryCommand(path.clone());
         if std::fs::write(&path, content).is_err() {
-            return "Не удалось подготовить файл".into();
+            return tr(self.language(chat), "Не удалось подготовить файл").into();
         }
         let result: Result<Value, _> = self
             .bot
             .request_with_form_data(
                 "sendDocument",
-                json!({"chat_id":chat,"caption":"Экспорт сессии"}),
+                json!({"chat_id":chat,"caption":tr(self.language(chat), "Экспорт сессии")}),
                 vec![("document", path)],
             )
             .await;
         drop(file);
         if result.is_ok_and(|v| v.get("ok").and_then(Value::as_bool) == Some(true)) {
-            "Файл отправлен".into()
+            tr(self.language(chat), "Файл отправлен").into()
         } else {
-            "Не удалось отправить файл".into()
+            tr(self.language(chat), "Не удалось отправить файл").into()
         }
     }
 
@@ -1702,13 +2059,17 @@ impl Bridge {
             return;
         };
         if input.expires <= tokio::time::Instant::now() {
-            self.queue(chat, "Время ввода истекло", None);
+            self.queue(chat, tr(self.language(chat), "Время ввода истекло"), None);
             return;
         }
         let text = text.trim();
         if text.is_empty() || text.chars().count() > 8000 {
             self.inputs.insert(chat, input);
-            self.queue(chat, "Введите текст длиной до 8000 символов", None);
+            self.queue(
+                chat,
+                tr(self.language(chat), "Введите текст длиной до 8000 символов"),
+                None,
+            );
             return;
         }
         let message = input.message;
@@ -1721,9 +2082,15 @@ impl Bridge {
                     .and_then(|c| c.runs.clone())
                     .map(|runs| runs.owner_return(&id, text));
                 let flash = match returned {
-                    Some(Ok(_)) => "✔ Вернул с замечанием, задача в очереди".to_owned(),
+                    Some(Ok(_)) => tr(
+                        self.language(chat),
+                        "✔ Вернул с замечанием, задача в очереди",
+                    )
+                    .to_owned(),
                     Some(Err(error)) => error,
-                    None => "Доступно только в режиме serve --home".to_owned(),
+                    None => {
+                        tr(self.language(chat), "Доступно только в режиме serve --home").to_owned()
+                    }
                 };
                 self.open_task(chat, None, &id, &flash).await;
             }
@@ -1736,12 +2103,16 @@ impl Bridge {
                 let flash = match answered {
                     Some(Ok(task)) => match task.work.map(|w| w.state) {
                         Some(agentsflow_events::WorkState::Queued) => {
-                            "✔ Ответ записан, задача в очереди".to_owned()
+                            tr(self.language(chat), "✔ Ответ записан, задача в очереди").to_owned()
                         }
-                        _ => "✔ Ответ записан".to_owned(),
+                        _ => tr(self.language(chat), "✔ Ответ записан").to_owned(),
                     },
                     Some(Err(error)) => error,
-                    None => "Ответы доступны только в режиме serve --home".to_owned(),
+                    None => tr(
+                        self.language(chat),
+                        "Ответы доступны только в режиме serve --home",
+                    )
+                    .to_owned(),
                 };
                 self.open_task(chat, None, &id, &flash).await;
             }
@@ -1751,8 +2122,8 @@ impl Bridge {
                     ..TaskPatch::default()
                 };
                 let flash = match self.hub.update_task(AgentId::orchestrator(), &id, patch) {
-                    Ok(_) => "✔ Название изменено".to_owned(),
-                    Err(error) => task_error_text(&error),
+                    Ok(_) => tr(self.language(chat), "✔ Название изменено").to_owned(),
+                    Err(error) => task_error_text(&error, self.language(chat)),
                 };
                 self.open_task(chat, None, &id, &flash).await;
             }
@@ -1762,14 +2133,14 @@ impl Bridge {
                     ..TaskPatch::default()
                 };
                 let flash = match self.hub.update_task(AgentId::orchestrator(), &id, patch) {
-                    Ok(_) => "✔ Описание изменено".to_owned(),
-                    Err(error) => task_error_text(&error),
+                    Ok(_) => tr(self.language(chat), "✔ Описание изменено").to_owned(),
+                    Err(error) => task_error_text(&error, self.language(chat)),
                 };
                 self.open_task(chat, None, &id, &flash).await;
             }
             InputKind::MailReply(thread) => {
                 let Some(found) = self.threads().into_iter().find(|t| t.id == thread) else {
-                    self.queue(chat, "Такой переписки нет", None);
+                    self.queue(chat, tr(self.language(chat), "Такой переписки нет"), None);
                     return;
                 };
                 let last = found.messages.last().expect("thread has mail");
@@ -1809,7 +2180,11 @@ impl Bridge {
                             message,
                         },
                     );
-                    self.queue(chat, "Формат: тема | текст письма", None);
+                    self.queue(
+                        chat,
+                        tr(self.language(chat), "Формат: тема | текст письма"),
+                        None,
+                    );
                     return;
                 };
                 self.send_mail_text(chat, to, subject, body, None).await;
@@ -1843,7 +2218,7 @@ impl Bridge {
                         chat,
                         None,
                         InputKind::NewTask,
-                        "Как назвать задачу? Следующее сообщение станет названием. Можно: название | описание",
+                        tr(self.language(chat), "Как назвать задачу? Следующее сообщение станет названием. Можно: название | описание"),
                         "s:b:9:0",
                     )
                     .await;
@@ -1863,7 +2238,14 @@ impl Bridge {
                         Some((subject, body)) if self.team.get(&to).is_some() => {
                             self.send_mail_text(chat, to, subject, body, None).await
                         }
-                        _ => self.queue(chat, "Формат: /mail <агент> <тема> | <текст>", None),
+                        _ => self.queue(
+                            chat,
+                            tr(
+                                self.language(chat),
+                                "Формат: /mail <агент> <тема> | <текст>",
+                            ),
+                            None,
+                        ),
                     }
                 }
             }
@@ -1880,7 +2262,7 @@ impl Bridge {
                 match agent.filter(|a| self.team.get(a).is_some()) {
                     Some(agent) => self.open_log(chat, None, &agent, 0, size).await,
                     None if rest.is_empty() => self.open_log_picker(chat, None).await,
-                    None => self.queue(chat, "Нет такого агента", None),
+                    None => self.queue(chat, tr(self.language(chat), "Нет такого агента"), None),
                 }
             }
             "/export" => {
@@ -1919,17 +2301,17 @@ impl Bridge {
                             if let Some(index) = number(2) {
                                 let old = self.project_lists.get(&chat).and_then(|paths| paths.get(index));
                                 if let Some(project) = list.get(index).filter(|p| Some(&p.path) == old) {
-                                    let text = format!("Перезапустить команду в проекте {}? Незавершённая работа должна быть остановлена.", self.safe(&project.name, 200));
-                                    self.show(chat, message, text, vec![vec![button("Да, сменить", format!("s:projgo:{index}")), button("Отмена", "s:proj")]]).await;
-                                } else { flash = "Список изменился, откройте его заново".into(); }
+                                    let text = i18n::render(self.language(chat), "Перезапустить команду в проекте {project}? Незавершённая работа должна быть остановлена.", &[("project", &self.safe(&project.name, 200))]);
+                                    self.show(chat, message, text, vec![vec![button(tr(self.language(chat), "Да, сменить"), format!("s:projgo:{index}")), button(tr(self.language(chat), "Отмена"), "s:proj")]]).await;
+                                } else { flash = tr(self.language(chat), "Список изменился, откройте его заново").into(); }
                             } else {
                                 self.project_lists.insert(chat, list.iter().map(|p| p.path.clone()).collect());
                                 let mut rows: Vec<_> = list.iter().enumerate().map(|(i, p)| vec![button(&format!("{}{}", if p.current { "● " } else { "" }, p.name), format!("s:proj:{i}"))]).collect();
-                                rows.push(vec![button("← Назад", "s:more")]);
-                                self.show(chat, message, "<b>📁 Проекты</b>".into(), rows).await;
+                                rows.push(vec![button(tr(self.language(chat), "← Назад"), "s:more")]);
+                                self.show(chat, message, tr(self.language(chat), "<b>📁 Проекты</b>").into(), rows).await;
                             }
                         }
-                        Err(_) => flash = "Не удалось прочитать проекты".into(),
+                        Err(_) => flash = tr(self.language(chat), "Не удалось прочитать проекты").into(),
                     }
                 }
             }
@@ -1940,18 +2322,18 @@ impl Bridge {
                     let old = self.project_lists.get(&chat).and_then(|paths| paths.get(index));
                     if let Some(project) = list.get(index).filter(|p| Some(&p.path) == old) {
                         flash = match control.prepare(&project.path) {
-                            Ok(Some(ticket)) => { self.pending_switch = Some(ticket); "Команда перезапускается".into() },
-                            Ok(None) => "Проект уже выбран".into(),
-                            Err(crate::projects::SwitchError::Busy) => "Сначала остановите работу агентов".into(),
-                            Err(crate::projects::SwitchError::Unknown) => "Список изменился, откройте его заново".into(),
-                            Err(crate::projects::SwitchError::Unavailable) => "Не удалось сменить проект".into(),
+                            Ok(Some(ticket)) => { self.pending_switch = Some(ticket); tr(self.language(chat), "Команда перезапускается").into() },
+                            Ok(None) => tr(self.language(chat), "Проект уже выбран").into(),
+                            Err(crate::projects::SwitchError::Busy) => tr(self.language(chat), "Сначала остановите работу агентов").into(),
+                            Err(crate::projects::SwitchError::Unknown) => tr(self.language(chat), "Список изменился, откройте его заново").into(),
+                            Err(crate::projects::SwitchError::Unavailable) => tr(self.language(chat), "Не удалось сменить проект").into(),
                         };
-                    } else { flash = "Список изменился, откройте его заново".into(); }
+                    } else { flash = tr(self.language(chat), "Список изменился, откройте его заново").into(); }
                 }
             }
             "more" => self.open_more(chat, message).await,
             "team" => self.open_team(chat, None, message).await,
-            "help" => self.queue(chat, &help_text(), None),
+            "help" => self.queue(chat, &help_text(self.language(chat)), None),
             "b" => {
                 self.open_board(chat, message, number(2).unwrap_or(9), number(3).unwrap_or(0))
                     .await
@@ -1962,7 +2344,7 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::NewTask,
-                    "Как назвать задачу? Следующее сообщение станет названием. Можно: название | описание",
+                    tr(self.language(chat), "Как назвать задачу? Следующее сообщение станет названием. Можно: название | описание"),
                     "s:b:9:0",
                 )
                 .await
@@ -1990,7 +2372,7 @@ impl Bridge {
             "fx" => {
                 flash = self.cancel_files(chat);
                 if let Some(message) = message {
-                    self.show(chat, Some(message), "📎 Файлы убраны".into(), Vec::new())
+                    self.show(chat, Some(message), tr(self.language(chat), "📎 Файлы убраны").into(), Vec::new())
                         .await;
                 }
             }
@@ -2000,8 +2382,8 @@ impl Bridge {
                 if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
                     flash = match crate::mentor::save(&runs.home().root, arg(2)) {
                         Ok(()) => match crate::mentor::preset(arg(2)) {
-                            Some(preset) => format!("✔ Наставник: {}", preset.title),
-                            None => "✔ Наставник выключен".to_owned(),
+                            Some(preset) => i18n::render(self.language(chat), "✔ Наставник: {title}", &[("title", preset.title)]),
+                            None => tr(self.language(chat), "✔ Наставник выключен").to_owned(),
                         },
                         Err(error) => format!("{error:#}"),
                     };
@@ -2012,11 +2394,11 @@ impl Bridge {
             "sc" => {
                 if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
                     flash = match arg(3) {
-                        "p" => runs.pause_schedule(arg(2), true).map(|()| "⏸ На паузе".to_owned()),
-                        "r" => runs.pause_schedule(arg(2), false).map(|()| "▶ Снова по расписанию".to_owned()),
+                        "p" => runs.pause_schedule(arg(2), true).map(|()| tr(self.language(chat), "⏸ На паузе").to_owned()),
+                        "r" => runs.pause_schedule(arg(2), false).map(|()| tr(self.language(chat), "▶ Снова по расписанию").to_owned()),
                         _ => runs
                             .run_schedule(arg(2))
-                            .map(|task| format!("⚡ Задача «{}» в очереди", task.title)),
+                            .map(|task| i18n::render(self.language(chat), "⚡ Задача «{title}» в очереди", &[("title", &task.title)])),
                     }
                     .unwrap_or_else(|error| error);
                     self.open_schedules(chat, message, &flash).await;
@@ -2025,7 +2407,7 @@ impl Bridge {
             "spr" => {
                 if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
                     flash = match runs.raise_month_limit(arg(2)) {
-                        Ok((old, new)) => format!("✔ Лимит {}: ${old:.2} → ${new:.2}", arg(2)),
+                        Ok((old, new)) => i18n::render(self.language(chat), "✔ Лимит {department}: ${old} → ${new}", &[("department", arg(2)), ("old", &format!("{old:.2}")), ("new", &format!("{new:.2}"))]),
                         Err(error) => error,
                     };
                     self.open_spend(chat, message, &flash).await;
@@ -2036,13 +2418,13 @@ impl Bridge {
                     flash = match (parts[1], arg(4)) {
                         ("rv", _) => runs
                             .revert_rule(arg(2))
-                            .map(|rule| format!("↩ Правило отменено: {}", rule.subject)),
+                            .map(|rule| i18n::render(self.language(chat), "↩ Правило отменено: {subject}", &[("subject", &rule.subject)])),
                         (_, "a") => runs
                             .approve_rule(arg(2), arg(3))
-                            .map(|rule| format!("✔ Добавлено: {}", rule.subject)),
+                            .map(|rule| i18n::render(self.language(chat), "✔ Добавлено: {subject}", &[("subject", &rule.subject)])),
                         _ => runs
                             .reject_rule(arg(2), arg(3))
-                            .map(|()| "✖ Отклонено, больше не предложат".to_owned()),
+                            .map(|()| tr(self.language(chat), "✖ Отклонено, больше не предложат").to_owned()),
                     }
                     .unwrap_or_else(|error| error);
                     self.open_rules(chat, message, &flash).await;
@@ -2056,8 +2438,8 @@ impl Bridge {
                         ..TaskPatch::default()
                     };
                     flash = match self.hub.update_task(AgentId::orchestrator(), arg(2), patch) {
-                        Ok(_) => "Статус изменён".into(),
-                        Err(error) => task_error_text(&error),
+                        Ok(_) => tr(self.language(chat), "Статус изменён").into(),
+                        Err(error) => task_error_text(&error, self.language(chat)),
                     };
                 }
                 self.open_task(chat, message, arg(2), &flash).await;
@@ -2076,8 +2458,8 @@ impl Bridge {
                         ..TaskPatch::default()
                     };
                     flash = match self.hub.update_task(AgentId::orchestrator(), arg(2), patch) {
-                        Ok(_) => "Исполнитель изменён".into(),
-                        Err(error) => task_error_text(&error),
+                        Ok(_) => tr(self.language(chat), "Исполнитель изменён").into(),
+                        Err(error) => task_error_text(&error, self.language(chat)),
                     };
                 }
                 self.open_task(chat, message, arg(2), &flash).await;
@@ -2092,7 +2474,7 @@ impl Bridge {
                     chat,
                     message,
                     InputKind::MailReply(arg(2).to_owned()),
-                    "Что ответить? Следующее сообщение уйдёт в эту переписку.",
+                    tr(self.language(chat), "Что ответить? Следующее сообщение уйдёт в эту переписку."),
                     &format!("s:mt:{}:0", arg(2)),
                 )
                 .await
@@ -2104,7 +2486,7 @@ impl Bridge {
                         chat,
                         message,
                         InputKind::MailNew(id.clone()),
-                        &format!("Письмо для {}. Напишите одним сообщением: тема | текст", self.safe(id.as_str(), 40)),
+                        &i18n::render(self.language(chat), "Письмо для {agent}. Напишите одним сообщением: тема | текст", &[("agent", &self.safe(id.as_str(), 40))]),
                         "s:m:0",
                     )
                     .await
@@ -2119,8 +2501,8 @@ impl Bridge {
                         .collect();
                     let mut rows: Vec<Vec<Value>> =
                         buttons.chunks(2).map(<[Value]>::to_vec).collect();
-                    rows.push(vec![button("← Назад", "s:m:0")]);
-                    self.show(chat, message, "Кому написать?".into(), rows).await;
+                    rows.push(vec![button(tr(self.language(chat), "← Назад"), "s:m:0")]);
+                    self.show(chat, message, tr(self.language(chat), "Кому написать?").into(), rows).await;
                 }
             },
             "w" => self.open_workflows(chat, message).await,
@@ -2132,7 +2514,7 @@ impl Bridge {
                         chat,
                         message,
                         InputKind::WorkflowTask(index),
-                        "Что поручить команде? Следующее сообщение станет задачей для workflow.",
+                        tr(self.language(chat), "Что поручить команде? Следующее сообщение станет задачей для workflow."),
                         "s:w",
                     )
                     .await;
@@ -2140,12 +2522,12 @@ impl Bridge {
             }
             "wy" => match pending_confirm {
                 Some((index, task)) => flash = self.run_workflow(chat, message, index, task).await,
-                None => flash = "Запрос устарел".into(),
+                None => flash = tr(self.language(chat), "Запрос устарел").into(),
             },
             "wx" => {
                 flash = match self.control.as_ref().map(|c| c.manager.stop()) {
-                    Some(true) => "Останавливаю".into(),
-                    _ => "Сейчас ничего не запущено".into(),
+                    Some(true) => tr(self.language(chat), "Останавливаю").into(),
+                    _ => tr(self.language(chat), "Сейчас ничего не запущено").into(),
                 }
             }
             "st" => self.open_stats(chat, message).await,

@@ -30,6 +30,10 @@ pub(super) fn escape(text: &str) -> String {
 
 /// Страницы текста; файл без разметки показывается как есть, моноширинно.
 pub(super) fn pages(text: &str, markdown: bool) -> Vec<String> {
+    pages_for(crate::i18n::default_lang(), text, markdown)
+}
+
+pub(super) fn pages_for(lang: crate::i18n::Lang, text: &str, markdown: bool) -> Vec<String> {
     let pieces = if markdown {
         markdown_pieces(text)
     } else {
@@ -38,7 +42,7 @@ pub(super) fn pages(text: &str, markdown: bool) -> Vec<String> {
             .map(|line| Piece::Code(escape(&line)))
             .collect()
     };
-    paginate(pieces)
+    paginate(lang, pieces)
 }
 
 /// Режет длинную строку, по возможности на пробеле.
@@ -67,7 +71,7 @@ fn size(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
-fn paginate(pieces: Vec<Piece>) -> Vec<String> {
+fn paginate(lang: crate::i18n::Lang, pieces: Vec<Piece>) -> Vec<String> {
     let mut pages = Vec::new();
     let mut page = String::new();
     let mut in_code = false;
@@ -117,7 +121,7 @@ fn paginate(pieces: Vec<Piece>) -> Vec<String> {
     }
     close(&mut page, &mut in_code, &mut pages);
     if pages.is_empty() {
-        pages.push("(пусто)".to_owned());
+        pages.push(crate::i18n::tr(lang, "(пусто)").to_owned());
     }
     pages
 }
@@ -444,6 +448,12 @@ mod tests {
         );
         assert!(wide.contains("Цена: 100"));
         assert!(!wide.contains("---"));
+    }
+
+    #[test]
+    fn empty_page_uses_the_requested_chat_language() {
+        assert_eq!(pages_for(crate::i18n::Lang::Ru, "", true), vec!["(пусто)"]);
+        assert_eq!(pages_for(crate::i18n::Lang::En, "", true), vec!["(empty)"]);
     }
 
     #[test]

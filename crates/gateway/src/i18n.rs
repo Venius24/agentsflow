@@ -210,6 +210,107 @@ const ENGLISH: &[(&str, &str)] = &[
         "⚠️ guard остановил <b>{agent}</b>: <code>{command}</code> ({reason})",
         "⚠️ guard stopped <b>{agent}</b>: <code>{command}</code> ({reason})",
     ),
+    ("Открыть письмо", "Open mail"),
+    ("💰 Расходы", "💰 Spend"),
+    (
+        "предлагает факт в вашу память проекта",
+        "proposes a fact for your project memory",
+    ),
+    ("✅ В память", "✅ Save to memory"),
+    ("предлагает правило", "proposes a rule"),
+    ("✅ Добавить", "✅ Add"),
+    ("✖ Отклонить", "✖ Deny"),
+    ("✅ Опубликовать", "✅ Publish"),
+    ("✖ Не нужно", "✖ No need"),
+    ("Открыть", "Open"),
+    ("🔁 Ещё круг", "🔁 Another round"),
+    ("🗄 Закрыть", "🗄 Close"),
+    ("✍ С замечанием", "✍ Return with note"),
+    ("✅ Создать отдел", "✅ Create department"),
+    ("В общий отдел", "Use general department"),
+    ("✍ Ответить", "✍ Reply"),
+    (
+        "уйдёт наружу, нужна ваша приёмка",
+        "external result, your acceptance is required",
+    ),
+    ("на приёмке", "awaiting acceptance"),
+    ("✅ Принять", "✅ Accept"),
+    ("⏳ Подождать ещё", "⏳ Wait longer"),
+    ("🔁 Перезапустить шаг", "🔁 Restart step"),
+    ("🛑 Остановить", "🛑 Stop"),
+    ("без причины", "no reason given"),
+    ("исполнитель", "agent"),
+    (
+        "✉ <b>{from}</b> → вам: <i>{subject}</i>\n{text}",
+        "✉ <b>{from}</b> → you: <i>{subject}</i>\n{text}",
+    ),
+    (
+        "💬 «{title}»: опубликовать комментарий?\n{target}\n\n{draft}",
+        "💬 “{title}”: publish comment?\n{target}\n\n{draft}",
+    ),
+    (
+        "🏢 Оркестратор предлагает отдел <b>{name}</b> (<code>{pid}</code>): {about}\n\nДля задачи «{title}».",
+        "🏢 Orchestrator proposes department <b>{name}</b> (<code>{pid}</code>): {about}\n\nFor task “{title}”.",
+    ),
+    (
+        "🔇 <b>{dept}</b>: «{title}» молчит. Что делать с запуском?",
+        "🔇 <b>{dept}</b>: “{title}” is silent. What should happen to the run?",
+    ),
+    (
+        "🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}",
+        "🧱 <b>{dept}</b>: “{title}” is stuck: {reason}\n\n{summary}",
+    ),
+    (
+        "👀 <b>{who}</b> сдал задачу «{title}» на проверку",
+        "👀 <b>{who}</b> submitted task “{title}” for review",
+    ),
+    (
+        "🧱 <b>{who}</b>: задача «{title}» застряла",
+        "🧱 <b>{who}</b>: task “{title}” is stuck",
+    ),
+    (
+        "🔁 Workflow «{name}»: завершён",
+        "🔁 Workflow “{name}”: finished",
+    ),
+    (
+        "⏹ Workflow «{name}»: остановлен",
+        "⏹ Workflow “{name}”: stopped",
+    ),
+    (
+        "❌ Workflow «{name}»: с ошибкой: {detail}",
+        "❌ Workflow “{name}”: failed: {detail}",
+    ),
+    (
+        "❓ <b>{dept}</b>: «{title}» ждёт ответа\n\n{questions}",
+        "❓ <b>{dept}</b>: “{title}” is waiting for an answer\n\n{questions}",
+    ),
+    (
+        "👀 <b>{dept}</b>: «{title}» готово, {who} · {spent}\n\n{summary}",
+        "👀 <b>{dept}</b>: “{title}” is ready, {who} · {spent}\n\n{summary}",
+    ),
+    (
+        "✅ <b>{dept}</b>: «{title}» готово · {spent}\n\n{summary}",
+        "✅ <b>{dept}</b>: “{title}” is ready · {spent}\n\n{summary}",
+    ),
+    (
+        "❌ <b>{agent}</b>: ход завершился ошибкой",
+        "❌ <b>{agent}</b>: turn failed",
+    ),
+    (
+        "✔ <b>{agent}</b> закончил за {minutes} мин {seconds} с",
+        "✔ <b>{agent}</b> finished in {minutes} min {seconds} sec",
+    ),
+    ("… ещё {count} событий", "… {count} more events"),
+    ("📁 Проект: {name}", "📁 Project: {name}"),
+    (
+        "📁 Проект: {name}. Команда перезапущена.",
+        "📁 Project: {name}. Team restarted.",
+    ),
+    ("(пусто)", "(empty)"),
+    (
+        "{cost} · {input} → {output} токенов",
+        "{cost} · {input} → {output} tokens",
+    ),
 ];
 
 pub(crate) fn tr(lang: Lang, ru: &'static str) -> &'static str {

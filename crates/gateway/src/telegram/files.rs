@@ -144,49 +144,66 @@ async fn download(
     file_url: String,
     file_id: String,
     to: PathBuf,
+    lang: Lang,
 ) -> std::result::Result<PathBuf, String> {
     let answer: std::result::Result<Value, frankenstein::Error> = bot
         .request("getFile", Some(json!({"file_id": file_id})))
         .await;
     let answer = answer.map_err(|error| match error {
         frankenstein::Error::Api(api) if api.description.contains("too big") => {
-            "файл больше 20 МБ, бот не может его скачать".to_owned()
+            tr(lang, "файл больше 20 МБ, бот не может его скачать").to_owned()
         }
-        _ => "Telegram не отдал файл".to_owned(),
+        _ => tr(lang, "Telegram не отдал файл").to_owned(),
     })?;
     let path = answer
         .pointer("/result/file_path")
         .and_then(Value::as_str)
-        .ok_or("Telegram не отдал файл")?;
+        .ok_or(tr(lang, "Telegram не отдал файл"))?;
     let mut response = bot
         .client
         .get(format!("{file_url}/{path}"))
         .send()
         .await
-        .map_err(|_| "файл не скачался".to_owned())?;
+        .map_err(|_| tr(lang, "файл не скачался").to_owned())?;
     if !response.status().is_success() {
-        return Err("файл не скачался".to_owned());
+        return Err(tr(lang, "файл не скачался").to_owned());
     }
-    let parent = to.parent().ok_or("неверный путь")?;
-    tokio::fs::create_dir_all(parent)
-        .await
-        .map_err(|error| format!("не записать файл: {error}"))?;
-    let mut file = tokio::fs::File::create(&to)
-        .await
-        .map_err(|error| format!("не записать файл: {error}"))?;
+    let parent = to.parent().ok_or(tr(lang, "неверный путь"))?;
+    tokio::fs::create_dir_all(parent).await.map_err(|error| {
+        i18n::render(
+            lang,
+            "не записать файл: {error}",
+            &[("error", &error.to_string())],
+        )
+    })?;
+    let mut file = tokio::fs::File::create(&to).await.map_err(|error| {
+        i18n::render(
+            lang,
+            "не записать файл: {error}",
+            &[("error", &error.to_string())],
+        )
+    })?;
     let written: std::result::Result<(), String> = async {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| "файл скачался не до конца".to_owned())?
+            .map_err(|_| tr(lang, "файл скачался не до конца").to_owned())?
         {
-            file.write_all(&chunk)
-                .await
-                .map_err(|error| format!("не записать файл: {error}"))?;
+            file.write_all(&chunk).await.map_err(|error| {
+                i18n::render(
+                    lang,
+                    "не записать файл: {error}",
+                    &[("error", &error.to_string())],
+                )
+            })?;
         }
-        file.flush()
-            .await
-            .map_err(|error| format!("не записать файл: {error}"))
+        file.flush().await.map_err(|error| {
+            i18n::render(
+                lang,
+                "не записать файл: {error}",
+                &[("error", &error.to_string())],
+            )
+        })
     }
     .await;
     if let Err(error) = written {
@@ -237,17 +254,20 @@ async fn upload_with(
 
 /// Подпись к `.diff`: откуда правки и файлы с числом строк. Telegram берёт до
 /// 1024 знаков, остальные файлы есть в самом документе.
-fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str) -> String {
-    let mut text = format!(
-        "<b>🧾 Правки</b> «{}»\n{}\n",
-        message_text(title, token, 120),
-        message_text(&diff.source_label(), token, 300)
+fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str, lang: Lang) -> String {
+    let mut text = i18n::render(
+        lang,
+        "<b>🧾 Правки</b> «{title}»\n{source}\n",
+        &[
+            ("title", &message_text(title, token, 120)),
+            ("source", &message_text(&diff.source_label(), token, 300)),
+        ],
     );
     for (shown, file) in diff.files.iter().enumerate() {
         let kind = match (file.binary, file.status) {
-            (true, _) => " · двоичный",
-            (_, "added") => " · новый",
-            (_, "deleted") => " · удалён",
+            (true, _) => tr(lang, " · двоичный"),
+            (_, "added") => tr(lang, " · новый"),
+            (_, "deleted") => tr(lang, " · удалён"),
             _ => "",
         };
         let line = format!(
@@ -257,7 +277,11 @@ fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str) -> Str
             file.removed
         );
         if text.chars().count() + line.chars().count() > 950 {
-            text.push_str(&format!("\n… и ещё {}", diff.files.len() - shown));
+            text.push_str(&i18n::render(
+                lang,
+                "\n… и ещё {count}",
+                &[("count", &(diff.files.len() - shown).to_string())],
+            ));
             break;
         }
         text.push_str(&line);
@@ -341,11 +365,17 @@ fn is_text(name: &str) -> bool {
     TEXT_EXTENSIONS.contains(&extension(name).as_str())
 }
 
-fn size_label(bytes: u64) -> String {
+fn size_label(bytes: u64, lang: Lang) -> String {
     match bytes {
-        0..1024 => format!("{bytes} Б"),
-        1024..1_048_576 => format!("{} КБ", bytes / 1024),
-        _ => format!("{:.1} МБ", bytes as f64 / 1_048_576.0),
+        0..1024 => i18n::render(lang, "{bytes} Б", &[("bytes", &bytes.to_string())]),
+        1024..1_048_576 => {
+            i18n::render(lang, "{size} КБ", &[("size", &(bytes / 1024).to_string())])
+        }
+        _ => i18n::render(
+            lang,
+            "{size} МБ",
+            &[("size", &format!("{:.1}", bytes as f64 / 1_048_576.0))],
+        ),
     }
 }
 
@@ -365,6 +395,7 @@ fn button_name(name: &str) -> String {
 impl Bridge {
     /// Файл от владельца; `false`, если в сообщении файла нет.
     pub(super) fn take_file(&mut self, chat: i64, message: &Value) -> bool {
+        let lang = self.language(chat);
         let Some(attachment) = attachment_of(message) else {
             return false;
         };
@@ -377,7 +408,7 @@ impl Bridge {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
             self.queue(
                 chat,
-                "Файлы принимаются в режиме отделов (serve --home)",
+                tr(lang, "Файлы принимаются в режиме отделов (serve --home)"),
                 None,
             );
             return true;
@@ -385,13 +416,13 @@ impl Bridge {
         if !self.config.prompts {
             self.queue(
                 chat,
-                "Отправка заданий из Telegram выключена владельцем",
+                tr(lang, "Отправка заданий из Telegram выключена владельцем"),
                 None,
             );
             return true;
         }
         if self.drafts.contains_key(&chat) {
-            self.queue(chat, "Агенту можно написать только текстом", None);
+            self.queue(chat, tr(lang, "Агенту можно написать только текстом"), None);
             return true;
         }
         let now = tokio::time::Instant::now();
@@ -404,7 +435,11 @@ impl Bridge {
             Some(input) => match &input.kind {
                 InputKind::Answer(id) | InputKind::ReturnNote(id) => Some(id.clone()),
                 _ => {
-                    self.queue(chat, "Здесь нужен текст, файл сюда не приложить", None);
+                    self.queue(
+                        chat,
+                        tr(lang, "Здесь нужен текст, файл сюда не приложить"),
+                        None,
+                    );
                     return true;
                 }
             },
@@ -440,7 +475,11 @@ impl Bridge {
         if inbox.files.len() + inbox.loading >= MAX_BATCH {
             self.queue(
                 chat,
-                &format!("За один раз не больше {MAX_BATCH} файлов, этот не принят"),
+                &i18n::render(
+                    lang,
+                    "За один раз не больше {MAX_BATCH} файлов, этот не принят",
+                    &[("MAX_BATCH", &MAX_BATCH.to_string())],
+                ),
                 None,
             );
             return true;
@@ -453,7 +492,7 @@ impl Bridge {
         let file_url = self.config.file_url();
         let tx = self.fetched_tx.clone();
         tokio::spawn(async move {
-            let result = download(bot, file_url, attachment.file_id, to).await;
+            let result = download(bot, file_url, attachment.file_id, to, lang).await;
             let _ = tx.send(Fetched {
                 chat,
                 batch,
@@ -465,6 +504,7 @@ impl Bridge {
     }
 
     pub(super) fn fetched(&mut self, fetched: Fetched) {
+        let lang = self.language(fetched.chat);
         let root = self
             .control
             .as_ref()
@@ -499,7 +539,11 @@ impl Bridge {
             }
             Err(error) => self.queue(
                 fetched.chat,
-                &format!("Не принял «{}»: {error}", fetched.name),
+                &i18n::render(
+                    lang,
+                    "Не принял «{name}»: {error}",
+                    &[("name", &fetched.name), ("error", &error)],
+                ),
                 None,
             ),
         }
@@ -507,6 +551,7 @@ impl Bridge {
 
     /// Текст, который должен уйти вместе с присланными файлами.
     pub(super) fn hold_text(&mut self, chat: i64, text: &str, targeted: bool) -> bool {
+        let lang = self.language(chat);
         let text = text.trim();
         let Some(inbox) = self
             .inbox
@@ -533,7 +578,7 @@ impl Bridge {
             .is_some_and(|c| c.chars().count() > 8000)
         {
             inbox.caption = None;
-            self.queue(chat, "Сообщение длиннее 8000 символов", None);
+            self.queue(chat, tr(lang, "Сообщение длиннее 8000 символов"), None);
         }
         true
     }
@@ -564,6 +609,7 @@ impl Bridge {
     }
 
     async fn settle(&mut self, chat: i64, now: tokio::time::Instant) {
+        let lang = self.language(chat);
         let Some(inbox) = self.inbox.get_mut(&chat) else {
             return;
         };
@@ -580,7 +626,11 @@ impl Bridge {
                 let text = caption.chars().take(100).collect::<String>();
                 self.queue(
                     chat,
-                    &format!("Файлы не приняты, сообщение не отправлено: {text}"),
+                    &i18n::render(
+                        lang,
+                        "Файлы не приняты, сообщение не отправлено: {text}",
+                        &[("text", &text)],
+                    ),
                     None,
                 );
             }
@@ -599,11 +649,23 @@ impl Bridge {
                     Some(caption) => self.process_input(chat, &caption).await,
                     None => self.queue(
                         chat,
-                        &format!("📎 Приложил к задаче: {names}. Теперь напишите текст."),
+                        &i18n::render(
+                            lang,
+                            "📎 Приложил к задаче: {names}. Теперь напишите текст.",
+                            &[("names", &names)],
+                        ),
                         None,
                     ),
                 },
-                Err(error) => self.queue(chat, &format!("Не приложил файлы: {error}"), None),
+                Err(error) => self.queue(
+                    chat,
+                    &i18n::render(
+                        lang,
+                        "Не приложил файлы: {error}",
+                        &[("error", &error.to_string())],
+                    ),
+                    None,
+                ),
             }
             return;
         }
@@ -611,8 +673,16 @@ impl Bridge {
             let files = inbox.files.clone();
             self.inbox.remove(&chat);
             let answer = match runs.message_with_files(&caption, files) {
-                Ok(()) => format!("🧭 Принял вместе с файлами ({names}), разбираю…"),
-                Err(error) => format!("Не получилось: {error}"),
+                Ok(()) => i18n::render(
+                    lang,
+                    "🧭 Принял вместе с файлами ({names}), разбираю…",
+                    &[("names", &names)],
+                ),
+                Err(error) => i18n::render(
+                    lang,
+                    "Не получилось: {error}",
+                    &[("error", &error.to_string())],
+                ),
             };
             self.queue(chat, &answer, None);
             return;
@@ -622,21 +692,26 @@ impl Bridge {
                 self.discard_inbox(chat);
                 self.queue(
                     chat,
-                    &format!("📎 Файлы ({names}) убраны: задачу к ним не написали"),
+                    &i18n::render(
+                        lang,
+                        "📎 Файлы ({names}) убраны: задачу к ним не написали",
+                        &[("names", &names)],
+                    ),
                     None,
                 );
             }
             return;
         }
         inbox.prompted = true;
-        let text = format!(
-            "📎 Получил: {}\n\nНапишите, что с этим сделать, и всё уйдёт оркестратору.",
-            message_text(&names, &self.config.token, 1500)
+        let text = i18n::render(
+            lang,
+            "📎 Получил: {names}\n\nНапишите, что с этим сделать, и всё уйдёт оркестратору.",
+            &[("names", &message_text(&names, &self.config.token, 1500))],
         );
         self.broadcast_one(
             chat,
             text,
-            json!({"inline_keyboard":[[button("Отмена", "s:fx".into())]]}),
+            json!({"inline_keyboard":[[button(tr(lang, "Отмена"), "s:fx".into())]]}),
         );
     }
 
@@ -648,8 +723,9 @@ impl Bridge {
     }
 
     pub(super) fn cancel_files(&mut self, chat: i64) -> String {
+        let lang = self.language(chat);
         self.discard_inbox(chat);
-        "Файлы убраны".to_owned()
+        tr(lang, "Файлы убраны").to_owned()
     }
 
     fn task_files(&self, id: &str) -> Option<TaskFiles> {
@@ -661,16 +737,20 @@ impl Bridge {
     }
 
     /// Кнопки чтения для карточки и уведомления.
-    pub(super) fn file_row(&self, id: &str) -> Option<Vec<Value>> {
+    pub(super) fn file_row(&self, id: &str, lang: Lang) -> Option<Vec<Value>> {
         let files = self.task_files(id)?;
         let mut row = Vec::new();
         if files.has_result {
-            row.push(button("📖 Читать итог", format!("s:fo:{id}:0:0")));
+            row.push(button(tr(lang, "📖 Читать итог"), format!("s:fo:{id}:0:0")));
         }
         let artifacts = files.artifacts();
         if artifacts > 0 {
             row.push(button(
-                &format!("📎 Файлы · {artifacts}"),
+                &i18n::render(
+                    lang,
+                    "📎 Файлы · {artifacts}",
+                    &[("artifacts", &artifacts.to_string())],
+                ),
                 format!("s:fl:{id}:0"),
             ));
         }
@@ -679,7 +759,7 @@ impl Bridge {
 
     /// «Правки» на карточке, когда задаче есть что показать: своя копия
     /// репозитория или правки в ленте её агентов.
-    pub(super) fn diff_row(&self, id: &str) -> Option<Vec<Value>> {
+    pub(super) fn diff_row(&self, id: &str, lang: Lang) -> Option<Vec<Value>> {
         let runs = self.control.as_ref()?.runs.as_ref()?;
         let work = self.hub.task(id)?.work?;
         let home = runs.home();
@@ -695,17 +775,18 @@ impl Bridge {
                     && agent.starts_with(&prefix)
                     && agent.ends_with(&suffix)
             });
-        edits.then(|| vec![button("🧾 Правки", format!("s:dv:{id}"))])
+        edits.then(|| vec![button(tr(lang, "🧾 Правки"), format!("s:dv:{id}"))])
     }
 
     /// Файлы с числом строк в подписи и все правки документом `.diff`. Строчные
     /// замечания в чате неудобны: их оставляют на странице.
     pub(super) async fn send_diff(&mut self, chat: i64, id: &str) -> String {
+        let lang = self.language(chat);
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
-            return "Правки есть только в режиме отделов (serve --home)".into();
+            return tr(lang, "Правки есть только в режиме отделов (serve --home)").into();
         };
         let Some(task) = self.hub.task(id).filter(|task| task.work.is_some()) else {
-            return "Задачи нет".into();
+            return tr(lang, "Задачи нет").into();
         };
         let title = task.title.clone();
         let home = runs.home();
@@ -714,29 +795,30 @@ impl Bridge {
             tokio::task::spawn_blocking(move || crate::review::task_diff(&home, &history, &task))
                 .await
         else {
-            return "Не удалось собрать правки".into();
+            return tr(lang, "Не удалось собрать правки").into();
         };
         if diff.files.is_empty() {
             return diff.source_label();
         }
-        let caption = diff_caption(&diff, &title, &self.config.token);
+        let caption = diff_caption(&diff, &title, &self.config.token, lang);
         let content = redact(&diff.unified(), &self.config.token);
         let dir =
             std::env::temp_dir().join(format!("agentsflow-diff-{}", uuid::Uuid::new_v4().simple()));
-        let name = safe_name(&format!(
-            "Правки {}.diff",
-            title.chars().take(60).collect::<String>()
+        let name = safe_name(&i18n::render(
+            lang,
+            "Правки {title}.diff",
+            &[("title", &title.chars().take(60).collect::<String>())],
         ));
         let path = dir.join(name);
         if std::fs::create_dir_all(&dir).is_err() || std::fs::write(&path, content).is_err() {
             let _ = std::fs::remove_dir_all(&dir);
-            return "Не удалось подготовить файл".into();
+            return tr(lang, "Не удалось подготовить файл").into();
         }
         let sent = upload_with(&self.bot, chat, path, Some(caption)).await;
         let _ = std::fs::remove_dir_all(&dir);
         match sent {
-            Ok(()) => "🧾 Правки отправлены".into(),
-            Err(()) => "Не удалось прислать правки".into(),
+            Ok(()) => tr(lang, "🧾 Правки отправлены").into(),
+            Err(()) => tr(lang, "Не удалось прислать правки").into(),
         }
     }
 
@@ -747,20 +829,22 @@ impl Bridge {
         id: &str,
         page: usize,
     ) -> String {
+        let lang = self.language(chat);
         let Some(files) = self.task_files(id) else {
-            return "Файлов нет".to_owned();
+            return tr(lang, "Файлов нет").to_owned();
         };
         let title = self.hub.task(id).map_or(String::new(), |task| task.title);
         let pages = files.entries.len().div_ceil(LIST_PAGE).max(1);
         let page = page.min(pages - 1);
-        let mut text = format!(
-            "<b>📎 Файлы задачи</b>\n«{}»",
-            message_text(&title, &self.config.token, 200)
+        let mut text = i18n::render(
+            lang,
+            "<b>📎 Файлы задачи</b>\n«{title}»",
+            &[("title", &message_text(&title, &self.config.token, 200))],
         );
         if files.entries.is_empty() {
-            text.push_str("\n\nОтдел файлов не оставил.");
+            text.push_str(tr(lang, "\n\nОтдел файлов не оставил."));
         } else {
-            text.push_str("\n\n📖 откроется здесь, ⬇ придёт файлом.");
+            text.push_str(tr(lang, "\n\n📖 откроется здесь, ⬇ придёт файлом."));
         }
         let mut rows: Vec<Vec<Value>> = files
             .entries
@@ -774,7 +858,7 @@ impl Bridge {
                     "{} {} · {}",
                     if readable { "📖" } else { "⬇" },
                     button_name(&entry.name),
-                    size_label(entry.size)
+                    size_label(entry.size, lang)
                 );
                 let data = if readable {
                     format!("s:fo:{id}:{index}:0")
@@ -796,7 +880,7 @@ impl Bridge {
                 button("▶", format!("s:fl:{id}:{next}")),
             ]);
         }
-        rows.push(vec![button("← К задаче", format!("s:t:{id}"))]);
+        rows.push(vec![button(tr(lang, "← К задаче"), format!("s:t:{id}"))]);
         self.show(chat, message, text, rows).await;
         String::new()
     }
@@ -809,11 +893,12 @@ impl Bridge {
         index: usize,
         page: usize,
     ) -> String {
+        let lang = self.language(chat);
         let Some(files) = self.task_files(id) else {
-            return "Файла нет".to_owned();
+            return tr(lang, "Файла нет").to_owned();
         };
         let Some(entry) = files.entries.get(index) else {
-            return "Файла уже нет, откройте список заново".to_owned();
+            return tr(lang, "Файла уже нет, откройте список заново").to_owned();
         };
         let text = (entry.size <= READER_LIMIT)
             .then(|| std::fs::read_to_string(&entry.path).ok())
@@ -831,7 +916,7 @@ impl Bridge {
         for markdown in [markdown, false] {
             let pages = reader::pages(&text, markdown);
             let page = page.min(pages.len() - 1);
-            let rows = self.reader_rows(id, index, page, pages.len(), files.entries.len());
+            let rows = self.reader_rows(id, index, page, pages.len(), files.entries.len(), lang);
             let body = format!("📖 <b>{name}</b>\n\n{}", pages[page]);
             let mut request = json!({"chat_id":chat,"text":body,"parse_mode":"HTML","link_preview_options":{"is_disabled":true},"reply_markup":{"inline_keyboard":rows}});
             let method = if let Some(message) = message {
@@ -852,7 +937,7 @@ impl Bridge {
         if sent {
             String::new()
         } else {
-            "Telegram не показал страницу".to_owned()
+            tr(lang, "Telegram не показал страницу").to_owned()
         }
     }
 
@@ -863,6 +948,7 @@ impl Bridge {
         page: usize,
         pages: usize,
         entries: usize,
+        lang: Lang,
     ) -> Vec<Vec<Value>> {
         let go = |to: usize| format!("s:fo:{id}:{index}:{to}");
         let mut rows = Vec::new();
@@ -876,28 +962,29 @@ impl Bridge {
                 button("⏭", go(pages - 1)),
             ]);
         }
-        let mut actions = vec![button("⬇ Скачать", format!("s:fd:{id}:{index}"))];
+        let mut actions = vec![button(tr(lang, "⬇ Скачать"), format!("s:fd:{id}:{index}"))];
         if entries > 1 {
-            actions.push(button("📎 Все файлы", format!("s:fl:{id}:0")));
+            actions.push(button(tr(lang, "📎 Все файлы"), format!("s:fl:{id}:0")));
         }
         rows.push(actions);
-        rows.push(vec![button("← К задаче", format!("s:t:{id}"))]);
+        rows.push(vec![button(tr(lang, "← К задаче"), format!("s:t:{id}"))]);
         rows
     }
 
     /// Отправляет файл в фоне: большой файл не должен задерживать карточки разрешений.
     pub(super) fn send_file(&mut self, chat: i64, id: &str, index: usize) -> String {
+        let lang = self.language(chat);
         let Some(files) = self.task_files(id) else {
-            return "Файла нет".to_owned();
+            return tr(lang, "Файла нет").to_owned();
         };
         let Some(entry) = files.entries.get(index) else {
-            return "Файла уже нет, откройте список заново".to_owned();
+            return tr(lang, "Файла уже нет, откройте список заново").to_owned();
         };
         if entry.size > SEND_LIMIT {
             let path = message_text(&entry.path.to_string_lossy(), &self.config.token, 3000);
             self.queue_html(
                 chat,
-                format!("Файл больше 50 МБ, Telegram его не примет. Он лежит здесь:\n<code>{path}</code>"),
+                i18n::render(lang, "Файл больше 50 МБ, Telegram его не примет. Он лежит здесь:\n<code>{path}</code>", &[("path", &path)]),
                 None,
             );
             return String::new();
@@ -909,16 +996,17 @@ impl Bridge {
                 let _: Result<Value, frankenstein::Error> = bot
                     .request(
                         "sendMessage",
-                        Some(json!({"chat_id":chat,"text":"Не удалось прислать файл"})),
+                        Some(json!({"chat_id":chat,"text":tr(lang, "Не удалось прислать файл")})),
                     )
                     .await;
             }
         });
-        "⬇ Отправляю файл".to_owned()
+        tr(lang, "⬇ Отправляю файл").to_owned()
     }
 
     /// Недавние задачи, у которых есть что почитать.
     pub(super) async fn open_results(&mut self, chat: i64, message: Option<i64>, page: usize) {
+        let lang = self.language(chat);
         if self
             .control
             .as_ref()
@@ -927,7 +1015,10 @@ impl Bridge {
         {
             self.queue(
                 chat,
-                "Результаты задач есть только в режиме отделов (serve --home)",
+                tr(
+                    lang,
+                    "Результаты задач есть только в режиме отделов (serve --home)",
+                ),
                 None,
             );
             return;
@@ -970,10 +1061,17 @@ impl Bridge {
             ]);
         }
         let text = if found.is_empty() {
-            "<b>📂 Результаты</b>\n\nПока пусто: ни одна задача не оставила итога.".to_owned()
+            tr(
+                lang,
+                "<b>📂 Результаты</b>\n\nПока пусто: ни одна задача не оставила итога.",
+            )
+            .to_owned()
         } else {
-            "<b>📂 Результаты</b>\n\nНедавние задачи, новые сверху. Нажмите, чтобы читать."
-                .to_owned()
+            tr(
+                lang,
+                "<b>📂 Результаты</b>\n\nНедавние задачи, новые сверху. Нажмите, чтобы читать.",
+            )
+            .to_owned()
         };
         self.show(chat, message, text, rows).await;
     }
@@ -990,6 +1088,13 @@ mod tests {
         routing::{get, post},
     };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn file_sizes_follow_chat_language() {
+        assert_eq!(size_label(1024, Lang::En), "1 KB");
+        assert_eq!(size_label(1_572_864, Lang::En), "1.5 MB");
+        assert_eq!(size_label(1024, Lang::Ru), "1 \u{41a}\u{411}");
+    }
 
     #[test]
     fn names_cannot_leave_the_folder() {

@@ -260,6 +260,22 @@ fn own_decision_for(lang: Lang, allow: bool) -> &'static str {
     }
 }
 
+fn spent_for(lang: Lang, usd: f64, input: u64, output: u64) -> String {
+    let cost = format!("${usd:.2}");
+    if input == 0 && output == 0 {
+        return cost;
+    }
+    i18n::render(
+        lang,
+        "{cost} · {input} → {output} токенов",
+        &[
+            ("cost", &cost),
+            ("input", &crate::ledger::tokens_short(input)),
+            ("output", &crate::ledger::tokens_short(output)),
+        ],
+    )
+}
+
 #[cfg(test)]
 async fn send(bot: &Bot, chat: i64, text: &str) -> std::result::Result<Value, frankenstein::Error> {
     bot.request(
@@ -414,6 +430,26 @@ impl Bridge {
             fetched_rx: Some(fetched_rx),
         }
     }
+    fn set_language_file(&mut self, path: std::path::PathBuf) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(saved) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
+                self.languages = saved
+                    .into_iter()
+                    .filter_map(|(id, lang)| {
+                        let id = id.parse().ok()?;
+                        let lang = match lang.as_str() {
+                            "ru" => Lang::Ru,
+                            "en" => Lang::En,
+                            _ => return None,
+                        };
+                        Some((id, lang))
+                    })
+                    .collect();
+            }
+        }
+        self.language_file = Some(path);
+    }
+
     fn language(&self, chat: i64) -> Lang {
         self.languages
             .get(&chat)
@@ -471,6 +507,7 @@ impl Bridge {
             buttons: None,
         });
     }
+    #[cfg(test)]
     fn broadcast(&mut self, text: &str, key: Option<u64>) {
         for chat in self.config.users.clone() {
             if key.is_some() || !self.muted.contains(&chat) {
@@ -488,20 +525,11 @@ impl Bridge {
                 .is_some_and(|runs| runs.home().departments.contains_key(name))
     }
 
-    fn broadcast_buttons(&mut self, text: &str, buttons: Value) {
-        for chat in self.config.users.clone() {
-            if !self.muted.contains(&chat) {
-                self.queue_html(chat, text.to_owned(), None);
-                if let Some(item) = self.queues.get_mut(&chat).and_then(VecDeque::back_mut) {
-                    item.buttons = Some(buttons.clone());
-                }
-            }
-        }
-    }
-    fn broadcast_html(&mut self, text: &str) {
-        for chat in self.config.users.clone() {
-            if !self.muted.contains(&chat) {
-                self.queue_html(chat, text.to_owned(), None);
+    fn send_buttons(&mut self, chat: i64, text: &str, buttons: Value) {
+        if !self.muted.contains(&chat) {
+            self.queue_html(chat, text.to_owned(), None);
+            if let Some(item) = self.queues.get_mut(&chat).and_then(VecDeque::back_mut) {
+                item.buttons = Some(buttons);
             }
         }
     }
@@ -677,33 +705,42 @@ impl Bridge {
                 if cut {
                     text.push_str("\n…");
                 }
-                let mut rows = Vec::new();
-                let result_of = subject
-                    .strip_prefix(crate::orchestrator::RESULT_SUBJECT)
-                    .and_then(|rest| rest.split(':').next());
-                if let Some(row) = result_of.and_then(|id| self.file_row(id)) {
-                    rows.push(row);
-                }
-                if !direct || (cut && rows.is_empty()) {
-                    let mut row = vec![
-                        json!({"text":"Открыть письмо","callback_data":format!("s:mt:{thread}:0")}),
-                    ];
-                    if limit {
-                        row.push(json!({"text":"💰 Расходы","callback_data":"s:sp"}));
+                for chat in self.config.users.clone() {
+                    let lang = self.language(chat);
+                    let mut rows = Vec::new();
+                    let result_of = subject
+                        .strip_prefix(crate::orchestrator::RESULT_SUBJECT)
+                        .and_then(|rest| rest.split(':').next());
+                    if let Some(row) = result_of.and_then(|id| self.file_row(id, lang)) {
+                        rows.push(row);
                     }
-                    rows.push(row);
-                }
-                let subject = message_text(&subject, &self.config.token, 200);
-                let message = if direct {
-                    format!("🧭 <i>{subject}</i>\n{text}")
-                } else {
-                    let from = message_text(from.as_str(), &self.config.token, 100);
-                    format!("✉ <b>{from}</b> → вам: <i>{subject}</i>\n{text}")
-                };
-                if rows.is_empty() {
-                    self.broadcast(&message, None);
-                } else {
-                    self.broadcast_buttons(&message, json!({ "inline_keyboard": rows }));
+                    if !direct || (cut && rows.is_empty()) {
+                        let mut row = vec![
+                            json!({"text":tr(lang, "Открыть письмо"),"callback_data":format!("s:mt:{thread}:0")}),
+                        ];
+                        if limit {
+                            row.push(json!({"text":tr(lang, "💰 Расходы"),"callback_data":"s:sp"}));
+                        }
+                        rows.push(row);
+                    }
+                    let subject = message_text(&subject, &self.config.token, 200);
+                    let message = if direct {
+                        format!("🧭 <i>{subject}</i>\n{text}")
+                    } else {
+                        let from = message_text(from.as_str(), &self.config.token, 100);
+                        i18n::render(
+                            lang,
+                            "✉ <b>{from}</b> → вам: <i>{subject}</i>\n{text}",
+                            &[("from", &from), ("subject", &subject), ("text", &text)],
+                        )
+                    };
+                    if rows.is_empty() {
+                        if !self.muted.contains(&chat) {
+                            self.queue(chat, &message, None);
+                        }
+                    } else {
+                        self.send_buttons(chat, &message, json!({ "inline_keyboard": rows }));
+                    }
                 }
             }
             Event::Rule {
@@ -714,17 +751,23 @@ impl Bridge {
             } => {
                 let who = message_text(&target, &self.config.token, 40);
                 let rule = message_text(&text, &self.config.token, 800);
-                let (head, yes) = if crate::rules::is_share(&id) {
-                    ("предлагает факт в вашу память проекта", "✅ В память")
-                } else {
-                    ("предлагает правило", "✅ Добавить")
-                };
-                self.broadcast_buttons(
+                for chat in self.config.users.clone() {
+                    let lang = self.language(chat);
+                    let (head, yes) = if crate::rules::is_share(&id) {
+                        (
+                            tr(lang, "предлагает факт в вашу память проекта"),
+                            tr(lang, "✅ В память"),
+                        )
+                    } else {
+                        (tr(lang, "предлагает правило"), tr(lang, "✅ Добавить"))
+                    };
+                    self.send_buttons(chat,
                     &format!("📜 <b>{who}</b> {head}:
 
 {rule}"),
-                    json!({"inline_keyboard":[[{"text":yes,"callback_data":format!("s:rl:{target}:{id}:a")},{"text":"✖ Отклонить","callback_data":format!("s:rl:{target}:{id}:r")}]]}),
+                    json!({"inline_keyboard":[[{"text":yes,"callback_data":format!("s:rl:{target}:{id}:a")},{"text":tr(lang, "✖ Отклонить"),"callback_data":format!("s:rl:{target}:{id}:r")}]]}),
                 );
+                }
             }
             Event::Task { task } if task.work.is_some() => {
                 let work = task.work.as_ref().expect("guarded");
@@ -739,15 +782,16 @@ impl Bridge {
                             .as_ref()
                             .map(|event| message_text(&event.url, &self.config.token, 200))
                             .unwrap_or_default();
-                        self.broadcast_buttons(
-                            &format!(
-                                "💬 «{title}»: опубликовать комментарий?\n{target}\n\n{draft}"
-                            ),
+                        for chat in self.config.users.clone() {
+                            let lang = self.language(chat);
+                            self.send_buttons(chat,
+                            &i18n::render(lang, "💬 «{title}»: опубликовать комментарий?\n{target}\n\n{draft}", &[("title", &title), ("target", &target), ("draft", &draft)]),
                             json!({"inline_keyboard":[[
-                                {"text":"✅ Опубликовать","callback_data":format!("s:ta:{id}:cp")},
-                                {"text":"✖ Не нужно","callback_data":format!("s:ta:{id}:cd")}
-                            ],[{"text":"Открыть","callback_data":format!("s:t:{id}")}]]}),
+                                {"text":tr(lang, "✅ Опубликовать"),"callback_data":format!("s:ta:{id}:cp")},
+                                {"text":tr(lang, "✖ Не нужно"),"callback_data":format!("s:ta:{id}:cd")}
+                            ],[{"text":tr(lang, "Открыть"),"callback_data":format!("s:t:{id}")}]]}),
                         );
+                        }
                     }
                 } else {
                     self.draft_seen.remove(&task.id);
@@ -759,144 +803,141 @@ impl Bridge {
                     let dept = message_text(&work.department, &self.config.token, 40);
                     let summary = message_text(&work.result_summary, &self.config.token, 700);
                     let id = &task.id;
-                    let open = json!({"text":"Открыть","callback_data":format!("s:t:{id}")});
-                    let again =
-                        json!({"text":"🔁 Ещё круг","callback_data":format!("s:ta:{id}:rq")});
-                    let close = json!({"text":"🗄 Закрыть","callback_data":format!("s:ta:{id}:ar")});
-                    let note =
-                        json!({"text":"✍ С замечанием","callback_data":format!("s:ta:{id}:rn")});
-                    match work.state {
-                        agentsflow_events::WorkState::Waiting => {
-                            if let Some(proposal) = &work.proposal {
-                                let name = message_text(&proposal.title, &self.config.token, 80);
-                                let about =
-                                    message_text(&proposal.description, &self.config.token, 300);
-                                let pid = message_text(&proposal.id, &self.config.token, 40);
-                                self.broadcast_buttons(
-                                    &format!("🏢 Оркестратор предлагает отдел <b>{name}</b> (<code>{pid}</code>): {about}\n\nДля задачи «{title}»."),
-                                    json!({"inline_keyboard":[[{"text":"✅ Создать отдел","callback_data":format!("s:ta:{id}:pc")},{"text":"В общий отдел","callback_data":format!("s:ta:{id}:pg")}],[close,open]]}),
-                                );
-                            } else {
-                                let questions: Vec<String> = work
-                                    .questions
-                                    .iter()
-                                    .filter(|q| q.answer.is_none())
-                                    .map(|q| {
-                                        format!(
-                                            "• {}",
-                                            message_text(&q.text, &self.config.token, 300)
-                                        )
-                                    })
-                                    .collect();
-                                if !questions.is_empty() {
-                                    self.broadcast_buttons(
-                                        &format!("❓ <b>{dept}</b>: «{title}» ждёт ответа\n\n{}", questions.join("\n")),
-                                        json!({"inline_keyboard":[[{"text":"✍ Ответить","callback_data":format!("s:ta:{id}:ans")}],[close,open]]}),
+                    for chat in self.config.users.clone() {
+                        let lang = self.language(chat);
+                        let open =
+                            json!({"text":tr(lang, "Открыть"),"callback_data":format!("s:t:{id}")});
+                        let again = json!({"text":tr(lang, "🔁 Ещё круг"),"callback_data":format!("s:ta:{id}:rq")});
+                        let close = json!({"text":tr(lang, "🗄 Закрыть"),"callback_data":format!("s:ta:{id}:ar")});
+                        let note = json!({"text":tr(lang, "✍ С замечанием"),"callback_data":format!("s:ta:{id}:rn")});
+                        match work.state {
+                            agentsflow_events::WorkState::Waiting => {
+                                if let Some(proposal) = &work.proposal {
+                                    let name =
+                                        message_text(&proposal.title, &self.config.token, 80);
+                                    let about = message_text(
+                                        &proposal.description,
+                                        &self.config.token,
+                                        300,
                                     );
+                                    let pid = message_text(&proposal.id, &self.config.token, 40);
+                                    self.send_buttons(chat,
+                                    &i18n::render(lang, "🏢 Оркестратор предлагает отдел <b>{name}</b> (<code>{pid}</code>): {about}\n\nДля задачи «{title}».", &[("name", &name), ("pid", &pid), ("about", &about), ("title", &title)]),
+                                    json!({"inline_keyboard":[[{"text":tr(lang, "✅ Создать отдел"),"callback_data":format!("s:ta:{id}:pc")},{"text":tr(lang, "В общий отдел"),"callback_data":format!("s:ta:{id}:pg")}],[close,open]]}),
+                                );
+                                } else {
+                                    let questions: Vec<String> = work
+                                        .questions
+                                        .iter()
+                                        .filter(|q| q.answer.is_none())
+                                        .map(|q| {
+                                            format!(
+                                                "• {}",
+                                                message_text(&q.text, &self.config.token, 300)
+                                            )
+                                        })
+                                        .collect();
+                                    if !questions.is_empty() {
+                                        self.send_buttons(chat,
+                                        &i18n::render(lang, "❓ <b>{dept}</b>: «{title}» ждёт ответа\n\n{questions}", &[("dept", &dept), ("title", &title), ("questions", &questions.join("\n"))]),
+                                        json!({"inline_keyboard":[[{"text":tr(lang, "✍ Ответить"),"callback_data":format!("s:ta:{id}:ans")}],[close,open]]}),
+                                    );
+                                    }
                                 }
                             }
-                        }
-                        // Internal results are accepted by the orchestrator.
-                        agentsflow_events::WorkState::Review
-                            if work.risk == agentsflow_events::Risk::Internal
-                                && !work.owner_review => {}
-                        agentsflow_events::WorkState::Review => {
-                            let who = if work.risk == agentsflow_events::Risk::External {
-                                "уйдёт наружу, нужна ваша приёмка"
-                            } else {
-                                "на приёмке"
-                            };
-                            let mut rows = vec![
-                                vec![
-                                    json!({"text":"✅ Принять","callback_data":format!("s:ta:{id}:acc")}),
-                                    again,
-                                ],
-                                vec![note, open],
-                            ];
-                            rows.extend(self.file_row(id));
-                            self.broadcast_buttons(
-                                &format!(
-                                    "👀 <b>{dept}</b>: «{title}» готово, {who} · {}\n\n{summary}",
-                                    crate::ledger::spent(
-                                        work.cost_usd,
-                                        work.input_tokens,
-                                        work.output_tokens
-                                    )
-                                ),
+                            // Internal results are accepted by the orchestrator.
+                            agentsflow_events::WorkState::Review
+                                if work.risk == agentsflow_events::Risk::Internal
+                                    && !work.owner_review => {}
+                            agentsflow_events::WorkState::Review => {
+                                let who = if work.risk == agentsflow_events::Risk::External {
+                                    tr(lang, "уйдёт наружу, нужна ваша приёмка")
+                                } else {
+                                    tr(lang, "на приёмке")
+                                };
+                                let mut rows = vec![
+                                    vec![
+                                        json!({"text":tr(lang, "✅ Принять"),"callback_data":format!("s:ta:{id}:acc")}),
+                                        again,
+                                    ],
+                                    vec![note, open],
+                                ];
+                                rows.extend(self.file_row(id, lang));
+                                self.send_buttons(chat,
+                                &i18n::render(lang, "👀 <b>{dept}</b>: «{title}» готово, {who} · {spent}\n\n{summary}", &[("dept", &dept), ("title", &title), ("who", who), ("spent", &spent_for(lang, work.cost_usd, work.input_tokens, work.output_tokens)), ("summary", &summary)]),
                                 json!({"inline_keyboard":rows}),
                             );
-                        }
-                        // The owner has already seen what they accepted,
-                        // and an order only feeds the task that placed it.
-                        agentsflow_events::WorkState::Done
-                            if work.risk == agentsflow_events::Risk::Internal
-                                && !work.owner_review
-                                && work.parent.is_none() =>
-                        {
-                            if let Some(row) = self.file_row(id) {
-                                self.broadcast_buttons(
-                                    &format!(
-                                        "✅ <b>{dept}</b>: «{title}» готово · {}\n\n{summary}",
-                                        crate::ledger::spent(
-                                            work.cost_usd,
-                                            work.input_tokens,
-                                            work.output_tokens
-                                        )
-                                    ),
+                            }
+                            // The owner has already seen what they accepted,
+                            // and an order only feeds the task that placed it.
+                            agentsflow_events::WorkState::Done
+                                if work.risk == agentsflow_events::Risk::Internal
+                                    && !work.owner_review
+                                    && work.parent.is_none() =>
+                            {
+                                if let Some(row) = self.file_row(id, lang) {
+                                    self.send_buttons(chat,
+                                    &i18n::render(lang, "✅ <b>{dept}</b>: «{title}» готово · {spent}\n\n{summary}", &[("dept", &dept), ("title", &title), ("spent", &spent_for(lang, work.cost_usd, work.input_tokens, work.output_tokens)), ("summary", &summary)]),
                                     json!({"inline_keyboard":[row,[open]]}),
                                 );
+                                }
                             }
-                        }
-                        // A run that went quiet and is not restarted by itself.
-                        agentsflow_events::WorkState::Running if work.silent_since_ms.is_some() => {
-                            self.broadcast_buttons(
-                                &format!("🔇 <b>{dept}</b>: «{title}» молчит. Что делать с запуском?"),
+                            // A run that went quiet and is not restarted by itself.
+                            agentsflow_events::WorkState::Running
+                                if work.silent_since_ms.is_some() =>
+                            {
+                                self.send_buttons(chat,
+                                &i18n::render(lang, "🔇 <b>{dept}</b>: «{title}» молчит. Что делать с запуском?", &[("dept", &dept), ("title", &title)]),
                                 json!({"inline_keyboard":[
-                                    [{"text":"⏳ Подождать ещё","callback_data":format!("s:ta:{id}:sw")},
-                                     {"text":"🔁 Перезапустить шаг","callback_data":format!("s:ta:{id}:sr")}],
-                                    [{"text":"🛑 Остановить","callback_data":format!("s:ta:{id}:ss")}, open]
+                                    [{"text":tr(lang, "⏳ Подождать ещё"),"callback_data":format!("s:ta:{id}:sw")},
+                                     {"text":tr(lang, "🔁 Перезапустить шаг"),"callback_data":format!("s:ta:{id}:sr")}],
+                                    [{"text":tr(lang, "🛑 Остановить"),"callback_data":format!("s:ta:{id}:ss")}, open]
                                 ]}),
                             );
-                        }
-                        agentsflow_events::WorkState::Stuck => {
-                            let reason = message_text(
-                                work.stuck_reason.as_deref().unwrap_or("без причины"),
-                                &self.config.token,
-                                300,
-                            );
-                            self.broadcast_buttons(
-                                &format!(
-                                    "🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}"
-                                ),
+                            }
+                            agentsflow_events::WorkState::Stuck => {
+                                let reason = message_text(
+                                    work.stuck_reason
+                                        .as_deref()
+                                        .unwrap_or(tr(lang, "без причины")),
+                                    &self.config.token,
+                                    300,
+                                );
+                                self.send_buttons(chat,
+                                &i18n::render(lang, "🧱 <b>{dept}</b>: «{title}» застряла: {reason}\n\n{summary}", &[("dept", &dept), ("title", &title), ("reason", &reason), ("summary", &summary)]),
                                 json!({"inline_keyboard":[[again,close],[note,open]]}),
                             );
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
             }
             Event::Task { task } => {
                 let previous = self.task_seen.insert(task.id.clone(), task.status.clone());
                 if previous.as_ref() != Some(&task.status) {
-                    let who = message_text(
-                        task.assignee
-                            .as_ref()
-                            .map_or("исполнитель", AgentId::as_str),
-                        &self.config.token,
-                        100,
-                    );
-                    let title = message_text(&task.title, &self.config.token, 200);
-                    let open = json!({"text":"Открыть","callback_data":format!("s:t:{}", task.id)});
-                    match task.status {
-                        agentsflow_events::TaskStatus::Review => self.broadcast_buttons(
-                            &format!("👀 <b>{who}</b> сдал задачу «{title}» на проверку"),
-                            json!({"inline_keyboard":[[open,{"text":"✅ Принять","callback_data":format!("s:ta:{}:acc", task.id)}]]}),
+                    for chat in self.config.users.clone() {
+                        let lang = self.language(chat);
+                        let who = message_text(
+                            task.assignee
+                                .as_ref()
+                                .map_or(tr(lang, "исполнитель"), AgentId::as_str),
+                            &self.config.token,
+                            100,
+                        );
+                        let title = message_text(&task.title, &self.config.token, 200);
+                        let open = json!({"text":tr(lang, "Открыть"),"callback_data":format!("s:t:{}", task.id)});
+                        match task.status {
+                        agentsflow_events::TaskStatus::Review => self.send_buttons(chat,
+                            &i18n::render(lang, "👀 <b>{who}</b> сдал задачу «{title}» на проверку", &[("who", &who), ("title", &title)]),
+                            json!({"inline_keyboard":[[open,{"text":tr(lang, "✅ Принять"),"callback_data":format!("s:ta:{}:acc", task.id)}]]}),
                         ),
-                        agentsflow_events::TaskStatus::Blocked => self.broadcast_buttons(
-                            &format!("🧱 <b>{who}</b>: задача «{title}» застряла"),
+                        agentsflow_events::TaskStatus::Blocked => self.send_buttons(chat,
+                            &i18n::render(lang, "🧱 <b>{who}</b>: задача «{title}» застряла", &[("who", &who), ("title", &title)]),
                             json!({"inline_keyboard":[[open]]}),
                         ),
                         _ => {}
+                    }
                     }
                 }
             }
@@ -910,12 +951,27 @@ impl Bridge {
                 // its message: a separate line about the workflow is only noise.
                 && !self.reports_itself(&name) =>
             {
-                let text = match status {
-                    WorkflowStatus::Finished => format!("🔁 Workflow «{name}»: завершён"),
-                    _ if detail == "stopped" => format!("⏹ Workflow «{name}»: остановлен"),
-                    _ => format!("❌ Workflow «{name}»: с ошибкой: {detail}"),
-                };
-                self.broadcast(&text, None)
+                for chat in self.config.users.clone() {
+                    let lang = self.language(chat);
+                    let text = match status {
+                        WorkflowStatus::Finished => {
+                            i18n::render(lang, "🔁 Workflow «{name}»: завершён", &[("name", &name)])
+                        }
+                        _ if detail == "stopped" => i18n::render(
+                            lang,
+                            "⏹ Workflow «{name}»: остановлен",
+                            &[("name", &name)],
+                        ),
+                        _ => i18n::render(
+                            lang,
+                            "❌ Workflow «{name}»: с ошибкой: {detail}",
+                            &[("name", &name), ("detail", &detail)],
+                        ),
+                    };
+                    if !self.muted.contains(&chat) {
+                        self.queue(chat, &text, None);
+                    }
+                }
             }
             Event::Done { reason } => {
                 let keys: Vec<_> = self
@@ -947,14 +1003,32 @@ impl Bridge {
                 if agent.as_str().contains(':') {
                 } else if matches!(reason.as_str(), "error" | "interrupted") {
                     let agent = message_text(agent.as_str(), &self.config.token, 100);
-                    self.broadcast_html(&format!("❌ <b>{agent}</b>: ход завершился ошибкой"));
+                    for chat in self.config.users.clone() {
+                        if !self.muted.contains(&chat) {
+                            let text = i18n::render(
+                                self.language(chat),
+                                "❌ <b>{agent}</b>: ход завершился ошибкой",
+                                &[("agent", &agent)],
+                            );
+                            self.queue_html(chat, text, None);
+                        }
+                    }
                 } else if let Some(secs) = elapsed.filter(|secs| *secs >= 60) {
                     let agent = message_text(agent.as_str(), &self.config.token, 100);
-                    self.broadcast_html(&format!(
-                        "✔ <b>{agent}</b> закончил за {} мин {} с",
-                        secs / 60,
-                        secs % 60
-                    ));
+                    for chat in self.config.users.clone() {
+                        if !self.muted.contains(&chat) {
+                            let text = i18n::render(
+                                self.language(chat),
+                                "✔ <b>{agent}</b> закончил за {minutes} мин {seconds} с",
+                                &[
+                                    ("agent", &agent),
+                                    ("minutes", &(secs / 60).to_string()),
+                                    ("seconds", &(secs % 60).to_string()),
+                                ],
+                            );
+                            self.queue_html(chat, text, None);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1019,7 +1093,15 @@ impl Bridge {
                         }
                     }
                     if let Some(count) = self.dropped.remove(&chat).filter(|count| *count > 0) {
-                        self.queue(chat, &format!("… ещё {count} событий"), None);
+                        self.queue(
+                            chat,
+                            &i18n::render(
+                                self.language(chat),
+                                "… ещё {count} событий",
+                                &[("count", &count.to_string())],
+                            ),
+                            None,
+                        );
                     }
                 }
                 error => {
@@ -1312,7 +1394,7 @@ impl Bridge {
                 .unwrap_or_default();
             rows.insert(
                 0,
-                vec![json!({"text":format!("📁 Проект: {name}"),"callback_data":"s:proj"})],
+                vec![json!({"text":i18n::render(self.language(chat), "📁 Проект: {name}", &[("name", &name)]),"callback_data":"s:proj"})],
             );
         }
         let message = self.show(chat, existing, text.into(), rows).await;
@@ -2189,7 +2271,7 @@ impl Bridge {
                 _ => words.next().unwrap_or("").split('@').next().unwrap_or(""),
             };
             let answer = match command {
-                "/start" | "/help" => screens::help_text(),
+                "/start" | "/help" => screens::help_text(self.language(user.unwrap_or_default())),
                 "/ask" => tr(
                     self.language(user.unwrap_or_default()),
                     "Укажите агента и задание: /ask <имя> <текст>",
@@ -2432,30 +2514,23 @@ pub async fn run(
                 .map(|cwd| cwd.join(".agentsflow"))
         });
     if let Some(path) = state_dir.map(|dir| dir.join("telegram-languages.json")) {
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(saved) = serde_json::from_slice::<HashMap<String, String>>(&bytes) {
-                bridge.languages = saved
-                    .into_iter()
-                    .filter_map(|(id, lang)| {
-                        let id = id.parse().ok()?;
-                        let lang = match lang.as_str() {
-                            "ru" => Lang::Ru,
-                            "en" => Lang::En,
-                            _ => return None,
-                        };
-                        Some((id, lang))
-                    })
-                    .collect();
-            }
-        }
-        bridge.language_file = Some(path);
+        bridge.set_language_file(path);
     }
     if let Some(name) = bridge
         .control
         .as_ref()
         .and_then(|control| control.announce.clone())
     {
-        bridge.broadcast(&format!("📁 Проект: {name}. Команда перезапущена."), None);
+        for chat in bridge.config.users.clone() {
+            if !bridge.muted.contains(&chat) {
+                let text = i18n::render(
+                    bridge.language(chat),
+                    "📁 Проект: {name}. Команда перезапущена.",
+                    &[("name", &name)],
+                );
+                bridge.queue(chat, &text, None);
+            }
+        }
     }
     for event in history {
         if replays_at_start(&event.event) {
@@ -2618,6 +2693,27 @@ mod tests {
                 .count()
                 <= 3500
         );
+    }
+
+    #[tokio::test]
+    async fn language_command_survives_restart_per_chat() {
+        let path = std::env::temp_dir().join(format!(
+            "agentsflow-languages-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let config = Config::parse("secret".into(), "11,12", "http://localhost".into()).unwrap();
+        let mut first = Bridge::new(config.clone(), Agents::new(), Team::preset("pair").unwrap());
+        first.set_language_file(path.clone());
+        first.languages.insert(11, Lang::Ru);
+        first.languages.insert(12, Lang::Ru);
+        first.update(&json!({"message":{"from":{"id":11},"chat":{"id":11,"type":"private"},"text":"/lang"}})).await;
+        assert_eq!(first.language(11), Lang::En);
+        drop(first);
+        let mut restarted = Bridge::new(config, Agents::new(), Team::preset("pair").unwrap());
+        restarted.set_language_file(path.clone());
+        assert_eq!(restarted.language(11), Lang::En);
+        assert_eq!(restarted.language(12), Lang::Ru);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
