@@ -256,6 +256,9 @@ impl ClaudeSession {
         }
         // The bot's token is not the agent's business.
         command.env_remove(crate::TELEGRAM_TOKEN_VAR);
+        for var in crate::GITHUB_TOKEN_VARS {
+            command.env_remove(var);
+        }
         let mut child = command.spawn()?;
         let (Some(mut input), Some(output), Some(mut errors)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())

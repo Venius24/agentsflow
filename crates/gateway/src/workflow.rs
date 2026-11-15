@@ -499,7 +499,19 @@ struct RunContext<'a> {
     spec: &'a Spec,
     task: &'a str,
     id: &'a str,
+    supervisor: Option<&'a Supervisor>,
 }
+
+/// Lets the run manager restart the step that has gone silent: every change
+/// of the counter asks the running step to drop its agent's session and go
+/// again from the files in the run folder.
+#[derive(Clone)]
+pub struct Supervisor {
+    pub restart: watch::Receiver<u64>,
+}
+
+/// Added to the prompt of a step that is run again after a hang.
+const HUNG_NOTE: &str = "Предыдущая сессия на этом шаге зависла и была закрыта. Файлы в папке запуска сохранились: посмотри, что уже сделано, и продолжи с этого места, не начинай с нуля. Не повторяй действия, которые уже были выполнены (отправка, публикация, push).";
 
 struct StepOutcome {
     output: String,
@@ -756,7 +768,7 @@ async fn run_step(
             )
         )
     };
-    let mut output = prompt_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
+    let mut output = supervised_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
     // Notes that came during the turn reach the agent right after it, so the
     // step's answer (and a reviewer's verdict) already takes them into account.
     for _ in 0..MAX_NOTE_TURNS {
@@ -773,13 +785,58 @@ async fn run_step(
 
 ")
         );
-        output = prompt_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
+        output = supervised_turn(context, actor, &agent, &step.agent, prompt, stop).await?;
     }
     Ok(StepOutcome { output, agent })
 }
 
 /// Follow-up turns for the owner's notes within one step.
 const MAX_NOTE_TURNS: usize = 3;
+
+/// One turn of a step. When the run manager asks for a restart, the agent's
+/// session is dropped and the same prompt goes to a fresh one, with a note
+/// that the files are what is left.
+async fn supervised_turn(
+    context: &RunContext<'_>,
+    actor: &Actor,
+    agent: &AgentId,
+    name: &str,
+    prompt: String,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<String> {
+    let Some(supervisor) = context.supervisor else {
+        return prompt_turn(context, actor, agent, name, prompt, stop).await;
+    };
+    let mut restart = supervisor.restart.clone();
+    restart.mark_unchanged();
+    let mut text = prompt.clone();
+    loop {
+        let ended = {
+            let mut turn =
+                std::pin::pin!(prompt_turn(context, actor, agent, name, text.clone(), stop));
+            tokio::select! {
+                result = &mut turn => Some(result),
+                changed = restart.changed() => {
+                    // Nobody can ask any more: let this very turn finish, the
+                    // prompt has been given once already.
+                    if changed.is_err() { Some(turn.await) } else { None }
+                }
+            }
+        };
+        if let Some(result) = ended {
+            return result;
+        }
+        actor
+            .restart()
+            .await
+            .map_err(|error| anyhow::anyhow!("agent {name}: restart failed: {error:?}"))?;
+        text = format!(
+            "{prompt}
+
+{HUNG_NOTE}"
+        );
+    }
+}
 
 async fn prompt_turn(
     context: &RunContext<'_>,
@@ -893,7 +950,21 @@ pub async fn execute_traced(
     spec: &Spec,
     task: &str,
     id: &str,
+    stop: watch::Receiver<bool>,
+) -> (std::result::Result<(), String>, Vec<StepRecord>) {
+    execute_supervised(hub, agents, spec, task, id, stop, None).await
+}
+
+/// [`execute_traced`] whose steps can be restarted from outside when they
+/// go silent.
+pub async fn execute_supervised(
+    hub: &Hub,
+    agents: &crate::runtime::Agents,
+    spec: &Spec,
+    task: &str,
+    id: &str,
     mut stop: watch::Receiver<bool>,
+    supervisor: Option<Supervisor>,
 ) -> (std::result::Result<(), String>, Vec<StepRecord>) {
     publish(hub, id, spec, None, WorkflowStatus::Started, "");
     let context = RunContext {
@@ -902,6 +973,7 @@ pub async fn execute_traced(
         spec,
         task,
         id,
+        supervisor: supervisor.as_ref(),
     };
     let mut history = Vec::new();
     let result = match execute_steps(&context, &mut stop, &mut history).await {
@@ -1914,5 +1986,127 @@ VERDICT"
     #[tokio::test]
     async fn manager_busy_and_stop() {
         LocalSet::new().run_until(busy_stop_case()).await;
+    }
+
+    #[tokio::test]
+    async fn a_silent_step_restarts_in_a_fresh_session_and_goes_on() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let sessions = Arc::new(Mutex::new(0usize));
+                let (actor, task) = {
+                    let sessions = sessions.clone();
+                    crate::hub::spawn(hub.clone(), AgentId::from("main"), true, move || {
+                        let number = {
+                            let mut count = sessions.lock().unwrap();
+                            *count += 1;
+                            *count
+                        };
+                        // The first session says nothing until it is interrupted;
+                        // the one after the restart answers at once.
+                        async move { Ok(crate::testing::Silent::new(usize::from(number == 1), false)) }
+                    })
+                };
+                let agents = HashMap::from([(AgentId::from("main"), actor.clone())]);
+                let spec = Spec::parse("name='n'
+[[step]]
+id='do'
+agent='main'
+prompt='{task}'")
+                    .unwrap();
+                let (restart_tx, restart_rx) = watch::channel(0u64);
+                let (_stop_tx, stop) = watch::channel(false);
+                let run = tokio::task::spawn_local({
+                    let (hub, agents) = (hub.clone(), agents.clone());
+                    async move {
+                        execute_supervised(
+                            &hub,
+                            &agents,
+                            &spec,
+                            "the task",
+                            "id",
+                            stop,
+                            Some(Supervisor {
+                                restart: restart_rx,
+                            }),
+                        )
+                        .await
+                    }
+                });
+                while !actor.state().busy {
+                    tokio::task::yield_now().await;
+                }
+                restart_tx.send_modify(|count| *count += 1);
+                let (result, history) = tokio::time::timeout(std::time::Duration::from_secs(15), run)
+                    .await
+                    .expect("the restarted step finishes")
+                    .unwrap();
+                assert_eq!(result, Ok(()));
+                assert_eq!(history.last().unwrap().output, "ok");
+                assert_eq!(*sessions.lock().unwrap(), 2, "a fresh session after the restart");
+                let prompts: Vec<String> = hub
+                    .subscribe()
+                    .0
+                    .iter()
+                    .filter_map(|envelope| match &envelope.event {
+                        Event::Message {
+                            role: Role::User,
+                            text,
+                            ..
+                        } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(prompts.len(), 2, "{prompts:?}");
+                assert_eq!(prompts[0], "the task");
+                assert!(prompts[1].starts_with("the task"));
+                assert!(prompts[1].contains("зависла"), "{}", prompts[1]);
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_restart_asked_between_steps_does_not_touch_the_next_one() {
+        LocalSet::new()
+            .run_until(async {
+                let hub = Hub::new();
+                let (actor, task, prompts) = fake(&hub, AgentId::from("main"), &["one"], false);
+                let agents = HashMap::from([(AgentId::from("main"), actor.clone())]);
+                let spec = Spec::parse(
+                    "name='n'
+[[step]]
+id='do'
+agent='main'
+prompt='{task}'",
+                )
+                .unwrap();
+                let (restart_tx, restart_rx) = watch::channel(0u64);
+                // Asked before the step began: a stale request.
+                restart_tx.send_modify(|count| *count += 1);
+                let (_stop_tx, stop) = watch::channel(false);
+                let (result, _) = execute_supervised(
+                    &hub,
+                    &agents,
+                    &spec,
+                    "t",
+                    "id",
+                    stop,
+                    Some(Supervisor {
+                        restart: restart_rx,
+                    }),
+                )
+                .await;
+                assert_eq!(result, Ok(()));
+                assert_eq!(
+                    prompts.lock().unwrap().len(),
+                    1,
+                    "no second run of the step"
+                );
+                actor.shutdown().await;
+                task.await.unwrap();
+            })
+            .await;
     }
 }

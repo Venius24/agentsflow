@@ -209,6 +209,42 @@ pub struct WorkInfo {
     /// orchestrator; none means the department's first one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Since when the running task is silent: no event from the agent of the
+    /// current step. Cleared by the next event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_since_ms: Option<u64>,
+    /// The external event (CI failure, issue, comment) that created the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<EventRef>,
+    /// The draft pull request the department opened for this task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    /// The closing comment waits for the owner's "publish".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment_draft: Option<String>,
+    /// The closing comment was written, or the owner said it is not needed:
+    /// a task sent back for another round does not write it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub commented: bool,
+}
+
+/// Where a task came from outside: a repository event.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EventRef {
+    /// `ci`, `issue` or `comment`.
+    pub kind: String,
+    /// `owner/name`.
+    pub repo: String,
+    /// Deduplication key, unique per event.
+    pub key: String,
+    /// Issue or pull request number, where there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u64>,
+    /// Whether `number` is a pull request (comment on it) or an issue.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_pr: bool,
+    #[serde(default)]
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -1032,6 +1032,8 @@ mod tests {
                 );
                 let env = crate::runs::RunEnv {
                     codex_bin: None,
+                    gh: None,
+                    stall_clock: None,
                     spawner: Some(std::rc::Rc::new(move |hub, member, dir| {
                         let dir = dir.to_path_buf();
                         crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {

@@ -302,6 +302,9 @@ impl CodexSession {
             .working_directory(&cwd)
             // The bot's token is not the agent's business.
             .env(crate::TELEGRAM_TOKEN_VAR, "");
+        for var in crate::GITHUB_TOKEN_VARS {
+            builder = builder.env(var, "");
+        }
         if let Some(effort) = opts.effort {
             builder = builder.config_override("model_reasoning_effort", json!(effort).to_string());
         }

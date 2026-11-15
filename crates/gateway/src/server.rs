@@ -324,7 +324,8 @@ async fn guard(State(state): State<AppState>, mut request: Request, next: Next) 
             }
         }
     }
-    if request.uri().path().starts_with("/api/") {
+    let open = request.method() == axum::http::Method::GET && request.uri().path() == "/api/alive";
+    if request.uri().path().starts_with("/api/") && !open {
         let header_token = request
             .headers()
             .get("x-agentsflow-token")
@@ -568,6 +569,11 @@ async fn restart(State(state): State<AppState>, Json(input): Json<Interrupt>) ->
         Ok(()) => Json(json!({"ok":true})).into_response(),
         Err(error) => failure(error),
     }
+}
+/// Answers "alive" to anyone who may reach the port, with nothing else: the
+/// outside watcher cannot know the token, which changes on every start.
+async fn alive() -> Json<Value> {
+    Json(json!({"ok":true,"version":env!("CARGO_PKG_VERSION")}))
 }
 async fn health(State(state): State<AppState>) -> Json<Value> {
     let agents: HashMap<_, _> = state
@@ -894,6 +900,7 @@ fn app(state: AppState) -> Router {
         .route("/api/agent/interrupt", post(interrupt))
         .route("/api/agent/restart", post(restart))
         .route("/api/health", get(health))
+        .route("/api/alive", get(alive))
         .route("/api/permission", post(permission))
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/inbox", post(inbox))
@@ -913,11 +920,16 @@ fn app(state: AppState) -> Router {
         .route("/api/departments", get(work::departments))
         .route("/api/work", post(work::create_work))
         .route("/api/tasks/{id}/stop", post(work::stop_task))
+        .route(
+            "/api/tasks/{id}/supervise/{action}",
+            post(work::supervise_task),
+        )
         .route("/api/tasks/{id}/retry", post(work::retry_task))
         .route("/api/tasks/{id}/result", get(work::task_result))
         .route("/api/runs", get(work::list_runs))
         .route("/api/home/reload", post(work::reload_home))
         .route("/api/spend", get(work::spend))
+        .route("/api/mentor", get(work::mentor).post(work::set_mentor))
         .route("/api/orchestrator", post(work::orchestrator))
         .route("/api/rules", get(work::rules))
         .route("/api/schedules", get(work::schedules))
@@ -2311,5 +2323,62 @@ mod tests {
             validate_workflow_request(&specs, "missing", "task").unwrap_err(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    async fn raw(port: u16, host: &str, request_line: &str) -> (u16, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let request =
+            format!("{request_line} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let text = String::from_utf8(response).unwrap();
+        let (headers, body) = text.split_once("\r\n\r\n").unwrap();
+        let status = headers.split_whitespace().nth(1).unwrap().parse().unwrap();
+        (status, body.to_owned())
+    }
+
+    #[tokio::test]
+    async fn alive_answers_without_a_token_and_says_nothing_else() {
+        LocalSet::new()
+            .run_until(async {
+                let root =
+                    std::env::temp_dir().join(format!("agentsflow-alive-{}", Uuid::new_v4()));
+                std::fs::create_dir_all(root.join(".git")).unwrap();
+                let mut options = ServeOptions::parse(&[]).unwrap();
+                options.cwd = crate::projects::canonical(&root).unwrap();
+                let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let port = listener.local_addr().unwrap().port();
+                let session = tokio::task::spawn_local(async move {
+                    run_session(&options, &[], listener, port, "secret-token", false, None).await
+                });
+                let host = format!("127.0.0.1:{port}");
+                let (status, body) = raw(port, &host, "GET /api/alive").await;
+                assert_eq!(status, 200);
+                let value: Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(value["ok"], true);
+                let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+                keys.sort();
+                assert_eq!(keys, ["ok", "version"], "nothing about agents or tasks");
+                // The rest of the API still wants the token.
+                assert_eq!(raw(port, &host, "GET /api/health").await.0, 401);
+                assert_eq!(raw(port, &host, "GET /api/tasks").await.0, 401);
+                assert_eq!(raw(port, &host, "POST /api/alive").await.0, 401);
+                // Decisions about a silent run or a comment are for the owner's token only.
+                let decide = "POST /api/tasks/t1/supervise/restart";
+                assert_eq!(raw(port, &host, decide).await.0, 401);
+                let with_token = format!("{decide}?token=secret-token");
+                assert_eq!(raw(port, &host, &with_token).await.0, 404, "no home here");
+                // The Host check still stands in front of it.
+                assert_eq!(raw(port, "evil.example", "GET /api/alive").await.0, 403);
+                session.abort();
+                let _ = std::fs::remove_dir_all(root);
+            })
+            .await;
     }
 }

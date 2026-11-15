@@ -1,0 +1,24 @@
+# systemd unit for the watcher: a separate small process that asks the gateway
+# "are you alive" once a minute, tells you in Telegram if it stops answering, and
+# ends a hung gateway process so that agentsflow.service starts a new one. Install:
+#   sudo cp deploy/agentsflow-watch.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now agentsflow-watch
+# It reads the bot token and your ID from the same /etc/agentsflow.env.
+
+[Unit]
+Description=agentsflow-watch: looks at the gateway from outside
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentsflow
+Group=agentsflow
+WorkingDirectory=/home/agentsflow
+EnvironmentFile=/etc/agentsflow.env
+ExecStart=/usr/local/bin/agentsflow watch --home /home/agentsflow/home
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

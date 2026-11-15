@@ -39,6 +39,12 @@ impl Config {
     pub(crate) fn token(&self) -> &str {
         &self.token
     }
+    pub(crate) fn users(&self) -> &[i64] {
+        &self.users
+    }
+    pub(crate) fn api(&self) -> &str {
+        &self.api
+    }
     pub fn from_env() -> Result<Self> {
         let token = std::env::var("AGENTSFLOW_TELEGRAM_TOKEN").unwrap_or_default();
         let users = std::env::var("AGENTSFLOW_TELEGRAM_USERS").unwrap_or_default();
@@ -151,6 +157,7 @@ fn bot_commands() -> Value {
         {"command":"board","description":"Доска задач"},
         {"command":"task","description":"Новая задача"},
         {"command":"files","description":"Результаты и файлы задач"},
+        {"command":"mentor","description":"Наставник: сильная модель ведёт задачи"},
         {"command":"mail","description":"Почта"},
         {"command":"ask","description":"Написать агенту"},
         {"command":"agent","description":"Карточка агента"},
@@ -304,6 +311,8 @@ struct Bridge {
     task_seen: HashMap<String, agentsflow_events::TaskStatus>,
     /// Last notified state of department tasks.
     work_seen: HashMap<String, String>,
+    /// Tasks whose closing comment the owner has been asked about.
+    draft_seen: HashSet<String>,
     /// Files of the owner that have not gone to a task yet.
     inbox: HashMap<i64, files::Inbox>,
     fetched_tx: mpsc::UnboundedSender<files::Fetched>,
@@ -330,6 +339,16 @@ impl Bridge {
                     .as_ref()
                     .map(|work| (task.id.clone(), work_signature(work)))
             })
+            .collect();
+        let draft_seen = hub
+            .tasks(true)
+            .into_iter()
+            .filter(|task| {
+                task.work
+                    .as_ref()
+                    .is_some_and(|work| work.comment_draft.is_some())
+            })
+            .map(|task| task.id)
             .collect();
         let (fetched_tx, fetched_rx) = mpsc::unbounded_channel();
         Self {
@@ -363,6 +382,7 @@ impl Bridge {
             exported: false,
             task_seen,
             work_seen,
+            draft_seen,
             inbox: HashMap::new(),
             fetched_tx,
             fetched_rx: Some(fetched_rx),
@@ -645,6 +665,30 @@ impl Bridge {
             }
             Event::Task { task } if task.work.is_some() => {
                 let work = task.work.as_ref().expect("guarded");
+                // The closing comment waits for the owner's word: asked once.
+                if let Some(draft) = &work.comment_draft {
+                    if self.draft_seen.insert(task.id.clone()) {
+                        let id = &task.id;
+                        let title = message_text(&task.title, &self.config.token, 200);
+                        let draft = message_text(draft, &self.config.token, 600);
+                        let target = work
+                            .event
+                            .as_ref()
+                            .map(|event| message_text(&event.url, &self.config.token, 200))
+                            .unwrap_or_default();
+                        self.broadcast_buttons(
+                            &format!(
+                                "💬 «{title}»: опубликовать комментарий?\n{target}\n\n{draft}"
+                            ),
+                            json!({"inline_keyboard":[[
+                                {"text":"✅ Опубликовать","callback_data":format!("s:ta:{id}:cp")},
+                                {"text":"✖ Не нужно","callback_data":format!("s:ta:{id}:cd")}
+                            ],[{"text":"Открыть","callback_data":format!("s:t:{id}")}]]}),
+                        );
+                    }
+                } else {
+                    self.draft_seen.remove(&task.id);
+                }
                 let signature = work_signature(work);
                 let previous = self.work_seen.insert(task.id.clone(), signature.clone());
                 if previous.as_ref() != Some(&signature) {
@@ -739,6 +783,17 @@ impl Bridge {
                                     json!({"inline_keyboard":[row,[open]]}),
                                 );
                             }
+                        }
+                        // A run that went quiet and is not restarted by itself.
+                        agentsflow_events::WorkState::Running if work.silent_since_ms.is_some() => {
+                            self.broadcast_buttons(
+                                &format!("🔇 <b>{dept}</b>: «{title}» молчит. Что делать с запуском?"),
+                                json!({"inline_keyboard":[
+                                    [{"text":"⏳ Подождать ещё","callback_data":format!("s:ta:{id}:sw")},
+                                     {"text":"🔁 Перезапустить шаг","callback_data":format!("s:ta:{id}:sr")}],
+                                    [{"text":"🛑 Остановить","callback_data":format!("s:ta:{id}:ss")}, open]
+                                ]}),
+                            );
                         }
                         agentsflow_events::WorkState::Stuck => {
                             let reason = message_text(
@@ -1959,11 +2014,12 @@ impl Bridge {
 /// What the owner is told about: a change of any part of it is news.
 fn work_signature(work: &agentsflow_events::WorkInfo) -> String {
     format!(
-        "{:?}|{}|{}|{}",
+        "{:?}|{}|{}|{}|{}",
         work.state,
         work.owner_review,
         work.questions.iter().filter(|q| q.answer.is_none()).count(),
-        work.proposal.is_some()
+        work.proposal.is_some(),
+        work.silent_since_ms.is_some()
     )
 }
 
@@ -2062,6 +2118,23 @@ async fn poll(config: Config, tx: mpsc::UnboundedSender<Value>, mut stop: watch:
     }
 }
 
+/// What the bridge tells the owner from the history it finds when it starts:
+/// waiting permission requests, the agents' words, and the gateway's own
+/// notices written before it started (which runs a restart cut off).
+fn replays_at_start(event: &Event) -> bool {
+    match event {
+        Event::PermissionRequest { .. }
+        | Event::Message {
+            role: Role::Assistant,
+            ..
+        } => true,
+        Event::Mail { from, to, .. } => {
+            from.as_str() == crate::runs::NOTICE_FROM && *to == AgentId::orchestrator()
+        }
+        _ => false,
+    }
+}
+
 pub async fn run(
     config: Config,
     hub: Hub,
@@ -2081,14 +2154,7 @@ pub async fn run(
         bridge.broadcast(&format!("📁 Проект: {name}. Команда перезапущена."), None);
     }
     for event in history {
-        if matches!(
-            event.event,
-            Event::PermissionRequest { .. }
-                | Event::Message {
-                    role: Role::Assistant,
-                    ..
-                }
-        ) {
+        if replays_at_start(&event.event) {
             bridge.handle_event(event);
         }
     }
@@ -2865,5 +2931,122 @@ mod tests {
         let (text, buttons) = send(&mut bridge, task(WorkState::Waiting, proposing)).unwrap();
         assert!(text.contains("Кадры"));
         assert!(buttons.contains("s:ta:t1:pc") && buttons.contains("s:ta:t1:pg"));
+    }
+
+    #[test]
+    fn silent_runs_and_comment_drafts_get_cards_with_buttons() {
+        use agentsflow_events::{EventRef, Risk, TaskSnapshot, WorkInfo, WorkState};
+        let config =
+            Config::parse("test-secret".into(), "11", "http://127.0.0.1:1".into()).unwrap();
+        let mut bridge = Bridge::new(config, Agents::new(), Team::preset("pair").unwrap());
+        let task = |work: WorkInfo| TaskSnapshot {
+            id: "t1".into(),
+            title: "Починить сборку".into(),
+            description: String::new(),
+            status: work.state.status(),
+            assignee: None,
+            progress: 0,
+            labels: Vec::new(),
+            note: String::new(),
+            thread: None,
+            created_ms: 1,
+            updated_ms: 1,
+            work: Some(work),
+        };
+        let send = |bridge: &mut Bridge, snapshot: TaskSnapshot| {
+            bridge.handle_event(Envelope {
+                session: "s".into(),
+                agent: AgentId::orchestrator(),
+                seq: 1,
+                ts_ms: 1,
+                event: Event::Task {
+                    task: Box::new(snapshot),
+                },
+            });
+            bridge
+                .queues
+                .get_mut(&11)
+                .and_then(VecDeque::pop_back)
+                .map(|item| (item.text, item.buttons.unwrap_or_default().to_string()))
+        };
+        let running = WorkInfo {
+            department: "dev".into(),
+            risk: Risk::Internal,
+            state: WorkState::Running,
+            ..Default::default()
+        };
+        assert!(
+            send(&mut bridge, task(running.clone())).is_none(),
+            "a working run is quiet"
+        );
+        let silent = WorkInfo {
+            silent_since_ms: Some(5),
+            ..running.clone()
+        };
+        let (text, buttons) = send(&mut bridge, task(silent.clone())).unwrap();
+        assert!(text.contains("молчит"), "{text}");
+        for action in ["sw", "sr", "ss"] {
+            assert!(buttons.contains(&format!("s:ta:t1:{action}")), "{buttons}");
+        }
+        assert!(send(&mut bridge, task(silent)).is_none(), "asked once");
+        assert!(
+            send(&mut bridge, task(running.clone())).is_none(),
+            "it spoke again: nothing to say"
+        );
+        let drafted = WorkInfo {
+            state: WorkState::Review,
+            comment_draft: Some("Итог: готово".into()),
+            event: Some(EventRef {
+                kind: "issue".into(),
+                repo: "o/r".into(),
+                key: "k".into(),
+                number: Some(7),
+                is_pr: false,
+                url: "https://github.com/o/r/issues/7".into(),
+            }),
+            ..running
+        };
+        let (text, buttons) = send(&mut bridge, task(drafted.clone())).unwrap();
+        assert!(text.contains("опубликовать комментарий"), "{text}");
+        assert!(text.contains("Итог: готово") && text.contains("issues/7"));
+        assert!(buttons.contains("s:ta:t1:cp") && buttons.contains("s:ta:t1:cd"));
+        assert!(
+            send(&mut bridge, task(drafted.clone())).is_none(),
+            "asked once"
+        );
+        // Answered, then a new draft would be asked about again.
+        send(
+            &mut bridge,
+            task(WorkInfo {
+                comment_draft: None,
+                ..drafted.clone()
+            }),
+        );
+        assert!(send(&mut bridge, task(drafted)).is_some());
+    }
+
+    #[test]
+    fn notices_written_before_the_bridge_started_are_replayed() {
+        let mail = |from: &str, to: AgentId| Event::Mail {
+            id: "1".into(),
+            thread: "t".into(),
+            from: AgentId::from(from),
+            to,
+            subject: "Перезапуск оборвал запуск".into(),
+            body: "b".into(),
+        };
+        assert!(replays_at_start(&mail(
+            crate::runs::NOTICE_FROM,
+            AgentId::orchestrator()
+        )));
+        // An agent's letter or a letter to someone else is not replayed.
+        assert!(!replays_at_start(&mail("claude", AgentId::orchestrator())));
+        assert!(!replays_at_start(&mail(
+            crate::runs::NOTICE_FROM,
+            AgentId::from("claude")
+        )));
+        assert!(!replays_at_start(&Event::Done {
+            reason: "end_turn".into()
+        }));
     }
 }

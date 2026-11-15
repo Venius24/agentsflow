@@ -67,6 +67,16 @@ journalctl -u agentsflow -f
 
 Бот отвечает только пользователям из `AGENTSFLOW_TELEGRAM_USERS`. Напишите ему `/help`, потом задачу текстом.
 
+Сторож — отдельная служба, которая раз в минуту спрашивает шлюз «ты жив?», пишет вам в Telegram, если он замолчал, и завершает зависший процесс, чтобы systemd поднял новый. Он берёт токен бота и ваш ID из того же `/etc/agentsflow.env`:
+
+```sh
+sudo cp ~/agentsflow/deploy/agentsflow-watch.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now agentsflow-watch
+agentsflow watch --home ~/home --once   # проверка настройки: «шлюз отвечает»
+```
+
+Подробности и настройки `[watch]` — в [departments.md](departments.md#сторож-шлюза).
+
 Остановка (`systemctl stop`) посылает SIGINT: идущие задачи останавливаются и помечаются «застряла: сервер остановлен», после запуска их можно продолжить кнопкой «Ещё круг». Задачи, оборвавшиеся при сбое, при старте помечаются «сервер перезапущен».
 
 ## 6. Страница

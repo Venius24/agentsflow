@@ -155,6 +155,42 @@ pub(super) async fn stop_task(
     }
 }
 
+/// What the owner decides about a silent run or a closing comment waiting
+/// for a word: `wait`, `restart`, `stop` (a silent run), `publish`, `drop`
+/// (the comment). The same actions the bot's buttons give.
+pub(super) async fn supervise_task(
+    State(state): State<AppState>,
+    axum::extract::Path((id, action)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let known = state.hub.task(&id).is_some();
+    let done = known
+        && match action.as_str() {
+            "wait" => runs.wait_more(&id),
+            "restart" => runs.restart_step(&id),
+            "stop" => runs.stop_silent(&id),
+            "publish" => runs.publish_comment(&id),
+            "drop" => runs.drop_comment(&id),
+            _ => {
+                return bad_request("действие: wait, restart, stop, publish или drop".into());
+            }
+        };
+    if done {
+        Json(json!({"ok":true})).into_response()
+    } else if known {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"запуск уже не идёт"})),
+        )
+            .into_response()
+    } else {
+        task_failure(TaskError::NotFound)
+    }
+}
+
 pub(super) async fn retry_task(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -229,6 +265,52 @@ pub(super) async fn reload_home(State(state): State<AppState>) -> Response {
     };
     match runs.reload() {
         Ok(()) => Json(json!({"ok":true})).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":format!("{error:#}")})),
+        )
+            .into_response(),
+    }
+}
+
+fn mentor_state(root: &Path) -> Value {
+    let presets: Vec<Value> = crate::mentor::PRESETS
+        .iter()
+        .map(|p| json!({"id":p.id,"title":p.title,"model":p.model,"effort":p.effort}))
+        .collect();
+    json!({
+        "preset": crate::mentor::load(root).map_or(crate::mentor::OFF, |p| p.id),
+        "presets": presets,
+    })
+}
+
+pub(super) async fn mentor(State(state): State<AppState>) -> Response {
+    match runs(&state) {
+        Ok(runs) => Json(mentor_state(&runs.home().root)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SetMentor {
+    preset: String,
+}
+
+pub(super) async fn set_mentor(
+    State(state): State<AppState>,
+    Json(body): Json<SetMentor>,
+) -> Response {
+    let runs = match runs(&state) {
+        Ok(runs) => runs,
+        Err(response) => return *response,
+    };
+    let root = runs.home().root.clone();
+    match crate::mentor::save(&root, &body.preset) {
+        Ok(()) => {
+            crate::diag::diag("INFO", &format!("наставник: {}", body.preset));
+            Json(mentor_state(&root)).into_response()
+        }
         Err(error) => (
             StatusCode::BAD_REQUEST,
             Json(json!({"error":format!("{error:#}")})),

@@ -365,6 +365,25 @@
   .sc-meter { display: block; height: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; }
   .sc-meter i { display: block; height: 100%; background: var(--ink-2); border-radius: 2px; transition: width .4s; }
   .sc-meter.sc-over i { background: var(--bad); }
+  .sc-mentor { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  .sc-mentor select { min-width: 0; flex: 0 1 150px; padding: 3px 6px; font-size: 12.5px; }
+  .sc-mt { position: relative; display: inline-flex; }
+  .sc-mt[hidden] { display: none; }
+  .sc .sc-mt-btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line-2); background: transparent; color: var(--ink-2); border-radius: 999px; padding: 5px 11px 5px 6px; font-size: 12.5px; cursor: pointer; }
+  .sc .sc-mt-btn small { color: var(--muted); font-size: 12px; }
+  .sc-mt-knob { width: 26px; height: 15px; border-radius: 999px; background: var(--line-2); position: relative; flex: none; transition: background .15s; }
+  .sc-mt-knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg); transition: transform .15s; }
+  .sc-mt-btn[aria-checked="true"] .sc-mt-knob { background: var(--accent); }
+  .sc-mt-btn[aria-checked="true"] .sc-mt-knob::after { transform: translateX(11px); }
+  .sc-mt-btn[aria-checked="true"] small { color: var(--ink-2); }
+  .sc-mt-menu { display: none; position: absolute; left: 0; bottom: 100%; z-index: 30; min-width: 170px; padding: 6px 6px 10px; }
+  .sc-mt-menu::before { content: ""; position: absolute; inset: 0 0 4px 0; background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); z-index: -1; }
+  .sc-mt:hover .sc-mt-menu, .sc-mt:focus-within .sc-mt-menu { display: grid; gap: 2px; }
+  .sc-mt-cap { font-size: 11.5px; color: var(--muted); padding: 4px 8px 2px; }
+  .sc .sc-mt-item { text-align: left; border: 0; background: transparent; color: var(--ink); border-radius: 6px; padding: 6px 8px; font-size: 13px; cursor: pointer; }
+  .sc .sc-mt-item:hover { background: var(--line); border: 0; }
+  .sc .sc-mt-item[aria-pressed="true"]::after { content: " ✓"; color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .sc-mt-knob, .sc-mt-knob::after { transition: none; } }
   .sc-foot-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
   .sc-conn { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
   .sc-conn.sc-on { background: var(--ok); } .sc-conn.sc-off { background: var(--bad); }
@@ -814,6 +833,9 @@
     <div class="sc-scroll" id="sc-list"></div>
     <div class="sc-side-foot">
       <div class="sc-usage" id="sc-usage"></div>
+      <label class="sc-mentor" title="Сильная модель держит замысел: пишет постановку исполнителю и сама проверяет результат. Мелкие задачи идут без наставника. Действует на задачи, запущенные после выбора."><span>Наставник</span>
+        <select id="sc-mentor" aria-label="Наставник"><option value="off">выключен</option></select>
+      </label>
       <div class="sc-foot-row">
         <span class="sc-conn" id="sc-conn"></span><span id="sc-conn-text">подключение…</span>
         <span class="sc-sp"></span>
@@ -2240,7 +2262,26 @@ function replyForm(placeholder, label, send, card) {
   form.append(text, submit);
   return form;
 }
+// A run that went quiet, and a closing comment waiting for the owner's word.
+function silentRun(work) { return work.state === "running" && work.silent_since_ms != null; }
+function silentMins(work) { return Math.max(1, Math.floor((Date.now() - work.silent_since_ms) / 60000)); }
+function eventLabel(event) { return event.repo + (event.number != null ? "#" + event.number : ""); }
+function safeUrl(url) { return /^https:\/\/\S+$/.test(url || "") ? url : ""; }
+function workLinks(work) {
+  const nodes = [];
+  const add = (label, url) => {
+    const href = safeUrl(url);
+    if (!href) return;
+    const a = el("a", "", label); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
+    nodes.push(a);
+  };
+  if (work.event) add("Источник: " + eventLabel(work.event), work.event.url);
+  if (work.pr_url) add("Pull request", work.pr_url);
+  return nodes;
+}
+const supervise = (task, action) => () => post(taskPath(task, "/supervise/" + action), {});
 function ownerWaits(work) {
+  if (silentRun(work) || work.comment_draft) return true;
   if (work.state === "waiting") return !!work.proposal || (work.questions || []).some(q => q.answer == null);
   if (work.state === "review") return work.risk === "external" || !!work.owner_review;
   return work.state === "stuck";
@@ -2250,9 +2291,19 @@ function waitCard(task) {
   const card = el("article", "wait-card");
   const head = el("h3", "", task.title);
   head.prepend(el("span", "chip", work.department));
-  card.append(head, el("p", "", [workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", workSpent(work)].join(" · ")));
+  const silent = silentRun(work);
+  card.append(head, el("p", "", [silent ? "молчит " + silentMins(work) + " мин" : workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", workSpent(work)].join(" · ")));
+  const links = workLinks(work);
+  if (links.length) { const row = el("p", "board-meta"); links.forEach((a, i) => { if (i) row.append(" · "); row.append(a); }); card.append(row); }
   const btns = el("div", "btns");
-  if (work.state === "waiting" && work.proposal) {
+  if (silent) {
+    card.append(el("p", "home-reason", "Агенты ничего не делают дольше, чем разрешено отделу. Подождать, перезапустить шаг в новой сессии или остановить запуск?"));
+    btns.append(
+      act("Подождать ещё", "", supervise(task, "wait"), card),
+      act("Перезапустить шаг", "primary", supervise(task, "restart"), card),
+      act("Остановить", "deny", supervise(task, "stop"), card));
+    card.append(btns);
+  } else if (work.state === "waiting" && work.proposal) {
     const p = work.proposal;
     card.append(el("p", "", "Оркестратор предлагает новый отдел «" + p.title + "» (" + p.id + "): " + p.description));
     btns.append(
@@ -2276,7 +2327,7 @@ function waitCard(task) {
       act("Ещё круг", "", () => post(taskPath(task, "/retry"), {}), card),
       show);
     card.append(btns, full, replyForm("Что исправить", "Вернуть с замечанием", text => post(taskPath(task, "/return"), { text }), card));
-  } else {
+  } else if (work.state === "stuck") {
     card.append(el("p", "home-reason", "Причина: " + (work.stuck_reason || "не указана")));
     if (work.result_summary) card.append(el("pre", "", work.result_summary));
     btns.append(
@@ -2284,6 +2335,13 @@ function waitCard(task) {
       act("Принять как есть", "", () => patchTask(task.id, { status: "done" }), card),
       act("Закрыть", "deny", () => patchTask(task.id, { status: "archived" }), card));
     card.append(btns, replyForm("Что поменять в новом круге", "Ещё круг с замечанием", text => post(taskPath(task, "/return"), { text }), card));
+  }
+  if (work.comment_draft) {
+    const box = el("div", "home-comment"), row = el("div", "btns");
+    box.append(el("p", "", "Закрывающий комментарий" + (work.event ? " в " + eventLabel(work.event) : "") + " ждёт вашего слова:"), el("pre", "", work.comment_draft));
+    row.append(act("Опубликовать комментарий", "primary", supervise(task, "publish"), card), act("Не нужно", "", supervise(task, "drop"), card));
+    box.append(row);
+    card.append(box);
   }
   card.append(el("div", "board-error"));
   return card;
@@ -2994,6 +3052,8 @@ function scTasks() { return [...taskCards.values()].filter(t => t.work && t.stat
 const SC_ORDER = { running: 0, waiting: 1, review: 2, stuck: 3, queued: 4, done: 5, cancelled: 6 };
 function scWaitLabel(task) {
   const w = task.work;
+  if (silentRun(w)) return "молчит " + silentMins(w) + " мин";
+  if (w.comment_draft) return "комментарий";
   if (w.state === "waiting") return w.proposal ? "новый отдел" : "вопрос";
   return w.state === "review" ? "приёмка" : w.state === "stuck" ? "застряла" : "";
 }
@@ -3265,6 +3325,13 @@ function scInfo(task) {
   const src = { owner: ["user", "От вас"], orchestrator: ["orch", "От оркестратора"], schedule: ["cal", "По расписанию"] }[w.source] || ["run", w.source ? "Заказ отдела " + w.source : "Источник неизвестен"];
   nodes.push(scInfoRow(src[0], src[1], w.parent ? "для " + w.parent : ""));
   nodes.push(scInfoRow("clock", workStates[w.state] || w.state, w.returns ? "возвратов " + w.returns : ""));
+  if (silentRun(w)) nodes.push(scInfoRow("clock", "Молчит " + silentMins(w) + " мин", "признаков жизни нет"));
+  const links = workLinks(w);
+  if (links.length) {
+    const row = el("div", "sc-row");
+    for (const a of links) { a.className = "sc-link"; row.append(a); }
+    nodes.push(row);
+  }
 
   const repo = w.repo || (d && d.repos && d.repos[0]);
   nodes.push(el("div", "sc-ih", "Окружение"));
@@ -3338,6 +3405,7 @@ function scInfo(task) {
     acts.append(open, form);
   };
   if (w.state === "running") {
+    if (silentRun(w)) acts.append(scAct("Подождать ещё", "", "clock", supervise(task, "wait"), errBox), scAct("Перезапустить шаг", "sc-primary", "run", supervise(task, "restart"), errBox));
     back("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", text => scStopAndReturn(task, text));
     acts.append(scAct("Остановить задачу", "sc-danger", "sq", () => post(taskPath(task, "/stop"), {}), errBox));
   } else if (w.state === "review") {
@@ -3359,6 +3427,10 @@ function scInfo(task) {
     acts.append(form);
   } else if (w.state === "done") {
     back("Что доделать. Задача начнёт новый круг с этим в брифе.", text => post(taskPath(task, "/return"), { text }));
+  }
+  if (w.comment_draft) {
+    nodes.push(el("div", "sc-ih", "Закрывающий комментарий" + (w.event ? " · " + eventLabel(w.event) : "")), el("p", "sc-para", clip(w.comment_draft, 900)));
+    acts.append(scAct("Опубликовать комментарий", "sc-primary", "check", supervise(task, "publish"), errBox), scAct("Не нужно", "", "x", supervise(task, "drop"), errBox));
   }
   if (acts.childNodes.length) nodes.push(el("div", "sc-divider"), acts);
   nodes.push(errBox);
@@ -3455,7 +3527,7 @@ function scCard(task) {
   if (scUnread(task)) meta.append(el("span", "sc-new", "новое"));
   meta.append(el("span", "", d ? d.title : w.department));
   const items = scStepItems(task), now = items.filter(i => i.cls === "now").pop();
-  meta.append(el("span", "", w.state === "running" && now ? now.text : ownerWaits(w) ? scWaitLabel(task) : workStates[w.state] || w.state));
+  meta.append(el("span", "", silentRun(w) ? scWaitLabel(task) : w.state === "running" && now ? now.text : ownerWaits(w) ? scWaitLabel(task) : workStates[w.state] || w.state));
   const budget = w.budget_usd || (d && d.limits ? d.limits.task_usd : 0);
   if (w.cost_usd || w.state !== "queued") meta.append(el("span", "", money(w.cost_usd) + (budget && w.state === "running" ? " из " + money(budget) : "")));
   if (w.risk === "external" && w.state !== "done") meta.append(el("span", "", "наружу"));
@@ -3469,7 +3541,9 @@ function scCard(task) {
     card.append(tick, who);
   }
   const btns = el("div", "sc-btns"), errBox = el("div", "sc-err-t");
-  if (w.state === "review" && ownerWaits(w)) btns.append(scAct("Принять", "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  if (silentRun(w)) btns.append(scAct("Подождать ещё", "", "", supervise(task, "wait"), errBox), scAct("Перезапустить шаг", "sc-primary", "", supervise(task, "restart"), errBox), scAct("Остановить", "sc-danger", "", supervise(task, "stop"), errBox));
+  else if (w.comment_draft && w.state === "done") btns.append(scAct("Опубликовать комментарий", "sc-primary", "", supervise(task, "publish"), errBox), scAct("Не нужно", "", "", supervise(task, "drop"), errBox));
+  else if (w.state === "review" && ownerWaits(w)) btns.append(scAct("Принять", "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
   else if (w.state === "stuck") btns.append(scAct("Ещё круг", "sc-primary", "", () => post(taskPath(task, "/retry"), {}), errBox));
   else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? "Решить" : "Ответить"); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
   if (btns.childNodes.length) card.append(btns, errBox);
@@ -3489,7 +3563,7 @@ function scNew() {
   ta.setAttribute("aria-label", "Сообщение оркестратору");
   const send = el("button", "sc-btn sc-primary", "Отправить оркестратору"); send.type = "submit";
   const status = el("span", "sc-hint"); status.setAttribute("aria-live", "polite");
-  const btns = el("div", "sc-btns"); btns.append(send, status);
+  const btns = el("div", "sc-btns"); btns.append(send, scMentorSwitch(), status);
   const att = scAttacher();
   const field = el("div", "sc-newfield"), frow = el("div", "sc-newfield-row");
   const pick = el("button", "sc-btn"); pick.type = "button"; pick.append(scG("clip"), el("span", "", "Приложить файлы"));
@@ -3553,6 +3627,66 @@ window.addEventListener("hashchange", () => { if (activeView === "scene") scFrom
 for (const b of document.querySelectorAll("[data-sc-mode]")) b.onclick = () => {
   location.hash = b.dataset.scMode === "board" ? "#board" : sc.task ? "#task=" + encodeURIComponent(sc.task) : "#";
 };
+// Наставник: кто ведёт и проверяет задачи отделов. Один выбор на сервере,
+// его показывают список в боковой панели и тумблеры у полей ввода.
+const scMentor = { preset: "off", presets: [], ok: false, views: [] };
+function scMentorLast() {
+  let last = "";
+  try { last = localStorage.getItem("agentsflow.mentor") || ""; } catch (_) {}
+  return scMentor.presets.some(p => p.id === last) ? last : (scMentor.presets[0] || {}).id || "off";
+}
+function scMentorTitle(id) { return (scMentor.presets.find(p => p.id === id) || {}).title || ""; }
+function scMentorShow(data) {
+  scMentor.preset = data.preset || "off"; scMentor.presets = data.presets || []; scMentor.ok = true;
+  if (scMentor.preset !== "off") { try { localStorage.setItem("agentsflow.mentor", scMentor.preset); } catch (_) {} }
+  scMentor.views = scMentor.views.filter(view => view.root.isConnected);
+  for (const view of scMentor.views) view.draw();
+}
+async function scMentorSet(id) {
+  try {
+    scMentorShow(await post("/api/mentor", { preset: id }));
+    scToast(id === "off" ? "Наставник выключен" : "Наставник: " + scMentorTitle(id) + ". Со следующей задачи");
+  } catch (error) {
+    for (const view of scMentor.views) view.draw();
+    scToast("Не сохранилось: " + error.message);
+  }
+}
+// Тумблер: нажатие включает и выключает, при наведении или фокусе выбор модели.
+function scMentorSwitch() {
+  const root = el("span", "sc-mt");
+  const toggle = el("button", "sc-mt-btn"); toggle.type = "button"; toggle.setAttribute("role", "switch");
+  const name = el("small");
+  toggle.append(el("i", "sc-mt-knob"), el("span", "", "Наставник"), name);
+  const menu = el("span", "sc-mt-menu"); menu.setAttribute("role", "group"); menu.setAttribute("aria-label", "Модель наставника");
+  root.append(toggle, menu);
+  toggle.onclick = () => scMentorSet(scMentor.preset === "off" ? scMentorLast() : "off");
+  const draw = () => {
+    root.hidden = !scMentor.ok;
+    const on = scMentor.preset !== "off";
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+    name.textContent = on ? scMentorTitle(scMentor.preset) : "выключен";
+    toggle.title = "Сильная модель пишет постановку исполнителю и сама проверяет результат. Действует на задачи, запущенные после выбора.";
+    menu.replaceChildren(el("span", "sc-mt-cap", "Кто наставник"), ...scMentor.presets.map(p => {
+      const item = el("button", "sc-mt-item", p.title); item.type = "button";
+      item.setAttribute("aria-pressed", p.id === scMentor.preset ? "true" : "false");
+      item.onclick = () => scMentorSet(p.id);
+      return item;
+    }));
+  };
+  scMentor.views.push({ root, draw });
+  draw();
+  return root;
+}
+(() => {
+  const select = $("#sc-mentor");
+  scMentor.views.push({ root: select, draw() {
+    const options = [["off", "выключен"], ...scMentor.presets.map(p => [p.id, p.title])];
+    select.replaceChildren(...options.map(([id, title]) => { const option = el("option", "", title); option.value = id; return option; }));
+    select.value = scMentor.preset;
+  } });
+  select.onchange = () => scMentorSet(select.value);
+  getJson("/api/mentor").then(scMentorShow).catch(() => { select.closest("label").hidden = true; });
+})();
 $("#sc-theme").onclick = () => {
   const r = document.documentElement;
   const dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

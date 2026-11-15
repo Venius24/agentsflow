@@ -1,6 +1,7 @@
 mod brief;
 mod cdp;
 mod cli;
+mod delivery;
 mod department;
 mod diag;
 mod doctor;
@@ -11,6 +12,7 @@ mod hub;
 mod ledger;
 mod mail;
 mod mail_mcp;
+mod mentor;
 mod orchestrator;
 mod projectmem;
 mod projects;
@@ -20,10 +22,13 @@ mod runtime;
 mod schedule;
 mod server;
 mod sites;
+mod sources;
+mod stall;
 mod team;
 mod telegram;
 #[cfg(test)]
 mod testing;
+mod watch;
 mod workflow;
 
 use std::process::ExitCode;
@@ -52,6 +57,22 @@ async fn main() -> ExitCode {
             Err(error) => {
                 eprintln!("[error] {error:#}");
                 ExitCode::from(2)
+            }
+        };
+    }
+    if args.first().is_some_and(|arg| arg == "watch") {
+        let options = match watch::Options::parse(&args[1..]) {
+            Ok(options) => options,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                return ExitCode::from(2);
+            }
+        };
+        return match watch::run(options).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("[error] {error:#}");
+                ExitCode::FAILURE
             }
         };
     }

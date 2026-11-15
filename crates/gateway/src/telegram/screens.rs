@@ -5,7 +5,7 @@ use super::*;
 use crate::hub::{MailError, MailMsg, TaskError, TaskPatch};
 use agentsflow_events::{TaskSnapshot, TaskStatus};
 
-pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. Файлы присылайте с подписью или следующим сообщением, до 20 МБ. 📂 /files — результаты и файлы задач. /rules — правила отделов, /spend — расходы, /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
+pub(super) const HELP: &str = "Здесь можно следить за командой и управлять ею, как на странице.\n👥 Команда /team - агенты, /agent <имя> - один агент, /ask <имя> <текст> - задание, /stop <имя>.\n🔐 Запросы /requests - решения о разрешениях и опасных командах.\n📋 Доска /board, /task <название> | <описание> - задачи.\n✉ Почта /mail, /mail <агент> <тема> | <текст>.\n⚙ Запуск workflow /run, 📊 /stats, 📜 /log <имя> [n], ⬇ /export md|jsonl.\n🏢 Режим отделов: пишите задачи обычным текстом, их разберёт оркестратор. Файлы присылайте с подписью или следующим сообщением, до 20 МБ. 📂 /files — результаты и файлы задач. /rules — правила отделов, /spend — расходы, /mentor — наставник (сильная модель ведёт и проверяет задачи), /schedules — расписания.\n/mute и /unmute - тишина, /more - все действия.\nЗапросы на разрешение придут сюда сами. Время в сообщениях: UTC.";
 
 pub(super) fn help_text() -> String {
     format!("{HELP}\nВерсия: {}", env!("CARGO_PKG_VERSION"))
@@ -569,6 +569,27 @@ impl Bridge {
                     "Останавливаю"
                 } else {
                     "Задача уже не выполняется"
+                })
+            }
+            "sw" | "sr" | "ss" | "cp" | "cd" => {
+                let runs = self
+                    .control
+                    .as_ref()
+                    .and_then(|control| control.runs.as_ref());
+                let done = runs.is_some_and(|runs| match action {
+                    "sw" => runs.wait_more(id),
+                    "sr" => runs.restart_step(id),
+                    "ss" => runs.stop_silent(id),
+                    "cp" => runs.publish_comment(id),
+                    _ => runs.drop_comment(id),
+                });
+                Ok(match (action, done) {
+                    ("sw", true) => "Подожду ещё",
+                    ("sr", true) => "Перезапускаю шаг",
+                    ("ss", true) => "Останавливаю",
+                    ("cp", true) => "Публикую комментарий",
+                    ("cd", true) => "Комментарий не нужен",
+                    _ => "Запуск уже не идёт",
                 })
             }
             "rq" => self
@@ -1292,6 +1313,49 @@ impl Bridge {
         self.show(chat, existing, text, rows).await;
     }
 
+    // ---------- наставник ----------
+
+    pub(super) async fn open_mentor(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            self.queue(chat, "Наставник есть только в режиме serve --home", None);
+            return;
+        };
+        let current = crate::mentor::load(&runs.home().root);
+        let mut text = String::new();
+        if !flash.is_empty() {
+            text.push_str(&format!("{}
+
+", self.safe(flash, 300)));
+        }
+        text.push_str(&format!(
+            "<b>🧭 Наставник: {}</b>
+
+Сильная модель держит замысел задачи: пишет постановку              исполнителю и сама проверяет результат. Исполнители остаются прежними. Мелкие              задачи идут без наставника. Выбор действует на задачи, запущенные после него.",
+            current.map_or("выключен", |preset| preset.title)
+        ));
+        let mark = |on: bool, title: &str| {
+            if on {
+                format!("✅ {title}")
+            } else {
+                title.to_owned()
+            }
+        };
+        let mut rows: Vec<_> = crate::mentor::PRESETS
+            .iter()
+            .map(|preset| {
+                vec![button(
+                    &mark(current.map(|c| c.id) == Some(preset.id), preset.title),
+                    format!("s:mtr:{}", preset.id),
+                )]
+            })
+            .collect();
+        rows.push(vec![button(
+            &mark(current.is_none(), "Выключить"),
+            format!("s:mtr:{}", crate::mentor::OFF),
+        )]);
+        self.show(chat, existing, text, rows).await;
+    }
+
     // ---------- расписания ----------
     pub(super) async fn open_schedules(&mut self, chat: i64, existing: Option<i64>, flash: &str) {
         let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
@@ -1801,6 +1865,7 @@ impl Bridge {
             }
             "/rules" => self.open_rules(chat, None, "").await,
             "/spend" => self.open_spend(chat, None, "").await,
+            "/mentor" => self.open_mentor(chat, None, "").await,
             "/schedules" => self.open_schedules(chat, None, "").await,
             "/run" => self.open_workflows(chat, None).await,
             "/stats" => self.open_stats(chat, None).await,
@@ -1926,6 +1991,18 @@ impl Bridge {
             }
             "rules" => self.open_rules(chat, message, "").await,
             "sp" => self.open_spend(chat, message, "").await,
+            "mtr" => {
+                if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {
+                    flash = match crate::mentor::save(&runs.home().root, arg(2)) {
+                        Ok(()) => match crate::mentor::preset(arg(2)) {
+                            Some(preset) => format!("✔ Наставник: {}", preset.title),
+                            None => "✔ Наставник выключен".to_owned(),
+                        },
+                        Err(error) => format!("{error:#}"),
+                    };
+                    self.open_mentor(chat, message, &flash).await;
+                }
+            }
             "sch" => self.open_schedules(chat, message, "").await,
             "sc" => {
                 if let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) {

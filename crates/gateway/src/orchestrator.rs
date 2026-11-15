@@ -652,7 +652,9 @@ fn prompt(home: &Home, tasks: &[TaskSnapshot], trigger: &Trigger) -> String {
                 ));
             }
             if !files.is_empty() {
-                out.push_str("К заказу приложены файлы, исполнитель получит их во входных данных:\n");
+                out.push_str(
+                    "К заказу приложены файлы, исполнитель получит их во входных данных:\n",
+                );
                 for file in files {
                     let name = file.rsplit('/').next().unwrap_or(file);
                     out.push_str(&format!("- {name}\n"));
@@ -966,7 +968,12 @@ fn apply(runs: &Runs, trigger: &Trigger, actions: Vec<Action>) -> Vec<String> {
                     from: FROM.into(),
                 })
                 .collect();
-            let repo = match task.repo.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+            let repo = match task
+                .repo
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+            {
                 None => None,
                 Some(repo) => {
                     let home = runs.home();
@@ -1194,6 +1201,8 @@ mod tests {
         let replies: &'static [&'static str] = Box::leak(Box::new([reply]));
         let env = RunEnv {
             codex_bin: None,
+            gh: None,
+            stall_clock: None,
             spawner: Some(Rc::new(move |hub, member, dir| {
                 let dir = dir.to_path_buf();
                 crate::hub::spawn(hub.clone(), member.id.clone(), true, move || {
@@ -1400,7 +1409,9 @@ mod tests {
                 }],
             );
             assert!(
-                denied.iter().any(|line| line.contains("только по сообщению")),
+                denied
+                    .iter()
+                    .any(|line| line.contains("только по сообщению")),
                 "{denied:?}"
             );
             assert!(
@@ -1606,6 +1617,8 @@ mod tests {
         let ordered = Rc::new(std::cell::Cell::new(false));
         let runs_env = RunEnv {
             codex_bin: None,
+            gh: None,
+            stall_clock: None,
             spawner: Some(Rc::new(move |hub, member, dir| {
                 let dir = dir.to_path_buf();
                 let doer = member.roles.iter().any(|r| r == "doer");
@@ -1631,6 +1644,8 @@ mod tests {
         let calls = Rc::new(std::cell::Cell::new(0));
         let orchestrator_env = RunEnv {
             codex_bin: None,
+            gh: None,
+            stall_clock: None,
             spawner: Some(Rc::new(move |hub, member, dir| {
                 let dir = dir.to_path_buf();
                 calls.set(calls.get() + 1);

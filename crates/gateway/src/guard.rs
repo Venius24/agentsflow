@@ -685,7 +685,522 @@ fn without_logs(command: &str) -> String {
 /// Whether a path is one of [`LOGS`].
 pub fn is_log(path: &str) -> bool {
     let path = path.replace('\\', "/").to_lowercase();
-    LOGS.iter().any(|log| path.ends_with(&format!("/.agentsflow/{log}")))
+    LOGS.iter()
+        .any(|log| path.ends_with(&format!("/.agentsflow/{log}")))
+}
+
+/// Whether a tool call may act outside the run folder: push code, post to
+/// GitHub, send a request that changes something, send mail. A silent step
+/// that did this is never restarted by itself: the repeat could do it twice.
+/// Whatever cannot be classified counts as external.
+pub fn external_effect(tool: &str, input: &serde_json::Value) -> bool {
+    let name = tool.to_lowercase();
+    if matches!(
+        name.as_str(),
+        "read"
+            | "glob"
+            | "grep"
+            | "ls"
+            | "webfetch"
+            | "websearch"
+            | "todowrite"
+            | "file_change"
+            | "edit"
+            | "write"
+            | "multiedit"
+            | "notebookedit"
+            | "task"
+            | "agent"
+    ) {
+        return false;
+    }
+    if matches!(
+        name.as_str(),
+        "bash" | "shell" | "powershell" | "exec_command"
+    ) {
+        return match input.get("command") {
+            Some(serde_json::Value::String(text)) => command_is_external(text, 0),
+            // An argv array is judged as it is: joining it into one string
+            // would lose which words belong to which argument.
+            Some(serde_json::Value::Array(parts)) => {
+                let argv: Option<Vec<&str>> = parts.iter().map(|part| part.as_str()).collect();
+                argv.is_none_or(|argv| words_are_external(&argv, 0))
+            }
+            _ => true,
+        };
+    }
+    // Any other tool is a connector: judged by the words in its name. A word
+    // that changes something decides; failing that, a word that reads clears
+    // it; a name with neither is unknown, and unknown counts as external.
+    // `query`, `execute` and `sql` are not reading: a SQL connector changes data
+    // through the same tool.
+    const CHANGING: [&str; 32] = [
+        "send", "post", "create", "delete", "update", "publish", "comment", "push", "merge",
+        "write", "upload", "set", "add", "remove", "run", "exec", "execute", "sql", "query",
+        "click", "type", "submit", "reply", "forward", "cancel", "trash", "share", "move", "edit",
+        "insert", "append", "approve",
+    ];
+    const READING: [&str; 9] = [
+        "get",
+        "list",
+        "read",
+        "search",
+        "view",
+        "fetch",
+        "screenshot",
+        "find",
+        "status",
+    ];
+    let words: Vec<&str> = name
+        .split(['_', '/', '-', '.', ' '])
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.iter().any(|word| CHANGING.contains(word)) {
+        return true;
+    }
+    !words.iter().any(|word| READING.contains(word))
+}
+
+fn command_is_external(command: &str, depth: usize) -> bool {
+    if depth > 3 {
+        return true;
+    }
+    let Some(segments) = lex(command) else {
+        return true;
+    };
+    segments.iter().any(|segment| {
+        // A substitution runs something the lexer did not split out.
+        if segment.iter().any(|word| {
+            ["$(", "`", "<(", ">("]
+                .iter()
+                .any(|mark| word.text.contains(mark))
+        }) {
+            return true;
+        }
+        let words: Vec<&str> = segment.iter().map(|word| word.text.as_str()).collect();
+        words_are_external(&words, depth)
+    })
+}
+
+/// Programs that only read or change files here: a step that ran them has not
+/// touched anything outside. Not on the list means unknown, and unknown counts
+/// as external.
+const LOCAL_PROGRAMS: &[&str] = &[
+    "ls",
+    "dir",
+    "cat",
+    "type",
+    "head",
+    "tail",
+    "wc",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "tee",
+    "echo",
+    "printf",
+    "pwd",
+    "cd",
+    "pushd",
+    "popd",
+    "mkdir",
+    "rmdir",
+    "cp",
+    "mv",
+    "rm",
+    "touch",
+    "ln",
+    "stat",
+    "file",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "sed",
+    "awk",
+    "diff",
+    "cmp",
+    "comm",
+    "sha256sum",
+    "sha1sum",
+    "md5sum",
+    "base64",
+    "date",
+    "whoami",
+    "hostname",
+    "uname",
+    "which",
+    "where",
+    "chmod",
+    "tar",
+    "zip",
+    "unzip",
+    "gzip",
+    "gunzip",
+    "7z",
+    "du",
+    "df",
+    "tree",
+    "less",
+    "more",
+    "nl",
+    "xxd",
+    "od",
+    "jq",
+    "yq",
+    "true",
+    "false",
+    "exit",
+    "test",
+    "[",
+    "sleep",
+    "basename",
+    "dirname",
+    "realpath",
+    "readlink",
+    "rustc",
+    "rustfmt",
+    "cargo-clippy",
+    "pytest",
+    "jest",
+    "vitest",
+    "tsc",
+    "eslint",
+    "prettier",
+    "ruff",
+    "black",
+    "mypy",
+    "gcc",
+    "g++",
+    "clang",
+    "javac",
+    // PowerShell
+    "get-childitem",
+    "gci",
+    "get-content",
+    "gc",
+    "select-string",
+    "sls",
+    "set-location",
+    "sl",
+    "get-location",
+    "new-item",
+    "ni",
+    "copy-item",
+    "cpi",
+    "move-item",
+    "mi",
+    "remove-item",
+    "ri",
+    "del",
+    "erase",
+    "set-content",
+    "sc",
+    "add-content",
+    "ac",
+    "out-file",
+    "out-null",
+    "write-output",
+    "write-host",
+    "measure-object",
+    "where-object",
+    "foreach-object",
+    "sort-object",
+    "select-object",
+    "format-list",
+    "fl",
+    "format-table",
+    "ft",
+    "convertto-json",
+    "convertfrom-json",
+    "test-path",
+    "resolve-path",
+    "split-path",
+    "join-path",
+    "get-item",
+    "get-itemproperty",
+    "get-process",
+    "get-date",
+    "start-sleep",
+    "get-command",
+    "get-help",
+];
+
+/// Shell keywords that only introduce the command that follows.
+const SHELL_KEYWORDS: &[&str] = &["if", "then", "else", "elif", "do", "while", "until", "!"];
+
+/// What a Windows or POSIX shell is told to run: the word after its `-c`-like
+/// flag, or `None` when it runs a script or something unreadable.
+fn shell_inner<'a>(program: &str, rest: &[&'a str]) -> Option<&'a str> {
+    let at = rest.iter().position(|word| {
+        let lower = word.to_lowercase();
+        match program {
+            "cmd" => matches!(lower.as_str(), "/c" | "/k"),
+            "pwsh" | "powershell" => matches!(lower.as_str(), "-c" | "-command"),
+            // `-c`, `-lc`, `-ic`, `-ec`: a cluster of short flags ending in c.
+            _ => {
+                lower.len() >= 2
+                    && lower.starts_with('-')
+                    && !lower.starts_with("--")
+                    && lower.ends_with('c')
+                    && lower[1..].bytes().all(|b| b.is_ascii_lowercase())
+            }
+        }
+    })?;
+    rest.get(at + 1).copied()
+}
+
+fn words_are_external(words: &[&str], depth: usize) -> bool {
+    let mut words: Vec<&str> = words.to_vec();
+    // `FOO=bar cmd`, `if x; then cmd`, `timeout 60 cmd` and similar wrappers.
+    while let Some(first) = words.first().copied() {
+        let assignment = first.split_once('=').is_some_and(|(key, _)| {
+            !key.is_empty() && key.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+        });
+        if assignment
+            || SHELL_KEYWORDS.contains(&first)
+            || matches!(
+                first,
+                "sudo" | "env" | "command" | "nohup" | "time" | "exec"
+            )
+        {
+            words.remove(0);
+        } else if first == "timeout" {
+            words.remove(0);
+            // The duration: `60`, `5m`, `1.5s`.
+            if words
+                .first()
+                .is_some_and(|word| word.starts_with(|c: char| c.is_ascii_digit()))
+            {
+                words.remove(0);
+            }
+        } else {
+            break;
+        }
+    }
+    // A closing keyword alone does nothing.
+    if matches!(words.as_slice(), ["fi"] | ["done"] | ["esac"]) {
+        return false;
+    }
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let program = first
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(first)
+        .to_lowercase();
+    let program = program.strip_suffix(".exe").unwrap_or(&program).to_owned();
+    let rest = &words[1..];
+    if program_is_external(&program, rest, depth) {
+        return true;
+    }
+    // Something that runs its arguments (`xargs`, a script block) can hide an
+    // outward program anywhere after the first word.
+    (1..words.len()).any(|at| {
+        let name = words[at]
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(words[at])
+            .to_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        matches!(
+            name,
+            "git" | "gh" | "curl" | "wget" | "ssh" | "scp" | "rsync" | "npm" | "docker"
+        ) && program_is_external(name, &words[at + 1..], depth + 1)
+    })
+}
+
+fn program_is_external(program: &str, rest: &[&str], depth: usize) -> bool {
+    let has = |flags: &[&str]| {
+        rest.iter().any(|word| {
+            flags.iter().any(|flag| {
+                word == flag || (flag.starts_with("--") && word.starts_with(&format!("{flag}=")))
+            })
+        })
+    };
+    // The method of an HTTP call: `-X POST`, `-XPOST`, `--request POST`, `--request=POST`.
+    let method = || -> Option<String> {
+        for (at, word) in rest.iter().enumerate() {
+            let lower = word.to_lowercase();
+            for flag in ["-x", "--request", "--method", "-method"] {
+                if lower == flag {
+                    return rest.get(at + 1).map(|m| m.to_uppercase());
+                }
+                if let Some(value) = lower.strip_prefix(&format!("{flag}=")) {
+                    return Some(value.to_uppercase());
+                }
+            }
+            // `-XPOST`, also inside a cluster like `-sSXPOST`.
+            if word.starts_with('-') && !word.starts_with("--") {
+                if let Some(at_x) = word.find('X') {
+                    let value = &word[at_x + 1..];
+                    return if value.is_empty() {
+                        rest.get(at + 1).map(|m| m.to_uppercase())
+                    } else {
+                        Some(value.to_uppercase())
+                    };
+                }
+            }
+        }
+        None
+    };
+    // `-d`, `-F`, `-T` inside a cluster of short flags: `-sd a=1`.
+    let short_cluster_with = |letters: &str| {
+        rest.iter().any(|word| {
+            word.starts_with('-')
+                && !word.starts_with("--")
+                && word[1..].chars().any(|c| letters.contains(c))
+        })
+    };
+    match program {
+        _ if LOCAL_PROGRAMS.contains(&program) => false,
+        "find" => has(&["-exec", "-execdir", "-ok", "-okdir"]),
+        "go" => !rest
+            .iter()
+            .find(|word| !word.starts_with('-'))
+            .is_none_or(|sub| {
+                matches!(
+                    *sub,
+                    "build" | "test" | "vet" | "fmt" | "mod" | "list" | "env" | "version"
+                )
+            }),
+        "git" => rest
+            .iter()
+            .any(|word| *word == "push" || *word == "send-email"),
+        "cargo" => rest.iter().any(|word| {
+            matches!(
+                *word,
+                "publish" | "login" | "logout" | "owner" | "yank" | "token"
+            )
+        }),
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            let sub: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|word| !word.starts_with('-'))
+                .collect();
+            match sub.as_slice() {
+                [] => false,
+                ["run" | "run-script", script, ..] => !matches!(
+                    *script,
+                    "build"
+                        | "test"
+                        | "lint"
+                        | "check"
+                        | "format"
+                        | "fmt"
+                        | "typecheck"
+                        | "dev"
+                        | "start"
+                        | "ci"
+                ),
+                [
+                    "install" | "i" | "ci" | "add" | "test" | "t" | "build" | "ls" | "list"
+                    | "outdated" | "audit" | "pack" | "version" | "init" | "lint" | "dev" | "start"
+                    | "check" | "format",
+                    ..,
+                ] => false,
+                _ => true,
+            }
+        }
+        "python" | "python3" | "py" => {
+            if has(&["--version", "-V"]) {
+                return false;
+            }
+            match rest.iter().position(|word| *word == "-m") {
+                Some(at) => !matches!(
+                    rest.get(at + 1).copied(),
+                    Some(
+                        "pytest"
+                            | "unittest"
+                            | "pip"
+                            | "venv"
+                            | "black"
+                            | "ruff"
+                            | "mypy"
+                            | "flake8"
+                            | "pylint"
+                            | "isort"
+                            | "compileall"
+                    )
+                ),
+                // A script or `-c` can do anything.
+                None => true,
+            }
+        }
+        "pip" | "pip3" => !rest
+            .iter()
+            .find(|word| !word.starts_with('-'))
+            .is_none_or(|sub| {
+                matches!(
+                    *sub,
+                    "install" | "list" | "show" | "freeze" | "uninstall" | "check" | "download"
+                )
+            }),
+        "node" => !has(&["--version", "-v", "--check", "-c", "--test"]),
+        "gh" => {
+            let sub: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|word| !word.starts_with('-'))
+                .take(2)
+                .collect();
+            match sub.as_slice() {
+                [
+                    "pr" | "issue" | "run" | "repo" | "release" | "workflow",
+                    action,
+                ] => !matches!(
+                    *action,
+                    "view" | "list" | "diff" | "checks" | "status" | "watch" | "download"
+                ),
+                ["api", ..] => {
+                    method().is_some_and(|m| m != "GET")
+                        || has(&["-f", "-F", "--field", "--raw-field", "--input"])
+                        // `-fkey=value` and `-Fkey=value`
+                        || rest.iter().any(|word| {
+                            (word.starts_with("-f") || word.starts_with("-F"))
+                                && !word.starts_with("--")
+                                && word.len() > 2
+                        })
+                }
+                ["auth", "status"] | ["search", _] | ["browse"] => false,
+                _ => true,
+            }
+        }
+        "curl" | "http" | "https" | "xh" | "invoke-webrequest" | "iwr" | "invoke-restmethod"
+        | "irm" => {
+            method().is_some_and(|m| m != "GET" && m != "HEAD")
+                || short_cluster_with("dFT")
+                || has(&[
+                    "--data",
+                    "--data-raw",
+                    "--data-binary",
+                    "--data-urlencode",
+                    "--form",
+                    "--form-string",
+                    "--upload-file",
+                    "--json",
+                    "-Body",
+                    "-InFile",
+                ])
+        }
+        "wget" => {
+            method().is_some_and(|m| m != "GET" && m != "HEAD")
+                || has(&["--post-data", "--post-file", "--body-data", "--body-file"])
+        }
+        "bash" | "sh" | "zsh" | "dash" | "pwsh" | "powershell" | "cmd" => {
+            match shell_inner(program, rest) {
+                Some(inner) => command_is_external(inner, depth + 1),
+                // A script, an encoded command, or a flag we do not read.
+                None => !rest.is_empty() || program != "cmd",
+            }
+        }
+        // Mail, remote shells and copies, and everything unknown.
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -967,8 +1482,11 @@ mod tests {
             Some(FOREIGN)
         );
         assert_eq!(
-            check(&format!("tail {} ../../../../.agentsflow/board.json", log.display()), &run)
-                .map(|v| v.rule),
+            check(
+                &format!("tail {} ../../../../.agentsflow/board.json", log.display()),
+                &run
+            )
+            .map(|v| v.rule),
             Some(FOREIGN)
         );
         let write = serde_json::json!({"file_path": log.to_str().unwrap()});
@@ -986,5 +1504,106 @@ mod tests {
         }
         // Outside a department run nothing changes.
         assert_eq!(foreign_path("../../../research/AGENTS.md", &base), None);
+    }
+
+    #[test]
+    fn external_effects_are_told_from_reading() {
+        use serde_json::json;
+        let shell = |command: &str| external_effect("Bash", &json!({"command": command}));
+        for external in [
+            "git push origin agentsflow/t1",
+            "cd repo && git push",
+            "gh pr create --draft --title x",
+            "gh issue comment 4 --body hi",
+            "gh api repos/o/r/issues -X POST",
+            "gh api repos/o/r/issues -f title=x",
+            "curl -X POST https://x.test -d a=1",
+            "curl --data-binary @f https://x.test",
+            "sendmail a@b.c",
+            "bash -c 'git push'",
+            "GIT_TERMINAL_PROMPT=0 git push",
+            "echo 'unterminated",
+            // wrappers, loops and substitutions around the same push
+            "bash -lc 'git push origin x'",
+            "sh -ec \"git push\"",
+            "timeout 60 git push",
+            "echo $(git push)",
+            "echo `git push`",
+            "(git push)",
+            "{ git push; }",
+            "if true; then git push; fi",
+            "xargs git push",
+            "powershell.exe -NoProfile -Command 'git push'",
+            // methods and bodies in every spelling
+            "gh api -XPOST repos/o/r/issues",
+            "gh api --method=PATCH repos/o/r/issues/1",
+            "gh api repos/o/r/issues -ftitle=x",
+            "curl -XPOST https://x.test",
+            "curl -sd a=1 https://x.test",
+            "curl --request=PUT https://x.test",
+            "wget --post-data=a=1 https://x.test",
+            // programs that are not known to stay on this machine
+            "python -c \"import requests; requests.post('https://x.test')\"",
+            "python deploy.py",
+            "npm publish",
+            "npm run deploy",
+            "docker push img",
+            "./deploy.sh",
+            "ssh host ls",
+        ] {
+            assert!(shell(external), "{external}");
+        }
+        for reading in [
+            "git status",
+            "git commit -m x",
+            "gh pr view 3",
+            "gh run list --json databaseId",
+            "gh api repos/o/r/issues",
+            "curl https://x.test",
+            "cargo test",
+            "ls -la | wc -l",
+            "bash -lc 'git status && cargo test'",
+            "timeout 60 cargo build",
+            "cd repo && grep -rn todo . | head",
+            "npm run build",
+            "npm install",
+            "python -m pytest -q",
+            "python --version",
+            "find . -name '*.rs'",
+            "curl -sSL https://x.test -o f.txt",
+            "gh api -XGET repos/o/r/issues",
+            "if true; then ls; fi",
+        ] {
+            assert!(!shell(reading), "{reading}");
+        }
+        assert!(shell("find . -exec git push \\;"));
+        for argv in [
+            json!(["git", "push"]),
+            json!(["bash", "-lc", "git push"]),
+            json!(["powershell.exe", "-Command", "git push origin x"]),
+            json!(["sh", "script.sh"]),
+        ] {
+            assert!(
+                external_effect("shell", &json!({ "command": argv })),
+                "{argv}"
+            );
+        }
+        for argv in [
+            json!(["bash", "-lc", "git status"]),
+            json!(["cargo", "test", "--all"]),
+            json!(["powershell.exe", "-Command", "Get-ChildItem -Recurse"]),
+        ] {
+            assert!(
+                !external_effect("shell", &json!({ "command": argv })),
+                "{argv}"
+            );
+        }
+        assert!(external_effect("Bash", &json!({})));
+        assert!(!external_effect("Edit", &json!({"file_path": "a"})));
+        assert!(!external_effect("mcp__srv__list_items", &json!({})));
+        assert!(external_effect("mcp__srv__send_message", &json!({})));
+        assert!(external_effect("mcp__postgres__query", &json!({})));
+        assert!(external_effect("mcp__db__execute_query", &json!({})));
+        assert!(external_effect("mystery", &json!({})));
     }
 }

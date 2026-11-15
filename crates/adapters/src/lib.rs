@@ -10,6 +10,16 @@ use std::rc::Rc;
 /// Agents do not inherit this variable of the gateway.
 pub const TELEGRAM_TOKEN_VAR: &str = "AGENTSFLOW_TELEGRAM_TOKEN";
 
+/// Nor do they inherit the gateway's GitHub tokens: pushing a branch, opening
+/// a pull request and commenting is done by the gateway, after the owner's
+/// rules, not by an agent that has read text from outside.
+pub const GITHUB_TOKEN_VARS: [&str; 4] = [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+];
+
 /// `AGENTSFLOW_THINKING=off` stops asking the CLIs for thinking summaries:
 /// Claude's `--thinking-display` is an undocumented flag, and a CLI that
 /// drops it would refuse to start.
