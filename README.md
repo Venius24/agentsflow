@@ -1,5 +1,7 @@
 # agentsflow
 
+**Русский** · [English](README.en.md)
+
 Лёгкий шлюз для команды агентов Claude Code и Codex: каждый участник запускается отдельным CLI-процессом, а события приводятся к одному формату. Оркестратор управляет сценариями (workflow) и почтой между участниками.
 
 ```
@@ -13,11 +15,59 @@
 
 **Режим отделов** (`serve --home`): вы пишете задачи текстом в Telegram, ИИ-оркестратор раскладывает их по отделам, каждый отдел работает в свежих сессиях по своим правилам и памяти, внутреннее принимает оркестратор, внешнее — вы. Описание — [docs/departments.md](docs/departments.md), установка на сервер — [docs/vps.md](docs/vps.md).
 
-## Быстрый старт
+## Установка
 
-Нужны Rust (stable), установленные и авторизованные CLI `claude` и `codex`.
+Три способа. Всем нужны установленные и авторизованные CLI `claude` и `codex` (см. [Быстрый старт](#быстрый-старт)): установщик их не ставит.
+
+**1. Скрипт установки (Linux, macOS, Windows).** Скачивает последний релиз GitHub для вашей платформы, проверяет контрольную сумму SHA-256 и кладёт `agentsflow` в папку пользователя. Не использует `sudo`, не меняет `PATH` и системные настройки: только подсказывает, что сделать.
 
 ```sh
+# Linux и macOS: ставит в ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/Venius24/agentsflow/master/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell): ставит в %LOCALAPPDATA%\agentsflow\bin
+irm https://raw.githubusercontent.com/Venius24/agentsflow/master/install.ps1 | iex
+```
+
+Если хотите прочитать скрипт до запуска, скачайте `install.sh` или `install.ps1` из корня репозитория и запустите с диска. Оба принимают версию (`AGENTSFLOW_VERSION=v0.1.0` для `install.sh`; `-Version v0.1.0` или переменная `AGENTSFLOW_VERSION` для `install.ps1`) и папку установки (`AGENTSFLOW_INSTALL_DIR`, у `install.ps1` ещё `-InstallDir`). Если релиз ещё не опубликован, скрипт остановится с сообщением; до первого релиза используйте сборку из исходников.
+
+**2. Из архива релиза.** Скачайте архив для своей платформы и `SHA256SUMS` на странице [Releases](https://github.com/Venius24/agentsflow/releases).
+
+| Платформа | Архив |
+|---|---|
+| Linux x86_64 (glibc) | `agentsflow-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS, Apple silicon | `agentsflow-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `agentsflow-x86_64-apple-darwin.tar.gz` |
+| Windows x86_64 | `agentsflow-x86_64-pc-windows-msvc.zip` |
+
+Проверьте сумму (`sha256sum -c --ignore-missing SHA256SUMS` на Linux, `shasum -a 256 -c --ignore-missing SHA256SUMS` на macOS, `Get-FileHash` на Windows), распакуйте и положите бинарь `agentsflow` в папку из `PATH`.
+
+**3. Из исходников.** Нужны Rust (stable, 1.85 или новее) и компилятор C. TLS даёт rustls, поэтому OpenSSL не требуется.
+
+```sh
+git clone https://github.com/Venius24/agentsflow
+cd agentsflow
+cargo build --release      # бинарь: target/release/agentsflow
+```
+
+После установки проверьте версию и окружение:
+
+```sh
+agentsflow --version
+agentsflow doctor
+```
+
+Если `agentsflow` не находится, папка установки не входит в `PATH`: скрипт установки печатает строку, которую нужно добавить для вашей оболочки.
+
+## Быстрый старт
+
+Нужны установленные и авторизованные CLI `claude` и `codex`. Rust нужен только для сборки из исходников.
+
+```sh
+agentsflow serve --cwd path/to/project
+# из клона репозитория, без установки:
 cargo run -p agentsflow-gateway -- serve --cwd path/to/project
 ```
 
@@ -285,7 +335,7 @@ cargo test --workspace
 cargo test -p agentsflow-adapters -- --ignored   # живые тесты, нужны claude и codex
 ```
 
-CI (GitHub Actions) выполняет те же проверки на Linux и Windows и проверяет синтаксис скрипта страницы.
+CI (GitHub Actions) выполняет те же проверки на Linux и Windows и проверяет синтаксис скрипта страницы. Правила для вкладчиков — в [CONTRIBUTING.md](CONTRIBUTING.md) (на английском).
 
 Структура:
 - `crates/events` — формат событий (`Envelope`, `Event`).
@@ -298,6 +348,10 @@ CI (GitHub Actions) выполняет те же проверки на Linux и 
 - Протоколы CLI нестабильны: крейты привязаны к версиям `claude` 2.1.x и `codex` 0.16x.
 - Поток текста зависит от формата частичных событий CLI; при несовместимости его можно отключить через `AGENTSFLOW_STREAM=off`.
 - Одна рабочая папка и по одной долгоживущей сессии на агента.
+
+## Безопасность
+
+Как сообщить об уязвимости и какова модель угроз — в [SECURITY.md](SECURITY.md) (на английском).
 
 ## Лицензия
 
