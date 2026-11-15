@@ -1,7 +1,8 @@
 //! Файлы в боте. Входящие попадают в `.agentsflow/inbox/<пакет>/` и уходят вместе
 //! с задачей в папку запуска отдела. Результаты задачи бот показывает в читалке
 //! или присылает файлом. Кнопки: `s:fo` читать, `s:fd` прислать, `s:fl` список,
-//! `s:fr` недавние результаты, `s:fx` отменить присланное.
+//! `s:fr` недавние результаты, `s:fx` отменить присланное, `s:dv` правки задачи
+//! (список файлов и `.diff` документом, см. [`crate::review`]).
 
 use super::screens::InputKind;
 use super::*;
@@ -199,16 +200,27 @@ async fn download(
 /// sendDocument с именем файла как есть. Клиент бота кодирует его процентами,
 /// и кириллица в чате рискует превратиться в `%D0%BE…`.
 async fn upload(bot: &Bot, chat: i64, path: PathBuf) -> std::result::Result<(), ()> {
+    upload_with(bot, chat, path, None).await
+}
+
+/// То же с подписью в HTML.
+async fn upload_with(
+    bot: &Bot,
+    chat: i64,
+    path: PathBuf,
+    caption: Option<String>,
+) -> std::result::Result<(), ()> {
     let name = path.file_name().map_or_else(
         || "file".to_owned(),
         |name| safe_name(&name.to_string_lossy()),
     );
     let file = tokio::fs::File::open(&path).await.map_err(|_| ())?;
     let part = reqwest::multipart::Part::stream(file).file_name(name);
-    let form = reqwest::multipart::Form::new()
-        .text("chat_id", chat.to_string())
-        .part("document", part)
-        .percent_encode_noop();
+    let mut form = reqwest::multipart::Form::new().text("chat_id", chat.to_string());
+    if let Some(caption) = caption {
+        form = form.text("caption", caption).text("parse_mode", "HTML");
+    }
+    let form = form.part("document", part).percent_encode_noop();
     let response = bot
         .client
         .post(format!("{}/sendDocument", bot.api_url))
@@ -221,6 +233,36 @@ async fn upload(bot: &Bot, chat: i64, path: PathBuf) -> std::result::Result<(), 
     } else {
         Err(())
     }
+}
+
+/// Подпись к `.diff`: откуда правки и файлы с числом строк. Telegram берёт до
+/// 1024 знаков, остальные файлы есть в самом документе.
+fn diff_caption(diff: &crate::review::TaskDiff, title: &str, token: &str) -> String {
+    let mut text = format!(
+        "<b>🧾 Правки</b> «{}»\n{}\n",
+        message_text(title, token, 120),
+        message_text(&diff.source_label(), token, 300)
+    );
+    for (shown, file) in diff.files.iter().enumerate() {
+        let kind = match (file.binary, file.status) {
+            (true, _) => " · двоичный",
+            (_, "added") => " · новый",
+            (_, "deleted") => " · удалён",
+            _ => "",
+        };
+        let line = format!(
+            "\n• {} +{} −{}{kind}",
+            message_text(&file.path, token, 120),
+            file.added,
+            file.removed
+        );
+        if text.chars().count() + line.chars().count() > 950 {
+            text.push_str(&format!("\n… и ещё {}", diff.files.len() - shown));
+            break;
+        }
+        text.push_str(&line);
+    }
+    text
 }
 
 /// Файл результата задачи.
@@ -633,6 +675,69 @@ impl Bridge {
             ));
         }
         (!row.is_empty()).then_some(row)
+    }
+
+    /// «Правки» на карточке, когда задаче есть что показать: своя копия
+    /// репозитория или правки в ленте её агентов.
+    pub(super) fn diff_row(&self, id: &str) -> Option<Vec<Value>> {
+        let runs = self.control.as_ref()?.runs.as_ref()?;
+        let work = self.hub.task(id)?.work?;
+        let home = runs.home();
+        let clone = home.departments.get(&work.department).is_some_and(|dept| {
+            dept.worktree && dept.run_dir(id).join("repo").join(".git").exists()
+        });
+        let prefix = format!("{}:", work.department);
+        let suffix = format!(":{id}");
+        let edits = clone
+            || self.hub.subscribe().0.iter().any(|envelope| {
+                let agent = envelope.agent.as_str();
+                matches!(envelope.event, agentsflow_events::Event::Diff { .. })
+                    && agent.starts_with(&prefix)
+                    && agent.ends_with(&suffix)
+            });
+        edits.then(|| vec![button("🧾 Правки", format!("s:dv:{id}"))])
+    }
+
+    /// Файлы с числом строк в подписи и все правки документом `.diff`. Строчные
+    /// замечания в чате неудобны: их оставляют на странице.
+    pub(super) async fn send_diff(&mut self, chat: i64, id: &str) -> String {
+        let Some(runs) = self.control.as_ref().and_then(|c| c.runs.clone()) else {
+            return "Правки есть только в режиме отделов (serve --home)".into();
+        };
+        let Some(task) = self.hub.task(id).filter(|task| task.work.is_some()) else {
+            return "Задачи нет".into();
+        };
+        let title = task.title.clone();
+        let home = runs.home();
+        let (history, _) = self.hub.subscribe();
+        let Ok(diff) =
+            tokio::task::spawn_blocking(move || crate::review::task_diff(&home, &history, &task))
+                .await
+        else {
+            return "Не удалось собрать правки".into();
+        };
+        if diff.files.is_empty() {
+            return diff.source_label();
+        }
+        let caption = diff_caption(&diff, &title, &self.config.token);
+        let content = redact(&diff.unified(), &self.config.token);
+        let dir =
+            std::env::temp_dir().join(format!("agentsflow-diff-{}", uuid::Uuid::new_v4().simple()));
+        let name = safe_name(&format!(
+            "Правки {}.diff",
+            title.chars().take(60).collect::<String>()
+        ));
+        let path = dir.join(name);
+        if std::fs::create_dir_all(&dir).is_err() || std::fs::write(&path, content).is_err() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return "Не удалось подготовить файл".into();
+        }
+        let sent = upload_with(&self.bot, chat, path, Some(caption)).await;
+        let _ = std::fs::remove_dir_all(&dir);
+        match sent {
+            Ok(()) => "🧾 Правки отправлены".into(),
+            Err(()) => "Не удалось прислать правки".into(),
+        }
     }
 
     pub(super) async fn open_files(
@@ -1306,6 +1411,58 @@ mod tests {
             let recent = sent(&calls, "/sendMessage").pop().unwrap();
             assert!(recent.contains(&format!("s:fo:{id}:0:0")));
             assert!(recent.contains("Отчёт"));
+        });
+    }
+
+    #[test]
+    fn the_changes_button_sends_the_file_list_and_a_diff() {
+        with_bridge(PLAN, async |mut bridge, runs, hub, _, calls| {
+            let task = runs
+                .create(
+                    AgentId::from("оркестратор"),
+                    crate::runs::NewWork {
+                        title: "Правка".into(),
+                        text: "x".into(),
+                        department: "general".into(),
+                        questions: vec![agentsflow_events::Question {
+                            text: "Где?".into(),
+                            answer: None,
+                            from: "оркестратор".into(),
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let id = task.id.clone();
+            // Nothing changed yet: no button.
+            bridge.update(&callback(&format!("s:t:{id}"))).await;
+            let card = sent(&calls, "/editMessageText").pop().unwrap();
+            assert!(!card.contains(&format!("s:dv:{id}")), "{card}");
+            hub.publish(
+                AgentId::from(format!("general:doer:{id}")),
+                "run",
+                agentsflow_events::Event::Diff {
+                    path: "notes.md".into(),
+                    patch: "--- notes.md\n+++ notes.md\n@@ edit @@\n-old secret\n+new\n".into(),
+                },
+            );
+            bridge.update(&callback(&format!("s:t:{id}"))).await;
+            let card = sent(&calls, "/editMessageText").pop().unwrap();
+            assert!(card.contains(&format!("s:dv:{id}")), "{card}");
+            assert!(card.contains("Правки"));
+            bridge.update(&callback(&format!("s:dv:{id}"))).await;
+            let documents = sent(&calls, "/sendDocument");
+            assert_eq!(documents.len(), 1);
+            let document = &documents[0];
+            assert!(
+                document.contains("filename=\"Правки Правка.diff\""),
+                "{document}"
+            );
+            assert!(document.contains("• notes.md +1 −1"), "{document}");
+            assert!(document.contains("Правки из ленты агентов"));
+            assert!(document.contains("# notes.md · правка 1 · doer"));
+            // The bot token never leaves in the file.
+            assert!(document.contains("-old [redacted]") && !document.contains("old secret"));
         });
     }
 

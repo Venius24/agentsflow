@@ -27,6 +27,7 @@ pub struct Input {
     pub result: std::path::PathBuf,
 }
 
+#[allow(clippy::too_many_arguments)] // one call site; a struct would only rename them
 pub fn build(
     dept: &Department,
     task: &TaskSnapshot,

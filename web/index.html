@@ -756,6 +756,74 @@
   .sc .sc-act-ib:hover { color: var(--ink); background: var(--hover); }
   .sc .sc-act-ib .sc-g { width: 16px; height: 16px; }
   @media (prefers-reduced-motion: reduce) { .sc-fcard:hover { transform: none; } }
+  /* Review of a task's changes («Правки»): file list, unified diff with line numbers, owner's comments.
+     The same block serves the scene and the classic columns; the scene sets its own colours. */
+  .rv { --rv-add: var(--add-bg); --rv-add-ink: var(--add-fg); --rv-del: var(--del-bg); --rv-del-ink: var(--del-fg); --rv-hunk: var(--hunk);
+        --rv-line: var(--rule); --rv-soft: var(--raised); --rv-muted: var(--ink-3); --rv-bg: var(--panel); --rv-note: #FFF4CF; --rv-note-line: #D9B44A;
+        display: grid; gap: 14px; color: var(--ink); font-size: 14px; min-width: 0; }
+  @media (prefers-color-scheme: dark) { .rv { --rv-note: #2E2A14; --rv-note-line: #7A6826; } }
+  .sc .rv { --rv-add: #e6f4ea; --rv-add-ink: #0f5132; --rv-del: #fbeaea; --rv-del-ink: #8a1f28; --rv-hunk: #2f5597;
+            --rv-line: var(--line-2); --rv-soft: var(--raised); --rv-muted: var(--muted); --rv-bg: var(--bg); --rv-note: var(--own); --rv-note-line: var(--own-line); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .sc .rv { --rv-add: #133322; --rv-add-ink: #a8e6c0; --rv-del: #3d1b1e; --rv-del-ink: #f6b8b8; --rv-hunk: #8fb2ff; } }
+  :root[data-theme="dark"] .sc .rv { --rv-add: #133322; --rv-add-ink: #a8e6c0; --rv-del: #3d1b1e; --rv-del-ink: #f6b8b8; --rv-hunk: #8fb2ff; }
+  .rv-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+  .rv-head > b { font-size: 15px; font-weight: 600; }
+  .rv-src { flex-basis: 100%; font-size: 12.5px; line-height: 1.5; color: var(--rv-muted); }
+  .rv-n { white-space: nowrap; font: 12px/1.4 var(--mono); }
+  .rv-plus { color: var(--rv-add-ink); } .rv-minus { color: var(--rv-del-ink); }
+  .rv-tag { font-size: 11px; line-height: 1.6; color: var(--rv-muted); border: 1px solid var(--rv-line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+  .rv-body { display: grid; grid-template-columns: minmax(170px, 250px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  .rv-files { position: sticky; top: 0; display: grid; gap: 1px; max-height: 70vh; overflow: auto; padding: 6px; border: 1px solid var(--rv-line); border-radius: 10px; background: var(--rv-bg); }
+  .rv .rv-files button { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; width: 100%; height: auto; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; font: 12.5px/1.4 var(--mono); text-align: left; cursor: pointer; }
+  .rv .rv-files button:hover { background: var(--rv-soft); }
+  .rv-fp { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .rv-list { display: grid; gap: 14px; min-width: 0; }
+  .rv-file { min-width: 0; border: 1px solid var(--rv-line); border-radius: 10px; overflow: hidden; background: var(--rv-bg); }
+  .rv-file > summary { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; background: var(--rv-soft); cursor: pointer; }
+  .rv-file > summary::-webkit-details-marker { display: none; }
+  .rv-file > summary::before { content: "▸"; color: var(--rv-muted); }
+  .rv-file[open] > summary::before { content: "▾"; }
+  .rv-file > summary .rv-fp { font: 600 13px/1.4 var(--mono); }
+  .rv .rv-mini { height: 26px; padding: 0 9px; font-size: 12px; }
+  .rv-code { font: 12.5px/1.55 var(--mono); }
+  .rv-patch + .rv-patch { border-top: 1px dashed var(--rv-line); }
+  .rv-ln { display: grid; grid-template-columns: auto 1.5em minmax(0, 1fr); align-items: start; }
+  .rv .rv-no { height: auto; min-width: 7.2em; padding: 0 8px; border: 0; border-right: 1px solid var(--rv-line); border-radius: 0; background: transparent; color: var(--rv-muted); font: inherit; text-align: right; white-space: pre; cursor: pointer; }
+  .rv .rv-no:hover { background: var(--rv-soft); color: var(--ink); text-decoration: underline; }
+  .rv-sg { text-align: center; user-select: none; font-weight: 700; }
+  .rv-tx { min-width: 0; padding-right: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rv-add { background: var(--rv-add); color: var(--rv-add-ink); }
+  .rv-del { background: var(--rv-del); color: var(--rv-del-ink); }
+  .rv-hunk { padding: 2px 10px; background: var(--rv-soft); color: var(--rv-hunk); font: 12px/1.5 var(--mono); overflow-wrap: anywhere; }
+  .rv-meta { padding: 4px 12px; color: var(--rv-muted); font: 12.5px/1.5 var(--sans); }
+  .rv-note { display: grid; gap: 6px; margin: 4px 10px 8px calc(7.2em + 1.5em + 6px); padding: 8px 10px; border: 1px solid var(--rv-note-line); border-radius: 8px; background: var(--rv-note); color: var(--ink); font: 13px/1.5 var(--font, var(--sans)); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .rv-file > div > .rv-note, .rv-bar .rv-note { margin-left: 10px; }
+  .rv-where { font: 600 12px/1.4 var(--mono); color: var(--rv-muted); }
+  .rv-note textarea { width: 100%; min-height: 70px; resize: vertical; font: 13px/1.5 var(--font, var(--sans)); }
+  .rv-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rv-bar { position: sticky; bottom: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--rv-line); border-radius: 10px; background: var(--rv-bg); box-shadow: 0 -6px 16px rgba(0, 0, 0, .07); }
+  .rv-bar .rv-hint { flex: 1 1 220px; font-size: 12.5px; color: var(--rv-muted); }
+  .rv-bar .rv-bad { color: var(--alert); }
+  .rv-orphans { flex-basis: 100%; display: grid; gap: 6px; }
+  .rv-empty { margin: 0; color: var(--rv-muted); }
+  .rv button:focus-visible, .rv summary:focus-visible, .rv textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .sc-review { overflow: auto; min-height: 0; padding: 20px 24px 28px; }
+  .sc-view-scene > .sc-review { grid-row: 4; }
+  .sc-review > .rv { max-width: 1200px; margin: 0 auto; }
+  .rv-pane-btn { font-size: 12px; padding: 3px 9px; }
+  .rv-dlg { width: min(1120px, 96vw); max-width: 96vw; max-height: 92vh; padding: 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--ground); color: var(--ink); }
+  .rv-dlg::backdrop { background: rgba(0, 0, 0, .45); }
+  .rv-dlg-in { max-height: 92vh; overflow: auto; padding: 16px; }
+  .rv-dlg-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .rv-dlg-top h2 { flex: 1; min-width: 0; margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+  @media (max-width: 880px) {
+    .rv-body { grid-template-columns: minmax(0, 1fr); }
+    .rv-files { position: static; max-height: 30vh; }
+    .sc-review { padding: 12px 10px 20px; }
+    .rv .rv-no { min-width: 5.6em; padding: 0 4px; }
+    .rv-note { margin-left: 8px; }
+    .rv-dlg-in { padding: 10px; }
+  }
 </style>
 </head>
 <body>
@@ -820,6 +888,7 @@
     <symbol id="sci-down" viewBox="0 0 24 24"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></symbol>
     <symbol id="sci-doc" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
     <symbol id="sci-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+    <symbol id="sci-diff" viewBox="0 0 24 24"><path d="M8 3v8M4 7h8M4 17h8"/><path d="M15 4h5v16h-5"/></symbol>
     <symbol id="sci-coin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9.5c-.5-1-1.6-1.5-3-1.5-1.7 0-3 .9-3 2s1.3 1.7 3 2 3 .9 3 2-1.3 2-3 2c-1.4 0-2.5-.5-3-1.5M12 6v2M12 16v2"/></symbol>
   </svg>
 
@@ -861,9 +930,10 @@
     <div class="sc-view sc-view-scene">
       <nav class="sc-steps" id="sc-steps" aria-label="Ход задачи"></nav>
       <div class="sc-switch" id="sc-switch"></div>
-      <div class="sc-rtabs" id="sc-rtabs" role="tablist" aria-label="Итог или работа агентов" hidden></div>
+      <div class="sc-rtabs" id="sc-rtabs" role="tablist" aria-label="Итог, работа агентов, правки" hidden></div>
       <div class="sc-panes" id="sc-panes"></div>
       <div class="sc-result" id="sc-result" hidden></div>
+      <div class="sc-review" id="sc-review" role="tabpanel" aria-label="Правки" hidden></div>
     </div>
     <div class="sc-view sc-view-board" id="sc-board"></div>
     <div class="sc-view sc-view-new" id="sc-new"></div>
@@ -1034,7 +1104,7 @@ function buildPane(a, enabled = true) {
   const chip = el("span", "chip", "свободен");
   const stop = el("button", "deny", "Стоп");
   stop.type = "button";
-  head.append(chip, stop);
+  head.append(chip, rvPaneButton(a.id), stop);
   const stopError = el("div", "export-error");
   stopError.setAttribute("role", "alert");
   const failure = el("div", "errline");
@@ -1178,6 +1248,7 @@ function permButtons(agent, ev, fail) {
 
 function handle(env) {
   sceneEvent(env);
+  rvCollect(env);
   if (env.event.type === "usage") return;
   recordViewEvent(env);
   // Department tasks and rule proposals live on the departments view, not in agent panes.
@@ -3965,19 +4036,21 @@ function scDoc(md) {
 // Tabs "Итог" / "Как работали": a finished task opens on its result.
 function scHasResult(task) { return !!(task && task.work && (task.work.result_path || task.work.result_summary)); }
 function scResultView(task) {
+  const chosen = task ? sc.rview.get(task.id) : null;
+  if (chosen === "diff" && rvAvailable(task)) return "diff";
   if (!scHasResult(task)) return "agents";
-  const chosen = sc.rview.get(task.id);
-  if (chosen) return chosen;
+  if (chosen && chosen !== "diff") return chosen;
   const s = task.work.state;
   return s === "done" || s === "review" || s === "stuck" ? "result" : "agents";
 }
 function scResultTabs(task) {
-  const tabs = $("#sc-rtabs"), panes = $("#sc-panes"), res = $("#sc-result");
-  const has = scHasResult(task), view = scResultView(task);
-  tabs.hidden = !has;
-  panes.hidden = view === "result";
+  const tabs = $("#sc-rtabs"), panes = $("#sc-panes"), res = $("#sc-result"), rev = $("#sc-review");
+  const has = scHasResult(task), diff = rvAvailable(task), view = scResultView(task);
+  tabs.hidden = !has && !diff;
+  panes.hidden = view !== "agents";
   res.hidden = view !== "result";
-  if (has) {
+  rev.hidden = view !== "diff";
+  if (has || diff) {
     const lanes = sc.byTask.get(task.id) || [];
     const tab = (id, icon, label, note) => {
       const b = el("button"); b.type = "button"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(view === id));
@@ -3985,13 +4058,19 @@ function scResultTabs(task) {
       b.onclick = () => { sc.rview.set(task.id, id); scRender(); if (id === "agents") for (const l of lanes) if (l.dom) scStick(l, true); };
       return b;
     };
-    const sig = task.id + "|" + view + "|" + lanes.length;
+    const nFiles = diff ? rvFileCount(task) : 0;
+    const sig = task.id + "|" + view + "|" + lanes.length + "|" + has + "|" + diff + "|" + nFiles;
     if (tabs.dataset.sig !== sig) {
       tabs.dataset.sig = sig;
-      tabs.replaceChildren(tab("result", "doc", "Итог"), tab("agents", "orch", "Как работали", lanes.length ? String(lanes.length) : ""));
+      const list = [];
+      if (has) list.push(tab("result", "doc", "Итог"));
+      list.push(tab("agents", "orch", has ? "Как работали" : "Агенты", lanes.length ? String(lanes.length) : ""));
+      if (diff) list.push(tab("diff", "diff", "Правки", nFiles ? String(nFiles) : ""));
+      tabs.replaceChildren(...list);
     }
   }
   if (view === "result") scResult(task);
+  if (view === "diff") scReview(task);
 }
 // The result as a chat: the request on the right, the department's answer below it,
 // files as cards and a row of actions under the answer, as in ChatGPT and Claude.
@@ -4095,6 +4174,382 @@ function scResult(task) {
   box.dataset.task = task.id;
   box.replaceChildren(chat);
   box.scrollTop = top;
+}
+
+// ---- Review of changes («Правки») ----
+// One renderer for the scene (GET /api/tasks/{id}/diff: git branch or the agents' diff
+// events) and the classic columns (this session's diff events of one agent). The owner
+// clicks a line number or "Замечание к файлу", the comments collect into one review and
+// go out with one button through the existing routes. Unsent drafts stay in the browser.
+const rv = { drafts: new Map(), cache: new Map(), loading: new Set(), byAgent: new Map(), paneBtns: new Map(), open: null };
+function rvStoreKey(scope) { return "agentsflow.review." + scope; }
+function rvDrafts(scope) {
+  if (!rv.drafts.has(scope)) {
+    let list = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(rvStoreKey(scope)) || "[]");
+      if (Array.isArray(saved)) list = saved.filter(c => c && typeof c.path === "string" && typeof c.text === "string");
+    } catch (_) {}
+    rv.drafts.set(scope, list);
+  }
+  return rv.drafts.get(scope);
+}
+function rvSave(scope) {
+  try {
+    const list = rvDrafts(scope);
+    if (list.length) localStorage.setItem(rvStoreKey(scope), JSON.stringify(list));
+    else localStorage.removeItem(rvStoreKey(scope));
+  } catch (_) {}
+}
+function rvPad(n) { return (n == null ? "" : String(n)).padStart(5); }
+// The lines of one patch with their numbers. "@@ -a,b +c,d @@" gives them; Claude's
+// "@@ edit @@" does not, "@@ new file @@" starts the new file at line 1.
+function rvLines(text) {
+  const out = [], raw = String(text || "").split("\n");
+  if (raw.length && raw[raw.length - 1] === "") raw.pop();
+  let o = null, n = null, hunk = false;
+  for (const src of raw) {
+    const line = src.replace(/\r$/, "");
+    if (line.startsWith("diff --git ")) { hunk = false; continue; }
+    if (line.startsWith("@@")) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (m) { o = +m[1]; n = +m[2]; out.push({ kind: "hunk", text: line }); }
+      else if (/^@@ new file @@/.test(line)) { o = null; n = 1; out.push({ kind: "hunk", text: "Новый файл" }); }
+      else { o = n = null; out.push({ kind: "hunk", text: "Правка без номеров строк" }); }
+      hunk = true; continue;
+    }
+    if (!hunk) {
+      if (/^(Binary files |GIT binary patch)/.test(line)) { out.push({ kind: "meta", text: "Двоичный файл, содержимое не показано." }); continue; }
+      if (/^(--- |\+\+\+ |index |new file mode|deleted file mode|old mode|new mode|similarity |rename |copy )/.test(line)) continue;
+      if (!/^[+\- ]/.test(line)) { if (line) out.push({ kind: "meta", text: line }); continue; }
+      hunk = true;
+    }
+    if (line.startsWith("\\")) { out.push({ kind: "meta", text: "Нет перевода строки в конце файла" }); continue; }
+    if (line.startsWith("+")) { out.push({ kind: "add", text: line.slice(1), o: null, n }); if (n != null) n++; }
+    else if (line.startsWith("-")) { out.push({ kind: "del", text: line.slice(1), o, n: null }); if (o != null) o++; }
+    else { out.push({ kind: "ctx", text: line.slice(1), o, n }); if (o != null) o++; if (n != null) n++; }
+  }
+  return out;
+}
+function rvWhere(c) {
+  if (c.row == null) return c.path + " · весь файл";
+  if (c.line != null) return c.path + ":" + c.line + (c.side === "old" ? " (удалённая строка)" : "");
+  return c.path + " · строка без номера" + (c.patch != null ? ", правка " + (c.patch + 1) : "");
+}
+// What the agent receives: path:line, the quoted line, the comment.
+function rvFormat(list) {
+  const parts = ["Замечания хозяина к правкам (" + list.length + "):"];
+  list.forEach((c, i) => {
+    const lines = [(i + 1) + ". " + rvWhere(c)];
+    if (c.quote != null) lines.push("> " + c.quote);
+    lines.push(c.text.trim());
+    parts.push(lines.join("\n"));
+  });
+  return parts.join("\n\n");
+}
+function rvSourceText(m) {
+  const parts = [];
+  if (m.note) parts.push(m.note);
+  if (m.source === "git") parts.push("Источник: git, ветка " + (m.branch || "задачи") + " против " + (m.base || "базы") + ". Видно только закоммиченное.");
+  else parts.push("Источник: лента агентов. Каждая правка отдельно и по порядку; номера строк есть, только если их дал агент. Правка, которую потом отклонили или откатили, здесь тоже видна.");
+  if (m.truncated) parts.push("Показано не всё: правки больше 2 МБ, у файлов без текста стоит «не весь».");
+  return parts.join(" ");
+}
+function rvTags(f) {
+  const tags = [];
+  if (f.status === "added") tags.push("новый");
+  if (f.status === "deleted") tags.push("удалён");
+  if (f.binary) tags.push("двоичный");
+  if (f.truncated) tags.push("не весь");
+  return tags.map(t => el("span", "rv-tag", t));
+}
+function rvCounts(f) {
+  const n = el("span", "rv-n");
+  n.append(el("span", "rv-plus", "+" + (f.added || 0)), " ", el("span", "rv-minus", "−" + (f.removed || 0)));
+  return n;
+}
+// ctx: { scope, scene, send: { label, hint, run(text) } | null, reload }
+function rvPanel(model, ctx) {
+  const root = el("div", "rv");
+  const drafts = rvDrafts(ctx.scope);
+  const files = model.files || [];
+  const btn = (label, cls, run) => {
+    const b = el("button", [ctx.scene ? "sc-btn" : "", cls || ""].join(" ").trim(), label);
+    b.type = "button"; b.onclick = run;
+    return b;
+  };
+  let added = 0, removed = 0;
+  for (const f of files) { added += f.added || 0; removed += f.removed || 0; }
+  const head = el("div", "rv-head");
+  head.append(el("b", "", files.length ? files.length + " " + scPlural(files.length, "файл", "файла", "файлов") : "Правок нет"));
+  if (files.length) head.append(rvCounts({ added, removed }));
+  if (ctx.reload) head.append(btn("Обновить", "rv-mini", ctx.reload));
+  head.append(el("div", "rv-src", rvSourceText(model)));
+  root.append(head);
+
+  // The bar: how many comments, where they go, one button.
+  const bar = el("div", "rv-bar");
+  const count = el("b"), hint = el("span", "rv-hint"), status = el("span", "rv-hint");
+  status.setAttribute("role", "status");
+  const orphans = el("div", "rv-orphans");
+  let armed = false;
+  const clear = btn("Убрать все", "", () => {
+    if (!armed) { armed = true; clear.textContent = "Точно убрать все?"; return; }
+    drafts.length = 0; rvSave(ctx.scope);
+    for (const n of root.querySelectorAll(".rv-note:not(.rv-form)")) n.remove();
+    armed = false; clear.textContent = "Убрать все"; update();
+  });
+  const send = btn(ctx.send ? ctx.send.label : "Отправить", ctx.scene ? "sc-primary" : "primary", async () => {
+    if (!ctx.send || !drafts.length) return;
+    send.disabled = true; status.className = "rv-hint"; status.textContent = "Отправляю…";
+    try {
+      await ctx.send.run(rvFormat(drafts));
+      drafts.length = 0; rvSave(ctx.scope);
+      for (const n of root.querySelectorAll(".rv-note:not(.rv-form)")) n.remove();
+      status.textContent = "Отправлено.";
+    } catch (err) { status.className = "rv-hint rv-bad"; status.textContent = "Не отправлено: " + err.message; }
+    update();
+  });
+  const update = () => {
+    const n = drafts.length;
+    count.textContent = n ? "Замечаний: " + n : "Замечаний нет";
+    hint.textContent = !ctx.send ? "Отправить можно, пока задача идёт или ждёт вашей приёмки." : n ? ctx.send.hint : "Нажмите номер строки или «Замечание к файлу», чтобы написать.";
+    send.disabled = !n || !ctx.send;
+    clear.hidden = !n;
+  };
+
+  // One form at a time; it never re-renders the panel, so typing is safe.
+  let open = null;
+  const closeForm = () => { if (open) { open.form.remove(); open.back && open.back.focus(); open = null; } };
+  const noteCard = c => {
+    const card = el("div", "rv-note");
+    const text = el("div", "", c.text);
+    const row = el("div", "rv-btns");
+    const edit = btn("Изменить", "rv-mini", () => openForm(c, card, edit, c));
+    row.append(edit, btn("Убрать", "rv-mini", () => {
+      const at = drafts.indexOf(c); if (at >= 0) drafts.splice(at, 1);
+      rvSave(ctx.scope); card.remove(); update();
+    }));
+    card.append(el("div", "rv-where", rvWhere(c)), text, row);
+    card._text = text;
+    return card;
+  };
+  const openForm = (anchor, after, back, existing) => {
+    closeForm();
+    const form = el("div", "rv-note rv-form");
+    const ta = el("textarea");
+    ta.setAttribute("aria-label", "Замечание: " + rvWhere(anchor));
+    ta.placeholder = "Что не так и как надо";
+    if (existing) { ta.value = existing.text; after.hidden = true; }
+    const save = btn(existing ? "Сохранить" : "Добавить", ctx.scene ? "sc-primary rv-mini" : "primary rv-mini", () => {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      let card;
+      if (existing) { existing.text = text; after._text.textContent = text; after.hidden = false; card = after; }
+      else { const c = Object.assign({}, anchor, { text }); drafts.push(c); card = noteCard(c); form.after(card); }
+      rvSave(ctx.scope); open.back = card.querySelector("button"); closeForm(); update();
+    });
+    const cancel = btn("Отмена", "rv-mini", () => { if (existing) after.hidden = false; closeForm(); });
+    ta.addEventListener("keydown", e => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save.click(); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel.click(); }
+    });
+    const row = el("div", "rv-btns"); row.append(save, cancel);
+    form.append(el("div", "rv-where", rvWhere(anchor)), ta, row, el("small", "rv-where", "Ctrl+Enter — добавить, Esc — отмена"));
+    after.after(form);
+    open = { form, back };
+    ta.focus();
+  };
+
+  const known = new Set(files.map(f => f.path));
+  if (files.length) {
+    const body = el("div", "rv-body");
+    const nav = el("nav", "rv-files"); nav.setAttribute("aria-label", "Файлы");
+    const list = el("div", "rv-list");
+    files.forEach((f, fi) => {
+      const parsed = (f.patches || []).map(p => rvLines(p.text));
+      const fits = c => c.row != null && parsed[c.patch] && parsed[c.patch][c.row] && parsed[c.patch][c.row].text === c.quote;
+      const det = el("details", "rv-file");
+      const sum = el("summary");
+      sum.append(el("span", "rv-fp", f.path), rvCounts(f), ...rvTags(f));
+      const fileNotes = el("div");
+      const fileBtn = btn("Замечание к файлу", "rv-mini", e => {
+        e.preventDefault(); e.stopPropagation(); det.open = true; fill();
+        openForm({ path: f.path, row: null, patch: null, line: null, side: null, quote: null }, fileNotes, fileBtn);
+      });
+      sum.append(fileBtn);
+      det.append(sum, fileNotes);
+      // Whole-file comments, and line comments whose line has changed since.
+      for (const c of drafts) if (c.path === f.path && !fits(c)) fileNotes.append(noteCard(c));
+      let filled = false;
+      const fill = () => {
+        if (filled) return;
+        filled = true;
+        if (!parsed.length) det.append(el("div", "rv-meta", f.truncated ? "Текст правки не поместился в 2 МБ." : "Текста правки нет."));
+        parsed.forEach((lines, pi) => {
+          const box = el("div", "rv-patch rv-code");
+          const p = f.patches[pi];
+          if (p.agent || parsed.length > 1) box.append(el("div", "rv-meta", "Правка " + (pi + 1) + (p.agent ? " · " + p.agent : "")));
+          lines.forEach((ln, ri) => {
+            if (ln.kind === "hunk" || ln.kind === "meta") { box.append(el("div", "rv-" + ln.kind, ln.text)); return; }
+            const num = ln.kind === "del" ? ln.o : ln.n;
+            const row = el("div", "rv-ln rv-" + ln.kind);
+            const no = el("button", "rv-no", rvPad(ln.o) + " " + rvPad(ln.n)); no.type = "button";
+            no.setAttribute("aria-label", "Замечание к строке" + (num != null ? " " + num : "") + (ln.kind === "add" ? ", добавлена" : ln.kind === "del" ? ", удалена" : ""));
+            no.title = "Написать замечание к этой строке";
+            row.append(no, el("span", "rv-sg", ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "), el("span", "rv-tx", ln.text || " "));
+            box.append(row);
+            const anchor = { path: f.path, patch: pi, row: ri, line: num == null ? null : num, side: ln.kind === "del" ? "old" : num != null ? "new" : null, quote: ln.text };
+            no.onclick = () => openForm(anchor, row, no);
+            let last = row;
+            for (const c of drafts) if (c.path === f.path && c.patch === pi && c.row === ri && c.quote === ln.text) { const card = noteCard(c); last.after(card); last = card; }
+          });
+          det.append(box);
+        });
+      };
+      const size = parsed.reduce((s, l) => s + l.length, 0);
+      if (fi < 40 && size <= 1500) { det.open = true; fill(); }
+      det.addEventListener("toggle", () => { if (det.open) fill(); });
+      list.append(det);
+      const item = el("button"); item.type = "button";
+      item.append(el("span", "rv-fp", f.path), rvCounts(f), ...rvTags(f));
+      item.onclick = () => { det.open = true; fill(); det.scrollIntoView({ block: "start", behavior: scReduce.matches ? "auto" : "smooth" }); sum.focus({ preventScroll: true }); };
+      nav.append(item);
+    });
+    body.append(nav, list);
+    root.append(body);
+  } else root.append(el("p", "rv-empty", model.source === "git" ? "В ветке задачи нет отличий от базы." : "Агенты пока не меняли файлы."));
+  // Comments on files that are no longer among the changes.
+  for (const c of drafts) if (!known.has(c.path)) orphans.append(noteCard(c));
+  bar.append(count, hint, clear, send, status, orphans);
+  root.append(bar);
+  update();
+  return root;
+}
+
+// Scene: the "Правки" tab of a task.
+function rvAvailable(task) {
+  if (!task || !task.work) return false;
+  const d = scDept(task.work.department), files = sc.files.get(task.id);
+  return !!(d && d.worktree) || !!(files && files.size) || rvDrafts("task:" + task.id).length > 0;
+}
+function rvFileCount(task) {
+  const cached = rv.cache.get(task.id);
+  if (cached && cached.data) return (cached.data.files || []).length;
+  const files = sc.files.get(task.id);
+  return files ? files.size : 0;
+}
+function rvEdits(id) {
+  let n = 0;
+  for (const c of (sc.files.get(id) || new Map()).values()) n += c.add + c.del + 1;
+  return n;
+}
+// Where the review goes: a note to the working agent while the task runs,
+// "вернуть с замечанием" when the result waits for the owner.
+function rvSceneSend(task) {
+  const w = task.work;
+  if (w.state === "running") {
+    const lanes = (sc.byTask.get(task.id) || []).slice().sort((a, b) => (b.busy - a.busy) || (b.lastTs - a.lastTs));
+    const lane = lanes[0];
+    if (!lane) return null;
+    return { label: "Отправить агенту", hint: "Уйдёт запиской агенту " + scName(lane) + ": он получит её после текущего хода и ответит заново.", run: text => post("/api/agent/note", { agent: lane.id, text }) };
+  }
+  if (w.state === "review" || w.state === "stuck" || w.state === "done")
+    return { label: "Вернуть с замечаниями", hint: "Задача начнёт новый круг, замечания будут в её брифе.", run: text => post(taskPath(task, "/return"), { text }) };
+  return null;
+}
+function scReview(task) {
+  const box = $("#sc-review");
+  const key = task.id + "|" + task.updated_ms + "|" + rvEdits(task.id);
+  const cached = rv.cache.get(task.id);
+  const stale = !cached || cached.key !== key;
+  // Refetch when the task or its edits changed, at most every 4 s while it runs.
+  if (stale && !rv.loading.has(task.id)) {
+    const wait = cached ? 4000 - (Date.now() - cached.at) : 0;
+    if (wait > 0) { clearTimeout(rv.timer); rv.timer = setTimeout(scDirty, wait); }
+    else {
+      rv.loading.add(task.id);
+      getJson(taskPath(task, "/diff"))
+        .then(data => rv.cache.set(task.id, { key, at: Date.now(), data }))
+        .catch(err => rv.cache.set(task.id, { key, at: Date.now(), error: err.message }))
+        .finally(() => { rv.loading.delete(task.id); scDirty(); });
+    }
+  }
+  const send = rvSceneSend(task);
+  const sig = task.id + "|" + (cached ? cached.at : "-") + "|" + (send ? send.label + send.hint : "");
+  if (box.dataset.sig === sig) return;
+  // A comment being typed is never torn down: the panel waits until the form closes.
+  if (box.dataset.task === task.id && box.querySelector(".rv-form")) return;
+  box.dataset.sig = sig;
+  if (!cached) { box.dataset.task = task.id; box.replaceChildren(el("p", "rv-empty", "Загружаю правки…")); return; }
+  const reload = () => { rv.cache.delete(task.id); box.dataset.sig = ""; scDirty(); };
+  if (cached.error) {
+    const p = el("p", "rv-empty", "Правки не загрузились: " + cached.error + " ");
+    const again = el("button", "sc-btn", "Ещё раз"); again.type = "button"; again.onclick = reload;
+    p.append(again);
+    box.dataset.task = task.id; box.replaceChildren(p);
+    return;
+  }
+  const top = box.dataset.task === task.id ? box.scrollTop : 0;
+  box.dataset.task = task.id;
+  box.replaceChildren(rvPanel(cached.data, { scope: "task:" + task.id, scene: true, send, reload }));
+  box.scrollTop = top;
+}
+
+// Classic mode: this session's diff events of one agent, by file, in a dialog.
+function rvCollect(env) {
+  if (env.event.type !== "diff" || scIsRun(env.agent)) return;
+  const list = rv.byAgent.get(env.agent) || [];
+  list.push({ path: String(env.event.path || ""), patch: String(env.event.patch || "") });
+  rv.byAgent.set(env.agent, list);
+  rvPaneCount(env.agent);
+}
+function rvAgentModel(agent) {
+  const files = new Map();
+  for (const d of rv.byAgent.get(agent) || []) {
+    let f = files.get(d.path);
+    if (!f) { f = { path: d.path, status: d.patch.startsWith("--- /dev/null") ? "added" : "modified", added: 0, removed: 0, binary: false, truncated: false, patches: [] }; files.set(d.path, f); }
+    const c = scCount(d.patch);
+    f.added += c.add; f.removed += c.del; f.patches.push({ text: d.patch });
+  }
+  return { source: "events", files: [...files.values()], truncated: false };
+}
+function rvPaneButton(agent) {
+  const b = el("button", "rv-pane-btn", "Правки"); b.type = "button";
+  b.title = "Что этот агент менял в файлах за сессию";
+  b.onclick = () => rvOpenAgent(agent);
+  rv.paneBtns.set(agent, b);
+  rvPaneCount(agent);
+  return b;
+}
+function rvPaneCount(agent) {
+  const b = rv.paneBtns.get(agent);
+  if (!b) return;
+  const n = new Set((rv.byAgent.get(agent) || []).map(d => d.path)).size;
+  b.textContent = n ? "Правки · " + n : "Правки";
+  b.setAttribute("aria-label", n ? "Правки агента: " + n + " " + scPlural(n, "файл", "файла", "файлов") : "Правки агента: пока нет");
+}
+function rvOpenAgent(agent) {
+  let dlg = $("#rv-dlg");
+  if (!dlg) {
+    dlg = el("dialog", "rv-dlg"); dlg.id = "rv-dlg";
+    dlg.addEventListener("close", () => { rv.open = null; });
+    document.body.append(dlg);
+  }
+  rv.open = { agent };
+  const inner = el("div", "rv-dlg-in");
+  const top = el("div", "rv-dlg-top");
+  const title = el("h2", "", "Правки · " + agent); title.id = "rv-dlg-title";
+  dlg.setAttribute("aria-labelledby", title.id);
+  const refresh = el("button", "", "Обновить"); refresh.type = "button"; refresh.onclick = () => rvOpenAgent(agent);
+  const close = el("button", "", "Закрыть"); close.type = "button"; close.onclick = () => dlg.close();
+  top.append(title, refresh, close);
+  inner.append(top, rvPanel(rvAgentModel(agent), {
+    scope: "agent:" + agent, scene: false, reload: null,
+    send: { label: "Отправить агенту", hint: "Уйдёт агенту " + agent + " обычным заданием. Если он занят, дождитесь конца хода.", run: text => post("/api/prompt", { agent, text }) },
+  }));
+  dlg.replaceChildren(inner);
+  if (!dlg.open) dlg.showModal();
 }
 
 buildOrch();

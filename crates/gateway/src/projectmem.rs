@@ -54,7 +54,15 @@ impl RunProject {
         let path = run_dir.join("repo");
         let branch = format!("agentsflow/{task}");
         if !path.join(".git").exists() {
-            git(None, &["clone", "-q", &repo.to_string_lossy(), &path.to_string_lossy()])?;
+            git(
+                None,
+                &[
+                    "clone",
+                    "-q",
+                    &repo.to_string_lossy(),
+                    &path.to_string_lossy(),
+                ],
+            )?;
             let earlier = format!("origin/{branch}");
             let known = git(Some(&path), &["rev-parse", "--verify", "--quiet", &earlier]).is_ok();
             if known {
@@ -178,8 +186,24 @@ pub fn in_owner_memory(path: &str) -> bool {
 
 /// Commands that only read files.
 const READERS: &[&str] = &[
-    "cat", "head", "tail", "ls", "dir", "grep", "rg", "find", "wc", "type", "less", "more", "stat",
-    "file", "get-content", "get-childitem", "select-string", "test-path",
+    "cat",
+    "head",
+    "tail",
+    "ls",
+    "dir",
+    "grep",
+    "rg",
+    "find",
+    "wc",
+    "type",
+    "less",
+    "more",
+    "stat",
+    "file",
+    "get-content",
+    "get-childitem",
+    "select-string",
+    "test-path",
 ];
 
 /// A shell command that touches the owner's memory with anything but reading.
@@ -328,7 +352,10 @@ mod tests {
     #[test]
     fn slug_matches_claude_code() {
         assert_eq!(slug(Path::new(r"F:\Dev\sbx")), "F--Dev-sbx");
-        assert_eq!(slug(Path::new(r"F:\Dev\baitaq-cards")), "F--Dev-baitaq-cards");
+        assert_eq!(
+            slug(Path::new(r"F:\Dev\baitaq-cards")),
+            "F--Dev-baitaq-cards"
+        );
     }
 
     #[test]
@@ -342,13 +369,18 @@ mod tests {
         assert!(!writes_owner_memory(&format!("grep -n pool {note} | head")));
         assert!(writes_owner_memory(&format!("echo hi >> {note}")));
         assert!(writes_owner_memory(&format!("rm {note}")));
-        assert!(writes_owner_memory(&format!("python -c 'open(r\"{note}\",\"w\")'")));
+        assert!(writes_owner_memory(&format!(
+            "python -c 'open(r\"{note}\",\"w\")'"
+        )));
         assert!(!writes_owner_memory("cat scratch/apply.py"));
     }
 
     #[test]
     fn brief_names_the_repo_the_run_folder_and_both_memories() {
-        let repos = vec![PathBuf::from(r"F:\Dev\sbx"), PathBuf::from(r"F:\Dev\baitaq-cards")];
+        let repos = vec![
+            PathBuf::from(r"F:\Dev\sbx"),
+            PathBuf::from(r"F:\Dev\baitaq-cards"),
+        ];
         let run = Path::new(r"C:\home\departments\baitaq\runs\t1");
         let project = RunProject::new(&repos, None);
         let text = brief(&project, run);
@@ -373,17 +405,41 @@ mod tests {
         let repo = dir.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args).output().unwrap();
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&["init", "-q"]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
         std::fs::write(repo.join("CLAUDE.md"), "# Тестовый проект\n").unwrap();
         assert_eq!(describe(&repo), "Тестовый проект");
         let run = dir.join("runs/t1");
         std::fs::create_dir_all(&run).unwrap();
-        let project = RunProject::new(&[repo.clone()], None).with_worktree(&run, "t1").unwrap();
-        assert_eq!(project.worktree.as_deref(), Some(run.join("repo").as_path()));
+        let project = RunProject::new(std::slice::from_ref(&repo), None)
+            .with_worktree(&run, "t1")
+            .unwrap();
+        assert_eq!(
+            project.worktree.as_deref(),
+            Some(run.join("repo").as_path())
+        );
         assert_eq!(project.branch, "agentsflow/t1");
         assert!(run.join("repo/.git").exists());
         let text = brief(&project, &run);
@@ -393,18 +449,37 @@ mod tests {
         let commit = std::process::Command::new("git")
             .arg("-C")
             .arg(&copy)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "fix"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "fix",
+            ])
             .output()
             .unwrap();
         assert!(commit.status.success());
         project.publish().unwrap();
         git(&["rev-parse", "--verify", "refs/heads/agentsflow/t1"]);
         // The next run of the task keeps the same copy.
-        RunProject::new(&[repo.clone()], None).with_worktree(&run, "t1").unwrap();
+        RunProject::new(std::slice::from_ref(&repo), None)
+            .with_worktree(&run, "t1")
+            .unwrap();
         // A lost copy comes back on the published branch.
         std::fs::remove_dir_all(&copy).unwrap();
-        let again = RunProject::new(&[repo.clone()], None).with_worktree(&run, "t1").unwrap();
-        let log = std::process::Command::new("git").arg("-C").arg(&copy).args(["log", "--format=%s"]).output().unwrap();
+        let again = RunProject::new(std::slice::from_ref(&repo), None)
+            .with_worktree(&run, "t1")
+            .unwrap();
+        let log = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&copy)
+            .args(["log", "--format=%s"])
+            .output()
+            .unwrap();
         assert!(String::from_utf8_lossy(&log.stdout).starts_with("fix"));
         again.publish().unwrap();
         let _ = std::fs::remove_dir_all(dir);
@@ -415,11 +490,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("agentsflow-share-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("MEMORY.md"), "- [Старое](old.md) — было").unwrap();
-        let file = share_into(&dir, "ab12", "Рецепт ×2: списание 2 на заказ.\nПодробности.").unwrap();
+        let file = share_into(
+            &dir,
+            "ab12",
+            "Рецепт ×2: списание 2 на заказ.\nПодробности.",
+        )
+        .unwrap();
         let index = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
         assert!(index.starts_with("- [Старое]") && index.contains("(bot-ab12.md)"));
         assert!(index.contains("Рецепт ×2"));
-        assert!(std::fs::read_to_string(file).unwrap().contains("source: agentsflow"));
+        assert!(
+            std::fs::read_to_string(file)
+                .unwrap()
+                .contains("source: agentsflow")
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

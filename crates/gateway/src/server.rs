@@ -941,6 +941,7 @@ fn app(state: AppState) -> Router {
         .route("/api/tasks/{id}/return", post(work::owner_return))
         .route("/api/agent/note", post(work::agent_note))
         .route("/api/tasks/{id}/proposal", post(work::proposal))
+        .route("/api/tasks/{id}/diff", get(work::task_diff))
         .route("/api/tasks/{id}/files", get(work::list_files))
         .route("/api/tasks/{id}/file", get(work::download))
         .route("/api/tasks/{id}/attach", post(work::attach))
@@ -1503,6 +1504,7 @@ mod tests {
                 (axum::http::Method::POST, "/api/project/switch"),
                 (axum::http::Method::POST, "/api/agent/restart"),
                 (axum::http::Method::GET, "/api/export"),
+                (axum::http::Method::GET, "/api/tasks/t1/diff"),
                 (axum::http::Method::POST, "/api/permission"),
                 (axum::http::Method::POST, "/api/workflow/run"),
             ] {
@@ -1520,6 +1522,7 @@ mod tests {
             (axum::http::Method::POST, "/api/project/switch"),
             (axum::http::Method::POST, "/api/agent/restart"),
             (axum::http::Method::GET, "/api/export"),
+            (axum::http::Method::GET, "/api/tasks/t1/diff"),
             (axum::http::Method::POST, "/api/permission"),
             (axum::http::Method::POST, "/api/workflow/run"),
         ] {
@@ -1540,6 +1543,104 @@ mod tests {
             authenticate("", "", "main-token", &MailAgentTokens::default()),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn task_diff_route_answers_for_department_tasks_only() {
+        LocalSet::new()
+            .run_until(async {
+                let dir =
+                    std::env::temp_dir().join(format!("agentsflow-diffroute-{}", Uuid::new_v4()));
+                crate::home::init(&dir).unwrap();
+                let home = crate::home::Home::load(&dir).unwrap();
+                let runtime = Runtime::new(RuntimeOptions::default()).unwrap();
+                let manager = Manager::new(
+                    runtime.hub.clone(),
+                    runtime.agents.clone(),
+                    runtime.team.clone(),
+                );
+                let (_tx, shutdown) = watch::channel(false);
+                let mut state = AppState {
+                    projects: None,
+                    hub: runtime.hub.clone(),
+                    token: "main".into(),
+                    mail_agent_tokens: MailAgentTokens::new(),
+                    port: 1,
+                    cwd: ".".into(),
+                    agents: runtime.agents.clone(),
+                    team: runtime.team.clone(),
+                    shutdown,
+                    workflows: vec![],
+                    manager,
+                    runs: None,
+                };
+                let ask = |state: &AppState, id: &str| {
+                    work::task_diff(State(state.clone()), axum::extract::Path(id.to_owned()))
+                };
+                // Without departments there is nothing to diff.
+                assert_eq!(ask(&state, "x").await.status(), StatusCode::NOT_FOUND);
+                state.runs = Some(crate::runs::Runs::start(
+                    runtime.hub.clone(),
+                    home,
+                    crate::ledger::Ledger::memory(),
+                    crate::runs::RunEnv::default(),
+                ));
+                assert_eq!(ask(&state, "missing").await.status(), StatusCode::NOT_FOUND);
+                assert_eq!(
+                    ask(&state, "../../etc").await.status(),
+                    StatusCode::NOT_FOUND
+                );
+                // A plain board card is not a department task.
+                let plain = runtime
+                    .hub
+                    .create_task(
+                        AgentId::from("owner"),
+                        NewTask {
+                            title: "card".into(),
+                            description: String::new(),
+                            assignee: None,
+                            status: None,
+                            labels: vec![],
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(ask(&state, &plain.id).await.status(), StatusCode::NOT_FOUND);
+                let task = runtime
+                    .hub
+                    .create_work(
+                        AgentId::orchestrator(),
+                        "t",
+                        String::new(),
+                        agentsflow_events::WorkInfo {
+                            department: "general".into(),
+                            state: agentsflow_events::WorkState::Review,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                runtime.hub.publish(
+                    AgentId::from(format!("general:doer:{}", task.id)),
+                    "run",
+                    agentsflow_events::Event::Diff {
+                        path: "notes.md".into(),
+                        patch: "--- /dev/null\n+++ notes.md\n@@ new file @@\n+a\n".into(),
+                    },
+                );
+                let response = ask(&state, &task.id).await;
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(body["source"], "events");
+                assert_eq!(body["truncated"], false);
+                assert_eq!(body["files"][0]["path"], "notes.md");
+                assert_eq!(body["files"][0]["status"], "added");
+                assert_eq!(body["files"][0]["added"], 1);
+                assert_eq!(body["files"][0]["patches"][0]["agent"], "doer");
+                let _ = std::fs::remove_dir_all(dir);
+            })
+            .await;
     }
 
     struct NoAgent;
