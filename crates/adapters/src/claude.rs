@@ -108,7 +108,7 @@ pub fn map_output(out: &ClaudeOutput) -> Vec<Event> {
     }
 }
 
-fn tool_diff(name: &str, input: &Value) -> Option<Event> {
+pub(crate) fn tool_diff(name: &str, input: &Value) -> Option<Event> {
     let path = input.get("file_path")?.as_str()?;
     let lines = |text: &str, prefix: char| {
         text.lines()

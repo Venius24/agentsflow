@@ -3,6 +3,7 @@ use crate::{
     team::{AccessMode, Member, MemberSandbox, Team},
 };
 use agentsflow_adapters::{
+    acp::{AcpOptions, AcpSession},
     claude::{ClaudeOptions, ClaudeSession},
     codex::{CodexOptions, CodexSession, SandboxMode},
 };
@@ -142,6 +143,35 @@ pub fn spawn_member(hub: &Hub, member: &Member, env: SpawnEnv) -> (Actor, JoinHa
                 })
             },
         ),
+        AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode => {
+            let command = match member.kind {
+                AgentKind::Gemini => vec!["gemini".into(), "--acp".into()],
+                AgentKind::Opencode => vec!["opencode".into(), "acp".into()],
+                _ => member.command.clone().unwrap_or_default(),
+            };
+            if model.is_some() {
+                eprintln!("warning: ACP model setting is ignored");
+            }
+            crate::hub::spawn_guarded(
+                hub.clone(),
+                member.id.clone(),
+                yes,
+                Guard {
+                    cwd: cwd.clone(),
+                    enabled: member.guard && !bypass,
+                    read_only: false,
+                },
+                smart,
+                move || {
+                    AcpSession::start(AcpOptions {
+                        command: command.clone(),
+                        cwd: Some(workdir.clone().unwrap_or_else(|| cwd.clone())),
+                        mail: mail.clone(),
+                        diagnostic: Some(|line| crate::diag::diag("WARN", &format!("ACP: {line}"))),
+                    })
+                },
+            )
+        }
         AgentKind::Codex => {
             let sandbox = member.sandbox.map(|sandbox| match sandbox {
                 MemberSandbox::ReadOnly => SandboxMode::Read_only,
@@ -210,6 +240,7 @@ impl Runtime {
             let model = member.model.clone().or_else(|| match member.kind {
                 AgentKind::Claude => options.claude_model.clone(),
                 AgentKind::Codex => options.codex_model.clone(),
+                AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode => None,
             });
             let effort = member.effort.clone();
             let mail_config = mail.clone().map(|mut config| {

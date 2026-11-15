@@ -15,6 +15,8 @@ The workspace version is `0.1.0`, but no release has been published yet. Everyth
 - Russian and English web page, with a language switch.
 - Live message and thinking text via transient SSE events, with `AGENTSFLOW_STREAM=off` as a fallback.
 - A changes view for agent sessions and department tasks, with file and line comments.
+- Added an ACP client for Gemini, OpenCode and configurable ACP commands.
+
 - Cargo workspace with an event model, a Claude Code adapter and a Codex adapter behind one `Agent` trait, and a hub with an SSE server and a web page.
 - Workflow engine: steps, handoff between agents, review loops (the verdict must be the last line of the output), diffs synthesized for Claude edits, and headless `agentsflow flow`.
 - Event journal (`.agentsflow/events.jsonl`, on by default; `--log FILE`, `--no-log`) and restoring the last events after a restart.

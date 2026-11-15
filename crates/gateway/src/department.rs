@@ -360,7 +360,7 @@ impl Department {
                 // department rule "put the result into result.md" and overwrites
                 // the doer's result with its review.
                 let reviewer_only = has_role(member, "reviewer") && !has_role(member, "doer");
-                if reviewer_only {
+                if reviewer_only && matches!(member.kind, AgentKind::Claude | AgentKind::Codex) {
                     member.sandbox = Some(MemberSandbox::ReadOnly);
                 } else if member.kind == AgentKind::Codex {
                     member.sandbox = Some(MemberSandbox::WorkspaceWrite);
@@ -629,6 +629,7 @@ impl Department {
                 // Keeps the id and roles: steps may name the doer literally.
                 if has_role(member, "doer") && member.kind == AgentKind::Codex {
                     member.kind = spare.kind;
+                    member.command = spare.command.clone();
                     member.model = spare.model.clone();
                     member.effort = spare.effort.clone();
                     member.mode = spare.mode;
@@ -732,6 +733,25 @@ agent = "@doer"
 prompt = "{review.output}"
 next = "review"
 "#;
+
+    #[test]
+    fn parses_acp_kinds_in_department() {
+        for (kind, command) in [
+            ("gemini", ""),
+            ("opencode", ""),
+            ("acp", "command = [\"gemini\", \"--acp\"]\n"),
+        ] {
+            let text = SAMPLE.replace(
+                "kind = \"claude\"",
+                &format!("kind = \"{kind}\"\n{command}"),
+            );
+            let department = Department::parse(&text, Path::new("pr")).unwrap();
+            assert!(matches!(
+                department.team.members[0].kind,
+                AgentKind::Gemini | AgentKind::Opencode | AgentKind::Acp
+            ));
+        }
+    }
 
     #[test]
     fn parses_with_defaults() {

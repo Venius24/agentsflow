@@ -122,6 +122,7 @@ pub fn apply(team: &mut Team, spec: &mut Spec, preset: &Preset, max_loops: usize
         Some(index) => {
             let member = &mut team.members[index];
             member.kind = AgentKind::Claude;
+            member.command = None;
             member.model = Some(preset.model.into());
             member.effort = Some(preset.effort.into());
             member.title = TITLE.into();
@@ -138,6 +139,7 @@ pub fn apply(team: &mut Team, spec: &mut Spec, preset: &Preset, max_loops: usize
             team.members.push(Member {
                 id: AgentId::from(id.as_str()),
                 kind: AgentKind::Claude,
+                command: None,
                 model: Some(preset.model.into()),
                 effort: Some(preset.effort.into()),
                 mode: Some(AccessMode::Smart),

@@ -335,3 +335,16 @@ kill_hung = true
 - Сайт просит код: агент спрашивает его у хозяина обычным вопросом, Chrome ждёт открытым, следующий запуск вводит код в ту же форму.
 - Капчу никто не обходит: агент сообщает о ней хозяину. При неверном пароле агент не пробует снова, чтобы не заблокировать учётную запись.
 - Профиль браузера лежит в `<дом>/.agentsflow/browser/<отдел>`. Нужны Chrome и Node.js (`npx`).
+
+
+### ACP agents
+
+Team and department members can use `kind = "gemini"` (`gemini --acp`),
+`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
+`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
+but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
+report token usage or cost, so spending limits cannot account for these turns.
+The mail and task MCP server is passed to `session/new` when mail is enabled;
+availability depends on the agent. The guard sees only permission requests the
+agent sends and their supplied input, including command text when present; it
+cannot inspect tools the agent executes without requesting permission.

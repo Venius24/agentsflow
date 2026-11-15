@@ -48,6 +48,9 @@ pub struct Envelope {
 pub enum AgentKind {
     Claude,
     Codex,
+    Acp,
+    Gemini,
+    Opencode,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
