@@ -72,6 +72,7 @@ Everything in 0.1.0 is the history up to the first release, summarized from the 
 - `.gitattributes` was added so that the repository and checkouts use LF line endings.
 - The page no longer drags the view back down while you scroll up.
 - In departments mode the page always opens on the "Сцена".
+- In departments mode the classic views left the page. The "Сцена" gained "Входящие" ("Inbox": orchestrator replies, task results and notices, with a reply to the orchestrator) and "Отделы и правила" ("Departments and rules": rule proposals, departments with spend and limits, schedules, recent rules, export). Add `?classic=1` to the address to bring back the classic button.
 
 [Unreleased]: https://github.com/Venius24/agentsflow/compare/v0.1.0...master
 [0.1.0]: https://github.com/Venius24/agentsflow/releases/tag/v0.1.0
