@@ -2696,6 +2696,7 @@ function scName(lane) {
   const m = scMember(lane);
   if (!m) return lane.member;
   if (m.kind === "codex") return "Codex";
+  if (m.kind !== "claude") return m.kind || lane.member;
   const model = String(m.model || "");
   for (const [re, name] of [[/opus/i, "Opus"], [/sonnet/i, "Sonnet"], [/haiku/i, "Haiku"], [/fable/i, "Fable"]]) if (re.test(model)) return name;
   return "Claude";

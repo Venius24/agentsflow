@@ -37,6 +37,8 @@ pub struct OrchestratorConfig {
     #[serde(default = "default_kind")]
     pub kind: AgentKind,
     #[serde(default)]
+    pub command: Option<Vec<String>>,
+    #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
@@ -48,6 +50,7 @@ impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
             kind: default_kind(),
+            command: None,
             model: None,
             effort: None,
             enabled: true,
@@ -186,6 +189,13 @@ impl Config {
         if !(1..=256).contains(&config.memory_digest_kb) {
             bail!("memory_digest_kb must be 1..=256");
         }
+        if config.orchestrator.kind == AgentKind::Acp
+            && config.orchestrator.command.as_ref().is_none_or(|command| {
+                command.is_empty() || command.iter().any(|part| part.trim().is_empty())
+            })
+        {
+            bail!("orchestrator: acp requires a non-empty command array");
+        }
         config.watch.port()?;
         if !(10..=3600).contains(&config.watch.interval_secs) {
             bail!("watch.interval_secs must be 10..=3600");
@@ -267,6 +277,18 @@ impl Home {
         for dept in self.departments.values() {
             warnings.extend(dept.warnings());
             for member in &dept.team.members {
+                if matches!(
+                    member.kind,
+                    AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode
+                ) {
+                    warnings.push(format!(
+                        "{}: {} does not report token usage or cost",
+                        dept.id, member.id
+                    ));
+                    if member.model.is_some() {
+                        warnings.push(format!("{}: {} ACP model is ignored", dept.id, member.id));
+                    }
+                }
                 if member.kind != AgentKind::Codex {
                     continue;
                 }
@@ -508,6 +530,9 @@ pub fn print_check(home: &Home) {
                 let kind = match m.kind {
                     AgentKind::Claude => "claude",
                     AgentKind::Codex => "codex",
+                    AgentKind::Acp => "acp",
+                    AgentKind::Gemini => "gemini",
+                    AgentKind::Opencode => "opencode",
                 };
                 format!(
                     "{}({kind}{}; {})",

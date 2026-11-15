@@ -24,6 +24,8 @@ pub enum MemberSandbox {
 pub struct Member {
     pub id: AgentId,
     pub kind: AgentKind,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub mode: Option<AccessMode>,
@@ -93,6 +95,7 @@ impl Team {
         team.members.retain(|member| match member.kind {
             AgentKind::Claude => claude,
             AgentKind::Codex => codex,
+            AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode => false,
         });
         if !team.members.iter().any(|member| member.lead) {
             if let Some(first) = team.members.first_mut() {
@@ -114,6 +117,30 @@ impl Team {
             if !ids.insert(&member.id) {
                 bail!("agent {}: duplicate id", member.id);
             }
+            if matches!(
+                member.kind,
+                AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode
+            ) {
+                if member.sandbox.is_some() {
+                    bail!("agent {}: sandbox is not supported for ACP", member.id);
+                }
+                if member.effort.is_some() {
+                    bail!("agent {}: effort is not supported for ACP", member.id);
+                }
+                if member.kind == AgentKind::Acp
+                    && member
+                        .command
+                        .as_ref()
+                        .is_none_or(|c| c.is_empty() || c.iter().any(|s| s.trim().is_empty()))
+                {
+                    bail!(
+                        "agent {}: acp requires a non-empty command array",
+                        member.id
+                    );
+                }
+            } else if member.command.is_some() {
+                bail!("agent {}: command applies to acp only", member.id);
+            }
             // Claude has no sandbox: read-only is enforced by the guard.
             if member.kind == AgentKind::Claude
                 && member.sandbox == Some(MemberSandbox::WorkspaceWrite)
@@ -131,6 +158,7 @@ impl Team {
                     AgentKind::Claude => {
                         matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh" | "max")
                     }
+                    AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode => false,
                     AgentKind::Codex => {
                         matches!(effort.as_str(), "low" | "medium" | "high" | "xhigh")
                     }
@@ -191,6 +219,9 @@ pub fn format_compact(team: &Team) -> String {
             let kind = match member.kind {
                 AgentKind::Claude => "claude",
                 AgentKind::Codex => "codex",
+                AgentKind::Acp => "acp",
+                AgentKind::Gemini => "gemini",
+                AgentKind::Opencode => "opencode",
             };
             let mut details = kind.to_string();
             if let Some(model) = &member.model {
@@ -235,6 +266,15 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         [command, spec] if command == "check" => {
             let team = Team::load(spec)?;
             print_team(&team);
+            for member in &team.members {
+                if matches!(
+                    member.kind,
+                    AgentKind::Acp | AgentKind::Gemini | AgentKind::Opencode
+                ) && member.model.is_some()
+                {
+                    println!("WARNING: agent {}: ACP model is ignored", member.id);
+                }
+            }
             if let Some(warning) = bypass_warning(&team) {
                 println!("{warning}");
                 println!("guard inactive in bypass mode");
@@ -458,5 +498,31 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod acp_config_tests {
+    use super::*;
+    #[test]
+    fn acp_kinds_and_validation() {
+        for kind in ["gemini", "opencode"] {
+            assert!(
+                Team::from_toml(&format!(
+                    "[[agent]]\nid = \"agent\"\nkind = \"{kind}\"\nlead = true\n"
+                ))
+                .is_ok()
+            );
+        }
+        let base = "[[agent]]\nid = \"agent\"\nkind = \"acp\"\nlead = true\n";
+        assert!(Team::from_toml(base).is_err());
+        assert!(Team::from_toml(&format!("{base}command = [\"gemini\", \"--acp\"]\n")).is_ok());
+        assert!(Team::from_toml(&format!("{base}command = []\n")).is_err());
+        assert!(
+            Team::from_toml(&format!(
+                "{base}command = [\"gemini\"]\nsandbox = \"read-only\"\n"
+            ))
+            .is_err()
+        );
     }
 }

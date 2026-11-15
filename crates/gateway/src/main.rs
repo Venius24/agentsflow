@@ -43,7 +43,7 @@ async fn main() -> ExitCode {
     }
     if args.first().is_some_and(|arg| arg == "doctor") {
         let Some(options) = doctor::Options::parse(&args[1..]) else {
-            eprintln!("Usage: agentsflow doctor [--live] [--codex-bin PATH]");
+            eprintln!("Usage: agentsflow doctor [--live] [--codex-bin PATH] [--home DIR]");
             return ExitCode::from(2);
         };
         return if doctor::run(options).await {

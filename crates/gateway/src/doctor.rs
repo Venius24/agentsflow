@@ -3,6 +3,7 @@
 
 use agentsflow_adapters::{
     Agent,
+    acp::{AcpOptions, AcpSession},
     claude::{ClaudeOptions, ClaudeSession},
     codex::{CodexOptions, CodexSession},
 };
@@ -16,6 +17,7 @@ const LIVE_TIMEOUT: Duration = Duration::from_secs(120);
 pub struct Options {
     pub live: bool,
     pub codex_bin: Option<PathBuf>,
+    pub home: Option<PathBuf>,
 }
 
 impl Options {
@@ -23,11 +25,19 @@ impl Options {
         let mut options = Self {
             live: false,
             codex_bin: None,
+            home: None,
         };
         let mut args = args.iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--live" => options.live = true,
+                "--home" => {
+                    options.home = Some(
+                        args.next()
+                            .filter(|v| !v.is_empty() && !v.starts_with("--"))?
+                            .into(),
+                    );
+                }
                 "--codex-bin" => {
                     let value = args
                         .next()
@@ -142,6 +152,22 @@ async fn live_turn<A: Agent>(label: &str, mut agent: A) -> Line {
     }
 }
 
+fn team_uses(team: &crate::team::Team, name: &str) -> bool {
+    team.members.iter().any(|member| {
+        matches!(
+            (name, member.kind),
+            ("gemini", agentsflow_events::AgentKind::Gemini)
+                | ("opencode", agentsflow_events::AgentKind::Opencode)
+        ) || (member.kind == agentsflow_events::AgentKind::Acp
+            && member
+                .command
+                .as_ref()
+                .and_then(|c| c.first())
+                .and_then(|c| std::path::Path::new(c).file_stem())
+                .is_some_and(|c| c.to_string_lossy().eq_ignore_ascii_case(name)))
+    })
+}
+
 pub async fn run(options: Options) -> bool {
     let mut lines = Vec::new();
     let (git, _) = tool_line(
@@ -168,6 +194,53 @@ pub async fn run(options: Options) -> bool {
         "Установите Codex или укажите --codex-bin ПУТЬ либо переменную CODEX_BIN.",
     );
     lines.push(codex);
+    let configured_team = crate::team::Team::load("team.toml").ok();
+    let home = match options.home.as_deref() {
+        Some(path) => match crate::home::Home::load(path) {
+            Ok(home) => Some(home),
+            Err(error) => {
+                lines.push(Line::Fail(format!("home: {error:#}")));
+                None
+            }
+        },
+        None => None,
+    };
+    let acp_tools = [("gemini", "--acp"), ("opencode", "acp")];
+    let mut found_acp = Vec::new();
+    for (name, arg) in acp_tools {
+        let names = [
+            name.to_owned(),
+            format!("{name}.exe"),
+            format!("{name}.cmd"),
+        ];
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        if let Some(bin) = find_on_path(&names) {
+            let (line, found) = tool_line(name, Some(bin), "");
+            lines.push(line);
+            if let Some(bin) = found {
+                found_acp.push((name, arg, bin));
+            }
+        } else {
+            let required = configured_team
+                .as_ref()
+                .is_some_and(|team| team_uses(team, name))
+                || home.as_ref().is_some_and(|home| {
+                    home.departments
+                        .values()
+                        .any(|department| team_uses(&department.team, name))
+                        || matches!(
+                            (name, home.config.orchestrator.kind),
+                            ("gemini", agentsflow_events::AgentKind::Gemini)
+                                | ("opencode", agentsflow_events::AgentKind::Opencode)
+                        )
+                });
+            lines.push(if required {
+                Line::Fail(format!("{name}: not found"))
+            } else {
+                Line::Info(format!("{name}: not found"))
+            });
+        }
+    }
     let telegram = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     lines.push(Line::Info(format!(
         "Telegram: токен {}, список пользователей {} (значения не показываются)",
@@ -209,7 +282,7 @@ pub async fn run(options: Options) -> bool {
         if codex_bin.is_some() {
             match CodexSession::start(CodexOptions {
                 bin: codex_bin,
-                cwd: Some(dir),
+                cwd: Some(dir.clone()),
                 ..CodexOptions::default()
             })
             .await
@@ -218,6 +291,19 @@ pub async fn run(options: Options) -> bool {
                 Err(error) => lines.push(Line::Fail(format!(
                     "codex: не удалось начать сессию: {error:#}"
                 ))),
+            }
+        }
+        for (name, arg, bin) in found_acp {
+            match AcpSession::start(AcpOptions {
+                command: vec![bin.to_string_lossy().into_owned(), arg.into()],
+                cwd: Some(dir.clone()),
+                mail: None,
+                diagnostic: Some(|line| crate::diag::diag("WARN", &format!("ACP: {line}"))),
+            })
+            .await
+            {
+                Ok(session) => lines.push(live_turn(name, session).await),
+                Err(error) => lines.push(Line::Fail(format!("{name}: {error:#}"))),
             }
         }
     } else {
@@ -245,18 +331,37 @@ mod tests {
             Options::parse(&args(&[])),
             Some(Options {
                 live: false,
-                codex_bin: None
+                codex_bin: None,
+                home: None
             })
         );
         assert_eq!(
             Options::parse(&args(&["--live", "--codex-bin", "x"])),
             Some(Options {
                 live: true,
-                codex_bin: Some("x".into())
+                codex_bin: Some("x".into()),
+                home: None
             })
         );
         assert!(Options::parse(&args(&["--codex-bin"])).is_none());
         assert!(Options::parse(&args(&["--bogus"])).is_none());
+    }
+
+    #[test]
+    fn detects_home_department_agents() {
+        let root = std::env::temp_dir().join(format!("agentsflow-doctor-{}", uuid::Uuid::new_v4()));
+        let department = root.join("departments").join("general");
+        std::fs::create_dir_all(&department).unwrap();
+        std::fs::write(root.join("agentsflow.toml"), "").unwrap();
+        std::fs::write(department.join("department.toml"), "id = \"general\"\ntitle = \"General\"\ndescription = \"Test\"\n[[agent]]\nid = \"a\"\nkind = \"gemini\"\nroles = [\"doer\"]\n[[agent]]\nid = \"b\"\nkind = \"opencode\"\nroles = [\"reviewer\"]\n[[step]]\nid = \"do\"\nagent = \"a\"\nprompt = \"{brief}\"\n").unwrap();
+        let home = crate::home::Home::load(&root).unwrap();
+        let team = &home.departments["general"].team;
+        assert!(team_uses(team, "gemini") && team_uses(team, "opencode"));
+        assert_eq!(
+            Options::parse(&args(&["--home", "my-home"])).unwrap().home,
+            Some("my-home".into())
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

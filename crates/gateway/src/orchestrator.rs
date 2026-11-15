@@ -316,6 +316,7 @@ impl Engine {
         let member = Member {
             id: id.clone(),
             kind: config.kind,
+            command: config.command.clone(),
             model: config.model.clone(),
             effort: config.effort.clone(),
             mode: Some(AccessMode::Smart),

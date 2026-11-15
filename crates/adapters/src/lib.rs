@@ -1,5 +1,6 @@
 //! Адаптеры агентов.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
 

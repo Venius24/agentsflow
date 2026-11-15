@@ -322,3 +322,16 @@ How it works:
 - If a site asks for a code, the agent asks the owner for it as an ordinary question, Chrome stays open and waits, and the next run enters the code in the same form.
 - Nobody gets around a captcha: the agent reports it to the owner. On a wrong password the agent does not try again, so as not to lock the account.
 - The browser profile is in `<home>/.agentsflow/browser/<department>`. Chrome and Node.js (`npx`) are required.
+
+
+### ACP agents
+
+Team and department members can use `kind = "gemini"` (`gemini --acp`),
+`kind = "opencode"` (`opencode acp`), or `kind = "acp"` with a required
+`command = ["gemini", "--acp"]`. ACP members accept `mode` and `guard`,
+but do not support `sandbox` or `effort`. `model` is ignored. ACP does not
+report token usage or cost, so spending limits cannot account for these turns.
+The mail and task MCP server is passed to `session/new` when mail is enabled;
+availability depends on the agent. The guard sees only permission requests the
+agent sends and their supplied input, including command text when present; it
+cannot inspect tools the agent executes without requesting permission.

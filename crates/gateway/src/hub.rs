@@ -2646,6 +2646,24 @@ mod tests {
             .await;
     }
     #[tokio::test]
+    async fn startup_failure_is_published_and_clears_busy() {
+        LocalSet::new().run_until(async {
+            let hub = Hub::new();
+            let (_, mut events) = hub.subscribe();
+            let (actor, task) = spawn(hub, AgentId::from("acp"), false, || async {
+                Err::<Fake, _>(anyhow::anyhow!("агент не ответил; войдите в него в терминале"))
+            });
+            actor.prompt("hello".into()).await.unwrap();
+            wait_event(&mut events, |event| matches!(event, Event::Error { message } if message.contains("терминале"))).await;
+            wait_event(&mut events, |event| matches!(event, Event::Done { reason } if reason == "error")).await;
+            while actor.state().busy { tokio::task::yield_now().await; }
+            assert!(actor.state().last_error.unwrap().contains("терминале"));
+            actor.shutdown().await;
+            task.await.unwrap();
+        }).await;
+    }
+
+    #[tokio::test]
     async fn error_resets_session() {
         LocalSet::new()
             .run_until(async {

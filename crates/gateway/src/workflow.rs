@@ -125,6 +125,9 @@ fn roster(team: &crate::team::Team) -> String {
             let kind = match member.kind {
                 agentsflow_events::AgentKind::Claude => "claude",
                 agentsflow_events::AgentKind::Codex => "codex",
+                agentsflow_events::AgentKind::Acp => "acp",
+                agentsflow_events::AgentKind::Gemini => "gemini",
+                agentsflow_events::AgentKind::Opencode => "opencode",
             };
             format!(
                 "- {} ({kind}, {} {}): {}; roles: {}{}",
