@@ -9,6 +9,7 @@ mod export;
 mod guard;
 mod home;
 mod hub;
+mod i18n;
 mod ledger;
 mod mail;
 mod mail_mcp;

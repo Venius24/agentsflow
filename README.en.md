@@ -218,6 +218,8 @@ The check parses commands and known wrappers approximately, does not run any pro
 
 ## Telegram
 
+The bot defaults to Russian. Set `AGENTSFLOW_LANG=en` for English or `AGENTSFLOW_LANG=ru` for Russian; `/lang` switches the language for the current chat and remembers it across restarts.
+
 Create a bot with @BotFather and give its token only through the environment variable `AGENTSFLOW_TELEGRAM_TOKEN`. In `AGENTSFLOW_TELEGRAM_USERS`, list the numeric IDs of the users you trust, separated by commas; you can find your own ID with @userinfobot. Start `agentsflow serve --telegram`. The optional `AGENTSFLOW_TELEGRAM_API` changes the Bot API address for testing.
 
 The bridge shows the team and the state of agents, and sends permission requests with buttons, workflow results, mail to the orchestrator that was submitted for review, stuck tasks, errors, and the end of long turns. Dangerous commands require separate confirmation; BYPASS requires confirmation before the first task.
