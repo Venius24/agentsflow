@@ -79,6 +79,7 @@ The server prints one line like `agentsflow: http://127.0.0.1:7878/?token=…`. 
 
 - Each team member has its own column with a feed, settings and a prompt field; the orchestrator is on the right. If the columns do not fit, the container scrolls horizontally.
 - Permission requests (running a command, writing a file) arrive as a card with "Разрешить" ("Allow") and "Отклонить" ("Deny") buttons. Diffs are shown before you decide.
+- The Changes button in an agent's column collects its session changes by file, with line numbers where the agent supplied them. Select a line number and write a comment; comments are sent to the agent as one task (`/api/prompt`), with `path:line` and a quotation of the line. The browser stores unsent comments. In departments mode the task's Changes tab offers the same feature ([docs/departments.en.md](docs/departments.en.md#changes)).
 - On the right is the orchestrator: pick a workflow, enter a task and start it.
 
 By default Codex runs in the `read-only` sandbox and asks permission for every write. For autonomous work use `--sandbox workspace-write`; to stop answering by hand use `--yes` (it automatically allows everything, so use it deliberately).
@@ -149,6 +150,8 @@ Every event is an `Envelope { session, agent, seq, ts_ms, event }`, where `agent
 
 `message` · `thinking` · `tool_call` · `tool_result` · `diff` · `permission_request` · `permission_resolved` · `done` · `error` · `handoff` · `workflow` · `note`
 
+During a response, SSE sends temporary `stream_delta` events with `block_id`, `thinking`, and the next fragment of `text`. A `stream_end` with the same `block_id` and `thinking` associates the draft with the next complete `message` or `thinking` event. Complete events keep their existing format. Temporary events are not stored in the journal or replay history: their `seq` equals the last recorded sequence, and SSE gives them no `id`. After reconnecting, an unfinished block appears from the next fragment or in full when it finishes. `AGENTSFLOW_STREAM=off` disables the fragment stream.
+
 `thinking` is what the agent thought through before acting. Claude sends a short summary of its thoughts (CLI flag `--thinking-display summarized`); Codex sends reasoning headings (`model_reasoning_summary = "detailed"`). Thoughts arrive only when the model decided to think, so a simple task may have none. `AGENTSFLOW_THINKING=off` stops requesting them; this is needed if a new Claude CLI version drops the undocumented flag. `note` is a note from the owner to a department agent and what became of it: `queued`, `delivered`, `dropped`.
 
 Codex diffs come from its `fileChange`. For Claude, a patch is synthesized from `Write`/`Edit`/`MultiEdit` and shown before the permission request.
@@ -167,7 +170,7 @@ All `/api/*` routes require a token: the query parameter `?token=…` or the `x-
 
 | Method and path | Purpose |
 |---|---|
-| `GET /api/events` | SSE: first the whole history (up to 5000 events), then new ones. `id` = `seq`. |
+| `GET /api/events` | SSE: first the whole history (up to 5000 events), then new ones. Durable events have `id` = `seq`; temporary stream events have no `id`. |
 | `POST /api/prompt` `{agent, text}` | Send a prompt to an agent. 202 / 409 (busy) / 404 / 400. |
 | `POST /api/agent/interrupt` `{agent}` | Interrupt a member's current turn. 200 / 404 / 409 (not busy); main token only. |
 | `POST /api/agent/restart` `{agent}` | Stop the turn and restart the session. 200 / 404 / 409; main token only. |
@@ -238,6 +241,7 @@ Everything on the page is also available in the bot, under the same names. At th
 | Start and stop a workflow | "Workflow" | "Ещё" → "Запуск workflow" ("Run workflow"), `/run`; ⏹ in the live message |
 | Statistics | "Статистика" ("Statistics") | "Ещё" → "Статистика", `/stats` |
 | What the agent did | Journal in the column | "Ещё" → "Что делал агент" ("What the agent did"), `/log <name> [n]` |
+| Task changes (departments mode) | Changes tab: files, changes and line comments | "🧾 Changes" in the task card: file list and a `.diff` document; line comments are available only on the page |
 | Export | Export button | "Ещё" → "Экспорт", `/export md\|jsonl`; the file goes through Telegram's servers, so the bot asks you to confirm once |
 | Silence | Not available | `/mute`, `/unmute`, "Ещё" |
 | Page token and access link | The address in the console | Not available: the link stays on the computer |
@@ -346,7 +350,7 @@ Layout:
 ## Limitations
 
 - CLI protocols are unstable: the crates are tied to `claude` 2.1.x and `codex` 0.16x versions.
-- Messages arrive whole, without token streaming.
+- Live text depends on the CLI's partial event format; set `AGENTSFLOW_STREAM=off` if a CLI update is incompatible.
 - One working folder and one long-lived session per agent.
 
 ## Security

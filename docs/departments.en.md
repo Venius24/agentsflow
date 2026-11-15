@@ -222,6 +222,19 @@ Delivery rules:
 
 If a task came from an issue or a comment, the gateway writes a closing comment of a fixed form there: the first line of the summary, a link to the PR, the spend; `@name` mentions are defused. In repositories with `own = true` the comment goes out at once; in other people's repositories it waits for your "Опубликовать комментарий" ("Post the comment") or "Не нужно" ("Not needed") in the card. The comment is written once per task: a second round after "Ещё круг" adds no new one, and "Не нужно" cancels it for good.
 
+## Changes
+
+The Changes tab in the task card on the Scene shows everything the task changed: files and their added and removed line counts on the left, and the changes with line numbers and `+` and `−` markers on the right. The markers do not rely on color alone. On a phone, the file list moves above the changes.
+
+The page shows the source above the list:
+
+- **git.** For a department with `worktree = true`, the gateway compares the `agentsflow/<task>` branch in `runs/<task>/repo` with the commit it branched from (the copy's `origin/HEAD`, or a branch from `[source] branches`, `main`, or `master`). Only committed changes appear. The gateway compares commits and does not read the working tree, so copy settings such as filters and fsmonitor do not run external programs in the gateway. It does not read a copy that is a link or whose `.git` is a file pointing elsewhere. Each git call has a 20-second limit.
+- **Agent feed.** Without a copy, or until the branch has commits, changes come from the task's agent feed, separately and in order. Claude's changes have no line numbers, and a change that was later rejected still appears in the feed; the page explains this.
+
+Up to 2 MB of patch text is returned. The file list and line counts are complete; a file with missing text is marked as incomplete.
+
+To comment, select a line number (or "Comment on file"), write a comment, and select "Add". Comments collect at the bottom and are sent together: while the task is running, as a note to its active agent (`/api/agent/note`); when it awaits acceptance, is stuck, or is done, with "Return with comments" (`/api/tasks/{id}/return`, starting another round). The agent receives each comment with `path:line`, a quotation of the line, and your text. The browser stores unsent comments.
+
 ## Gateway watchdog
 
 `agentsflow watch --home DIR` is a separate small process that watches the gateway from outside. Every `interval_secs` it asks `GET /api/alive` (the only route without a token; it answers only `{ok, version}`). If the gateway is silent `misses` times in a row, the watchdog writes to you in Telegram directly, not through the gateway, and with `kill_hung = true` it also terminates the hung process so that autostart brings up a new one (no more than once in 5 minutes and no more than three times in a row; only the `agentsflow` process listening on the port is terminated). When the gateway answers again, you get "снова работает" ("working again"). If Telegram is unavailable at that moment, the message is not lost: the watchdog repeats it at every following look (for up to an hour, at most 20 messages). The watchdog reads only `agentsflow.toml`, so a broken `department.toml` does not stop it. After a restart the gateway itself sends which runs were interrupted.
@@ -256,6 +269,7 @@ The watchdog needs the same `AGENTSFLOW_TELEGRAM_TOKEN` and `AGENTSFLOW_TELEGRAM
 | Files for a task | send a file, photo or album with a caption, or in the next message |
 | Files for an answer | tap "✍ Ответить" or "Вернуть с замечанием" and send a file |
 | A task's summary and files | "📖 Читать итог" ("📖 Read the summary") and "📎 Файлы" ("📎 Files") in the card and the notification, `/files` |
+| Task changes | "🧾 Changes" in the card: files with line counts in the caption and all changes as a `.diff` document. Line comments are available on the page. |
 | Orchestrator questions | the "✍ Ответить" card |
 | New department | the "Создать отдел / В общий" ("Create department / To the common one") card |
 | Acceptance | "Принять", "Ещё круг", "Вернуть с замечанием" |
@@ -286,6 +300,7 @@ The reader shows `result.md` and the text files from `artifacts/` page by page r
 | `GET /api/alive` | without a token: `{ok, version}`, for the watchdog |
 | `POST /api/agent/note` `{agent, text, files?}` | a note to the agent of a running task (`agent` of the form `department:member:task`); files are copied into the run folder and the note names the copies; 409 if the task is not running |
 | `GET /api/tasks/{id}/result` | the text of result.md |
+| `GET /api/tasks/{id}/diff` | task changes by file: `{source, branch?, base?, note?, truncated, files: [{path, status, added, removed, binary, truncated, patches: [{agent?, text}]}]}`; `source` is `git`, `events`, or `none`; patch text is limited to 2 MB and the file list is complete; 404 for an unknown task or a card without a department |
 | `POST /api/upload?name=…&batch=…` | the request body is a file (up to 50 MB); it goes into the inbox `.agentsflow/inbox/<batch>/`, the response is `{path, name, size, batch}` |
 | `POST /api/tasks/{id}/attach` `{files}` | attach files from the inbox to a task: the next round gets them in `inputs/owner/` |
 | `GET /api/tasks/{id}/files` | the task's files: the owner's attachments, `result.md`, the run's `artifacts/` |

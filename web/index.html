@@ -63,6 +63,7 @@
   .export { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .export button { font-size: 12px; padding: 3px 9px; }
   .export-error { color: var(--alert); font-size: 12px; }
+  .language-switch { flex: none; font-size: 12px; padding: 3px 6px; white-space: nowrap; }
 
   .stage { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
   main { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px 16px; overflow-x: auto; overflow-y: hidden; }
@@ -252,6 +253,7 @@
   .board-columns { display: flex; align-items: flex-start; gap: 10px; overflow-x: auto; }
   .board-column { flex: 1 1 0; min-width: 190px; background: var(--raised); }
   .board-column h2 { display: flex; align-items: center; gap: 6px; }
+  .board-column h2 { overflow-wrap: anywhere; }
   .board-more { margin-top: 6px; }
   .board-meta.who { display: flex; align-items: center; gap: 8px; }
   .dash-more summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
@@ -609,6 +611,7 @@
   }
   @media (max-width: 520px) {
     .sc-bar { padding: 0 8px 0 6px; gap: 6px; }
+    .sc-bar .language-switch { padding: 3px; font-size: 11px; }
     .sc .sc-bar .sc-seg button { padding: 0 9px; }
     .sc-bar .sc-folder { display: none; }
     .sc-role { display: none; }
@@ -845,6 +848,7 @@
     <div class="rail-foot">
       <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">подключение…</span></div>
       <div class="export"><span>Экспорт:</span><button type="button" id="export-md">Markdown</button><button type="button" id="export-jsonl">JSONL</button><span class="export-error" id="export-error" role="alert"></span></div>
+      <button type="button" class="language-switch" aria-label="Language / Язык">RU / EN</button>
       <span class="team-meta" id="team-summary"></span>
       <span class="meta" id="cwd"></span>
       <div id="project-controls" hidden><select id="project-select" aria-label="Проект"></select><button type="button" id="project-switch">Сменить</button><div id="project-status" aria-live="polite"></div></div>
@@ -921,6 +925,7 @@
       <span class="sc-crumb" id="sc-crumb"></span>
       <h1 id="sc-title">agentsflow</h1>
       <span class="sc-sp"></span>
+      <button type="button" class="language-switch" aria-label="Language / Язык">RU / EN</button>
       <span class="sc-seg" role="group" aria-label="Вид">
         <button type="button" data-sc-mode="scene" aria-pressed="true">Сцена</button>
         <button type="button" data-sc-mode="board" aria-pressed="false">Доска <span class="sc-n" id="sc-wait-n" hidden></span></button>
@@ -946,6 +951,303 @@
 
 <script>
 "use strict";
+let savedLanguage = "";
+try { savedLanguage = localStorage.getItem("agentsflow.language") || ""; } catch (_) {}
+const urlLanguage = new URLSearchParams(location.search).get("lang");
+const language = urlLanguage === "ru" || urlLanguage === "en" ? urlLanguage : savedLanguage === "ru" || savedLanguage === "en" ? savedLanguage : /^ru\b/i.test(navigator.language || "") ? "ru" : "en";
+document.documentElement.lang = language;
+const translations = {
+  "Одобрено": "Approved",
+  "Разобрался, править не нужно": "Reviewed, no changes needed",
+  "Показать полностью": "Show all",
+  "Свернуть": "Show less",
+  "Думает…": "Thinking…",
+  "Остановить задачу": "Stop task",
+  "Агент сейчас не работает. Файлы для задачи перетащите на карточку справа.": "The agent is not working. Drop task files on the card on the right.",
+  "Файлы ещё загружаются": "Files are still uploading",
+  "Не отправлено: ": "Not sent: ",
+  "Задача остановлена. Её можно вернуть с запиской или запустить ещё раз.": "Task stopped. Return it with a note or start it again.",
+  "Не остановлено: ": "Could not stop: ",
+  "Думал ": "Thought for ",
+  "Работает · ": "Working · ",
+  "Работал ": "Worked for ",
+  "Результат ": "Result from ",
+  "Замечания ": "Comments from ",
+  "План ": "Plan from ",
+  "От ": "From ",
+  "Бриф от оркестратора": "Brief from orchestrator",
+  "Весь запрос": "Full request",
+  "Создан ": "Created ",
+  "Изменён ": "Changed ",
+  "Скрыть изменения": "Hide changes",
+  "Показать изменения": "Show changes",
+  "… ещё ": "… another ",
+  " строк": " lines",
+  "дойдёт после текущего шага": "will arrive after the current step",
+  "уйдёт с его следующим шагом": "will be sent with the next step",
+  "дошло": "delivered",
+  "не дошло: шаг этого агента уже не наступит": "not delivered: this agent has no further step",
+  " ч ": " hr ", "исполнитель": "agent", "ревьюер": "reviewer", "мелкие задачи": "small tasks", "запасной исполнитель": "fallback agent",
+  "Низкое": "Low", "Среднее": "Medium", "Высокое": "High", "Очень высокое": "Very high", "Максимум": "Maximum",
+  "План": "Plan", "Исполнение": "Execution", "Ревью": "Review", "Исправление": "Fix",
+  "Впереди": "Ahead",
+  "Застряла или ждёт вас": "Stuck or waiting for you",
+  "Обзор команды": "Team overview",
+  " - Ошибка: ": " - Error: ",
+  "Открыть доску": "Open board",
+  "Не удалось загрузить отделы: ": "Could not load departments: ",
+  " токенов": " tokens",
+  "Источник: ": "Source: ",
+  " мин": " min",
+  "внутреннее": "internal",
+  "молчит ": "silent for ",
+  "уйдёт наружу": "external",
+  "Агенты ничего не делают дольше, чем разрешено отделу. Подождать, перезапустить шаг в новой сессии или остановить запуск?": "The agents have been idle longer than the department allows. Wait, restart the step in a new session, or stop the run?",
+  "Подождать ещё": "Wait longer",
+  "Перезапустить шаг": "Restart step",
+  "Остановить": "Stop",
+  "Оркестратор предлагает новый отдел «": "The orchestrator proposes a new department “",
+  "Создать отдел": "Create department",
+  "В общий отдел": "Use the common department",
+  "Ответ на все вопросы одним сообщением": "Answer all questions in one message",
+  "Весь результат": "Full result",
+  "Ещё круг": "Another round",
+  "Вернуть с замечанием": "Return with a comment",
+  "Что исправить": "What to fix",
+  "Причина: ": "Reason: ",
+  "не указана": "not specified",
+  "Принять как есть": "Accept as is",
+  "Ещё круг с замечанием": "Another round with a comment",
+  "Что поменять в новом круге": "What to change in the next round",
+  " в ": " in ",
+  " ждёт вашего слова:": " awaits your decision:",
+  "Закрывающий комментарий": "Closing comment",
+  "Не нужно": "Not needed",
+  "Опубликовать комментарий": "Post comment",
+  "Правило для «": "Rule for “",
+  "Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…": "Several tasks in one message: write a launch post, check inventory, review market news…",
+  "Сообщение оркестратору": "Message to orchestrator",
+  "Принято. Задачи появятся ниже, ответ придёт в почту и Telegram.": "Received. Tasks will appear below; the answer will arrive by mail and Telegram.",
+  "Ничего не ждёт вашего решения.": "Nothing needs your decision.",
+  "Сейчас ничего не идёт.": "Nothing is running.",
+  "заказ для ": "order for ",
+  "проверяет оркестратор": "orchestrator is reviewing",
+  "Готово недавно: ": "Recently completed: ",
+  "Расход за месяц: ": "This month: ",
+  ", из них оркестратор ": "; orchestrator: ",
+  " токенов, в долларах не учтены.": " tokens, excluded from dollar totals.",
+  "Без цены (Codex, нет [prices.codex]): ": "Unpriced (Codex, no [prices.codex]): ",
+  "Состав": "Team",
+  " из ": " of ",
+  "Идёт": "Running",
+  "За месяц": "This month",
+  ", из них без цены ": "; unpriced: ",
+  " мин, кругов ": " min, rounds ",
+  "до ": "up to ",
+  "Месячный лимит": "Monthly limit",
+  "Расписания": "Schedules",
+  "на паузе": "paused",
+  "не запланировано": "not scheduled",
+  "следующий запуск ": "next run ",
+  "Возобновить": "Resume",
+  "Пауза": "Pause",
+  "Запустить сейчас": "Run now",
+  "Последние правила": "Recent rules",
+  "Отменить": "Revert",
+  "Ждёт вас": "Waiting for you",
+  "Отключён": "Disabled",
+  "Работает": "Working",
+  "Свободен": "Idle",
+  "Схема команды: линия на агента, станции — его задачи": "Team diagram: a line for each agent, stations for its tasks",
+  "Агент ": "Agent ",
+  "Линия владельца": "Owner line",
+  "Запрос": "Request",
+  "запрос ": "request ",
+  "опасная команда": "dangerous command",
+  " ранее": " earlier",
+  "нет задач": "no tasks",
+  "ничего не ждёт вас": "nothing needs your decision",
+  "вы": "you",
+  "владелец": "owner",
+  "писем вам: ": "mail for you: ",
+  "Инструмент: ": "Tool: ",
+  "На проверке · ": "In review · ",
+  "не назначена": "unassigned",
+  "Вы": "You",
+  "Станции на вашей линии: то, что ждёт вашего решения.": "Stations on your line need your decision.",
+  "guard включён": "guard enabled",
+  "Нет задачи в работе": "No task in progress",
+  "Открыть чат": "Open chat",
+  "Расписание команды": "Team schedule",
+  "Агент": "Agent",
+  "Над чем работает": "Working on",
+  "Режим": "Mode",
+  "Состояние": "Status",
+  "Ходов": "Turns",
+  "нет задачи": "no task",
+  "нет связи": "offline",
+  "только что": "just now",
+  " мин назад": " min ago",
+  " ч назад": " hr ago",
+  " мин ": " min ",
+  " с": " s",
+  "Писем: ": "Mail: ",
+  "Workflow: {total} / {finished} успешно / {failed} ошибок": "Workflow: {total} / {finished} finished / {failed} failed",
+  "Стоимость (только Claude): ": "Cost (Claude only): ",
+  "Токены: ": "Tokens: ",
+  "Стоимость": "Cost",
+  "Токены": "Tokens",
+  "Ходы": "Turns",
+  "Ошибки": "Errors",
+  "Остановки": "Stops",
+  "Время работы": "Run time",
+  "Инструменты": "Tools",
+  "Разрешения": "Permissions",
+  "Отказы guard": "Guard denials",
+  "Писем отправлено / получено": "Mail sent / received",
+  "Последняя активность": "Last activity",
+  " назад": " ago",
+  "нет": "none",
+  "Все показатели": "All metrics",
+  "Ходов: ": "Turns: ",
+  " · активность: ": " · activity: ",
+  "Править": "Edit",
+  "Обновлено ": "Updated ",
+  "пусто": "empty",
+  "ещё ": "more ",
+  "Ошибка экспорта: ": "Export error: ",
+  "Перезапуск в проекте ": "Restarting in project ",
+  "спрашивает": "ask",
+  "авто": "auto",
+  "умный": "smart",
+  "без песочницы": "no sandbox",
+  "тип неизвестен": "unknown type",
+  "по умолчанию": "default",
+  "Задание для ": "Task for ",
+  "Enter — отправить, Shift+Enter — перенос строки": "Enter to send, Shift+Enter for a new line",
+  "лидер": "lead",
+  "свободен": "idle",
+  "отключён": "disabled",
+  "работает": "working",
+  "Не удалось перезапустить: ": "Could not restart: ",
+  "Не удалось остановить: ": "Could not stop: ",
+  "Не удалось отправить: ": "Could not send: ",
+  "Ответ не принят: ": "Response rejected: ",
+  "Думал": "Thought",
+  "ошибка": "error",
+  "(пусто)": "(empty)",
+  "Опасная команда: ": "Dangerous command: ",
+  "Нужно разрешение: ": "Permission request: ",
+  "Правило ": "Rule ",
+  "отклонено guard": "denied by guard",
+  "✓ разрешено": "✓ allowed",
+  "✕ отклонено": "✕ denied",
+  "готово · ": "done · ",
+  "Оркестратор": "Orchestrator",
+  "Журнал": "Journal",
+  "для вас: 0": "For you: 0",
+  "Задача для workflow": "Workflow task",
+  "Выберите workflow и задайте задачу: агенты будут передавать друг другу результаты.": "Choose a workflow and enter a task. Agents will pass results to each other.",
+  "Не удалось запустить: ": "Could not start: ",
+  "вы (оркестратор)": "you (orchestrator)",
+  "Текст письма (Ctrl+Enter — отправить)": "Mail text (Ctrl+Enter to send)",
+  "Текст письма": "Mail text",
+  "Выберите доступного получателя": "Choose an available recipient",
+  "Тема обязательна и должна содержать не более 200 символов": "Subject is required and must be at most 200 characters",
+  "Текст обязателен и должен занимать не более 65536 байт UTF-8": "Text is required and must be at most 65536 UTF-8 bytes",
+  "для вас: ": "For you: ",
+  "не просмотрено": "unviewed",
+  "не прочитано": "unread",
+  "для вас": "for you",
+  "показать полностью": "Show all",
+  "свернуть": "Show less",
+  "вы (оркестратор) ": "you (orchestrator) ",
+  " · участники: ": " · participants: ",
+  "выполняется": "running",
+  "Запуск «": "Starting “",
+  "шаг ": "step ",
+  "возврат из ": "returned from ",
+  "Завершён": "Finished",
+  "Ошибка": "Error",
+  "нет токена": "no token",
+  "подключено": "connected",
+  "отключено (проверьте токен)": "disconnected (check token)",
+  "переподключение…": "reconnecting…",
+  "неверное состояние команды": "invalid team state",
+  " (лидер)": " (lead)",
+  "Команда: ": "Team: ",
+  "Ошибка: ": "Error: ",
+  "получил задание": "received a task",
+  "отвечает": "responding",
+  "выполняет: ": "running: ",
+  "команда закончилась ошибкой": "command failed",
+  "получил результат команды": "received command result",
+  "правит файл: ": "editing file: ",
+  "ждёт разрешения: ": "waiting for permission: ",
+  "запрос отклонён": "request denied",
+  "разрешение получено": "permission granted",
+  "закончил ход": "finished turn",
+  "Разделы": "Sections", "подключение…": "Connecting…", "Экспорт:": "Export:",
+  "Проект": "Project", "Сменить": "Switch", "Задачи": "Tasks", "Скрыть список задач": "Hide task list",
+  "Новая задача": "New task", "Наставник": "Mentor", "выключен": "Off", "Сменить тему": "Change theme",
+  "Классический вид": "Classic view", "Классический вид: отделы, правила, расписания, чаты, почта": "Classic view: departments, rules, schedules, chats, mail",
+  "Список задач": "Task list", "Вид": "View", "Сцена": "Scene", "Доска": "Board",
+  "Карточка задачи": "Task card", "Ход задачи": "Task progress", "Итог, работа агентов, правки": "Result, agent work, changes",
+  "Правки": "Changes", "Задача": "Task", "Отделы": "Departments", "Обзор": "Overview", "Чаты": "Chats", "Статистика": "Statistics",
+  "Очередь": "Backlog", "К выполнению": "To do", "В работе": "In progress", "На проверке": "In review", "Готово": "Done", "Застряла": "Stuck", "Архив": "Archived",
+  "в очереди": "Queued", "ждёт вас": "Waiting for you", "в работе": "In progress", "застряла": "Stuck", "на приёмке": "Awaiting acceptance", "готово": "Done", "отменена": "Cancelled",
+  "вчера": "Yesterday", "Стоп": "Stop", "Отправить": "Send", "Разрешить": "Allow", "Отклонить": "Deny",
+  "Разрешить всё равно…": "Allow anyway…", "Перезапустить": "Restart", "Почта": "Mail", "Запустить": "Start",
+  "Получатель": "Recipient", "Тема": "Subject", "Сохранить": "Save", "Отмена": "Cancel", "Статус": "Status",
+  "Исполнитель": "Assignee", "Описание": "Description", "Создать": "Create", "Закрыть": "Close", "Добавить": "Add",
+  "Обновить": "Refresh", "Ответить": "Reply", "Новое письмо": "New mail",
+  "Событий пока нет. Отправьте промпт ниже.": "No events yet. Send a prompt below.", "Писем пока нет": "No mail yet",
+  "Нет доступных получателей": "No recipients available", "Загрузка списка агентов…": "Loading agents…",
+  "Не удалось загрузить проекты": "Could not load projects", "Проект уже выбран": "Project already selected",
+  "Не удалось дождаться перезапуска": "Timed out waiting for restart", "Агент занят": "Agent is busy",
+  "Нет, отклонить": "No, deny", "Да, разрешить опасную команду": "Yes, allow the dangerous command",
+  "Загрузка…": "Loading…", "нет данных": "No data", "Не назначен": "Unassigned", "В архив": "Archive",
+  "Запрос разрешения": "Permission request", "Опасная команда": "Dangerous command",
+  "Ничего не ждёт вашего решения": "Nothing needs your decision", "Вернуть в работу": "Return to work", "Принять": "Accept",
+  "Ещё раз": "Try again", "Правок нет": "No changes", "Замечание к файлу": "Comment on file",
+  "Замечание к строке": "Comment on line", "Написать замечание к этой строке": "Comment on this line",
+  "Отправить агенту": "Send to agent", "Вернуть с замечаниями": "Return with comments", "Что этот агент менял в файлах за сессию": "Files changed by this agent during the session",
+  "Сильная модель держит замысел: пишет постановку исполнителю и сама проверяет результат. Мелкие задачи идут без наставника. Действует на задачи, запущенные после выбора.": "A strong model writes the brief and reviews the result. Small tasks skip the mentor. Applies to tasks started after the choice."
+};
+function t(ru, vars = {}) {
+  return (language === "en" ? (translations[ru] || ru) : ru).replace(/\{(\w+)\}/g, (match, key) => key in vars ? vars[key] : match);
+}
+function tn(count, forms) {
+  const category = new Intl.PluralRules(language).select(count);
+  const text = (forms[language] && (forms[language][category] || forms[language].other)) || "";
+  return text.replace(/\{n\}/g, String(count));
+}
+// Translate only the original static markup. Agent and server text is never traversed.
+if (language === "en") {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    if (node.parentElement.closest("script, style")) continue;
+    const value = node.nodeValue, trimmed = value.trim();
+    if (translations[trimmed]) node.nodeValue = value.replace(trimmed, t(trimmed));
+  }
+  for (const node of document.querySelectorAll("[title], [placeholder], [aria-label]")) {
+    for (const attr of ["title", "placeholder", "aria-label"]) {
+      const value = node.getAttribute(attr);
+      if (value && translations[value]) node.setAttribute(attr, t(value));
+    }
+  }
+}
+for (const button of document.querySelectorAll(".language-switch")) {
+  button.title = language === "ru" ? "Switch to English" : "Переключить на русский";
+  button.addEventListener("click", () => {
+    const next = language === "ru" ? "en" : "ru";
+    const url = new URL(location.href);
+    try { localStorage.setItem("agentsflow.language", next); url.searchParams.delete("lang"); }
+    catch (_) { url.searchParams.set("lang", next); }
+    location.assign(url.href);
+  });
+}
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get("token") || "";
 let team = [];
@@ -975,7 +1277,7 @@ async function downloadExport(format) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
-  } catch (err) { error.textContent = "Ошибка экспорта: " + err.message; }
+  } catch (err) { error.textContent = t("Ошибка экспорта: ") + err.message; }
 }
 $("#export-md").addEventListener("click", () => downloadExport("md"));
 $("#export-jsonl").addEventListener("click", () => downloadExport("jsonl"));
@@ -991,7 +1293,7 @@ async function post(path, body) {
 let projectsLoaded = false;
 async function loadProjects() {
   const response = await fetch(api("/api/projects"));
-  if (!response.ok) throw new Error("Не удалось загрузить проекты");
+  if (!response.ok) throw new Error(t("Не удалось загрузить проекты"));
   const data = await response.json();
   const select = $("#project-select");
   select.replaceChildren(...data.projects.map(project => { const option = el("option", "", project.name); option.value = project.path; option.selected = project.current; return option; }));
@@ -1004,8 +1306,8 @@ $("#project-switch").onclick = async () => {
   button.disabled = select.disabled = true;
   try {
     const result = await post("/api/project/switch", {path});
-    if (result.unchanged) { status.textContent = "Проект уже выбран"; return; }
-    status.textContent = "Перезапуск в проекте " + name + "…";
+    if (result.unchanged) { status.textContent = t("Проект уже выбран"); return; }
+    status.textContent = t("Перезапуск в проекте ") + name + "…";
     const deadline = Date.now() + 20000;
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -1016,7 +1318,7 @@ $("#project-switch").onclick = async () => {
         if (response.ok && (await response.json()).cwd === path) { location.reload(); return; }
       } catch (_) {} finally { clearTimeout(timer); }
     }
-    status.textContent = "Не удалось дождаться перезапуска";
+    status.textContent = t("Не удалось дождаться перезапуска");
   } catch (error) { status.textContent = error.message; }
   finally { button.disabled = select.disabled = false; }
 };
@@ -1078,11 +1380,11 @@ function updatePaneInfo(p, member) {
   p.lead.hidden = !member.lead;
   p.bypass.hidden = member.mode !== "bypass";
   p.guard.hidden = member.guard !== true || member.mode === "bypass";
-  const mode = { ask: "спрашивает", auto: "авто", smart: "умный", bypass: "BYPASS" }[member.mode];
-  const sandbox = member.kind === "codex" ? (member.mode === "bypass" ? "без песочницы" : member.sandbox) : null;
-  p.subtitle.textContent = [member.kind || "тип неизвестен", member.model || "по умолчанию", member.effort || "по умолчанию", mode, sandbox, member.title].filter(Boolean).join(" · ");
-  p.input.placeholder = "Задание для " + member.id;
-  p.input.title = "Enter — отправить, Shift+Enter — перенос строки";
+  const mode = { ask: t("спрашивает"), auto: t("авто"), smart: t("умный"), bypass: "BYPASS" }[member.mode];
+  const sandbox = member.kind === "codex" ? (member.mode === "bypass" ? t("без песочницы") : member.sandbox) : null;
+  p.subtitle.textContent = [member.kind || t("тип неизвестен"), member.model || t("по умолчанию"), member.effort || t("по умолчанию"), mode, sandbox, member.title].filter(Boolean).join(" · ");
+  p.input.placeholder = t("Задание для ") + member.id;
+  p.input.title = t("Enter — отправить, Shift+Enter — перенос строки");
 }
 function ensurePane(id) {
   if (!panes[id]) buildPane({ id, kind: null, title: "", lead: false }, false);
@@ -1094,15 +1396,15 @@ function buildPane(a, enabled = true) {
   const heading = el("div", "col-heading");
   const title = el("div", "col-title");
   const name = el("h2");
-  const lead = el("span", "chip", "лидер");
+  const lead = el("span", "chip", t("лидер"));
   const bypass = el("span", "chip bypass", "bypass");
   const guard = el("span", "chip", "guard");
   const subtitle = el("div", "col-subtitle");
   title.append(name, lead, bypass, guard);
   heading.append(title, subtitle);
   head.append(heading);
-  const chip = el("span", "chip", "свободен");
-  const stop = el("button", "deny", "Стоп");
+  const chip = el("span", "chip", t("свободен"));
+  const stop = el("button", "deny", t("Стоп"));
   stop.type = "button";
   head.append(chip, rvPaneButton(a.id), stop);
   const stopError = el("div", "export-error");
@@ -1111,15 +1413,15 @@ function buildPane(a, enabled = true) {
   failure.setAttribute("aria-live", "polite");
   failure.hidden = true;
   const failureText = el("span");
-  const restart = el("button", "", "Перезапустить");
+  const restart = el("button", "", t("Перезапустить"));
   restart.type = "button";
   failure.append(failureText, restart);
   const log = el("div", "log");
-  const empty = el("div", "empty", "Событий пока нет. Отправьте промпт ниже.");
+  const empty = el("div", "empty", t("Событий пока нет. Отправьте промпт ниже."));
   log.append(empty);
   const form = el("form", "composer");
   const input = el("textarea");
-  const btn = el("button", "send", "Отправить");
+  const btn = el("button", "send", t("Отправить"));
   btn.type = "submit";
   form.append(input, btn);
   col.append(head, stopError, failure, log, form);
@@ -1133,7 +1435,7 @@ function buildPane(a, enabled = true) {
   restart.onclick = async () => {
     restart.disabled = true;
     try { await post("/api/agent/restart", { agent: a.id }); await loadState(); }
-    catch (err) { stopError.textContent = "Не удалось перезапустить: " + err.message; }
+    catch (err) { stopError.textContent = t("Не удалось перезапустить: ") + err.message; }
     finally { restart.disabled = false; }
   };
 
@@ -1145,7 +1447,7 @@ function buildPane(a, enabled = true) {
     try {
       await post("/api/agent/interrupt", { agent: a.id });
     } catch (err) {
-      stopError.textContent = "Не удалось остановить: " + err.message;
+      stopError.textContent = t("Не удалось остановить: ") + err.message;
     } finally {
       p.stopping = false;
       refreshStatus(p);
@@ -1161,7 +1463,7 @@ function buildPane(a, enabled = true) {
       await post("/api/prompt", { agent: a.id, text });
       input.value = "";
     } catch (err) {
-      addError(p, "Не удалось отправить: " + err.message);
+      addError(p, t("Не удалось отправить: ") + err.message);
     } finally { refreshStatus(p); }
   });
   input.addEventListener("keydown", (e) => {
@@ -1171,15 +1473,15 @@ function buildPane(a, enabled = true) {
 }
 
 function refreshStatus(p) {
-  let label = "свободен", cls = "chip";
-  if (!p.enabled) { label = "отключён"; cls += " off"; }
-  else if (p.pending.size) { label = "ждёт вас"; cls += " waiting"; }
-  else if (p.busy) { label = "работает"; cls += " working"; }
+  let label = t("свободен"), cls = "chip";
+  if (!p.enabled) { label = t("отключён"); cls += " off"; }
+  else if (p.pending.size) { label = t("ждёт вас"); cls += " waiting"; }
+  else if (p.busy) { label = t("работает"); cls += " working"; }
   p.chip.className = cls; p.chip.textContent = label;
   p.btn.disabled = !p.enabled || p.busy;
   p.stop.disabled = !p.enabled || !p.busy || p.stopping;
   p.input.disabled = !p.enabled;
-  p.btn.title = p.busy ? "Агент занят" : "";
+  p.btn.title = p.busy ? t("Агент занят") : "";
   scheduleOverview();
 }
 
@@ -1226,16 +1528,16 @@ const permErrors = new Map();
 function permButtons(agent, ev, fail) {
   const row = el("div", "btns");
   const danger = !!ev.guard;
-  const allow = el("button", danger ? "" : "allow", danger ? "Разрешить всё равно…" : "Разрешить");
-  const deny = el("button", danger ? "deny strong" : "deny", "Отклонить");
+  const allow = el("button", danger ? "" : "allow", danger ? t("Разрешить всё равно…") : t("Разрешить"));
+  const deny = el("button", danger ? "deny strong" : "deny", t("Отклонить"));
   allow.type = deny.type = "button";
   const key = agent + "\u0000" + ev.id;
-  const arm = () => { allow.textContent = "Да, разрешить опасную команду"; deny.textContent = "Нет, отклонить"; };
+  const arm = () => { allow.textContent = t("Да, разрешить опасную команду"); deny.textContent = t("Нет, отклонить"); };
   if (danger && armedPerms.has(key)) arm();
   const send = async (ok) => {
     allow.disabled = deny.disabled = true;
     try { await post("/api/permission", { agent, id: ev.id, allow: ok }); }
-    catch (err) { allow.disabled = deny.disabled = false; permErrors.set(key, "Ответ не принят: " + err.message); fail("Ответ не принят: " + err.message); }
+    catch (err) { allow.disabled = deny.disabled = false; permErrors.set(key, t("Ответ не принят: ") + err.message); fail(t("Ответ не принят: ") + err.message); }
   };
   allow.onclick = () => {
     if (danger && !armedPerms.has(key)) { armedPerms.add(key); arm(); return; }
@@ -1254,7 +1556,7 @@ function streamNode(draft, scene) {
   if (draft.thinking) {
     const fold = el("details", scene ? "sc-fold" : "tool");
     const body = el("pre"); fold.open = true;
-    fold.append(el("summary", "", "Думал"), body);
+    fold.append(el("summary", "", t("Думал")), body);
     node.append(fold); return { node, body };
   }
   return { node, body: node };
@@ -1332,7 +1634,7 @@ function handle(env) {
   switch (ev.type) {
     case "thinking": {
       const d = el("details", "tool");
-      d.append(el("summary", "", "Думал"), el("pre", "", ev.text));
+      d.append(el("summary", "", t("Думал")), el("pre", "", ev.text));
       push(p, d); break;
     }
     case "message": {
@@ -1361,10 +1663,10 @@ function handle(env) {
       const err = !!ev.is_error;
       if (d) {
         d.classList.add(err ? "error" : "ok");
-        $(".state", d).textContent = err ? "ошибка" : "готово";
+        $(".state", d).textContent = err ? t("ошибка") : t("готово");
         if (ev.output) d.append(el("pre", "res" + (err ? " err" : ""), ev.output));
       } else {
-        push(p, el("div", err ? "errline" : "msg assistant", ev.output || "(пусто)"));
+        push(p, el("div", err ? "errline" : "msg assistant", ev.output || t("(пусто)")));
       }
       break;
     }
@@ -1376,8 +1678,8 @@ function handle(env) {
       p.pending.add(ev.id);
       waits.perms.set(env.agent + "\u0000" + ev.id, { agent: env.agent, id: ev.id, tool: ev.tool, input: ev.input, guard: ev.guard || null });
       const card = el("div", "perm" + (ev.guard ? " danger" : ""));
-      card.append(el("div", "ph", (ev.guard ? "Опасная команда: " : "Нужно разрешение: ") + ev.tool));
-      if (ev.guard) card.append(el("div", "guard-warning", "Правило " + ev.guard.rule + ": " + ev.guard.reason));
+      card.append(el("div", "ph", (ev.guard ? t("Опасная команда: ") : t("Нужно разрешение: ")) + ev.tool));
+      if (ev.guard) card.append(el("div", "guard-warning", t("Правило ") + ev.guard.rule + ": " + ev.guard.reason));
       card.append(el("pre", "", fmtInput(ev.input)));
       const verdict = el("span", "verdict");
       const { row } = permButtons(env.agent, ev, (msg) => addError(p, msg));
@@ -1396,7 +1698,7 @@ function handle(env) {
       if (r) {
         r.card.classList.add("done");
         r.row.querySelectorAll("button").forEach(b => b.remove());
-        r.verdict.textContent = ev.blocked_by_guard ? "отклонено guard" : ev.allow ? "✓ разрешено" : "✕ отклонено";
+        r.verdict.textContent = ev.blocked_by_guard ? t("отклонено guard") : ev.allow ? t("✓ разрешено") : t("✕ отклонено");
         r.verdict.className = "verdict " + (ev.allow ? "allow" : "deny");
       }
       break;
@@ -1404,7 +1706,7 @@ function handle(env) {
     case "done":
       p.busy = false; p.pending.clear();
       for (const key of [...waits.perms.keys()]) if (key.startsWith(env.agent + "\u0000")) waits.perms.delete(key);
-      push(p, el("div", "divider", "готово · " + ev.reason));
+      push(p, el("div", "divider", t("готово · ") + ev.reason));
       break;
     case "error":
       addError(p, ev.message);
@@ -1423,14 +1725,14 @@ function buildOrch() {
   orch.col = col;
   col.style.setProperty("--accent", "var(--orch)");
   const head = el("div", "col-head");
-  head.append(el("h2", "", "Оркестратор"));
-  orch.chip = el("span", "chip", "свободен");
+  head.append(el("h2", "", t("Оркестратор")));
+  orch.chip = el("span", "chip", t("свободен"));
   head.append(orch.chip);
   const tabs = el("div", "orch-tabs");
   tabs.setAttribute("role", "tablist");
-  orch.journalTab = el("button", "", "Журнал");
-  orch.mailTab = el("button", "", "Почта");
-  orch.mailTab.title = "для вас: 0";
+  orch.journalTab = el("button", "", t("Журнал"));
+  orch.mailTab = el("button", "", t("Почта"));
+  orch.mailTab.title = t("для вас: 0");
   orch.badge = el("span", "mail-badge", "0");
   orch.badge.hidden = true;
   orch.mailTab.append(orch.badge);
@@ -1444,19 +1746,19 @@ function buildOrch() {
   orch.select = el("select");
   orch.steps = el("div", "steps");
   orch.task = el("textarea");
-  orch.task.placeholder = "Задача для workflow";
+  orch.task.placeholder = t("Задача для workflow");
   const row = el("div", "row");
-  orch.run = el("button", "send", "Запустить");
-  orch.stop = el("button", "", "Стоп");
+  orch.run = el("button", "send", t("Запустить"));
+  orch.stop = el("button", "", t("Стоп"));
   orch.stop.disabled = true;
   row.append(orch.run, orch.stop);
   ctl.append(orch.select, orch.steps, orch.task, row);
   orch.log = el("div", "log");
-  orch.empty = el("div", "empty", "Выберите workflow и задайте задачу: агенты будут передавать друг другу результаты.");
+  orch.empty = el("div", "empty", t("Выберите workflow и задайте задачу: агенты будут передавать друг другу результаты."));
   orch.log.append(orch.empty);
   watchSticky(orch);
   mail.log = el("div", "log");
-  mail.empty = el("div", "empty", "Писем пока нет");
+  mail.empty = el("div", "empty", t("Писем пока нет"));
   mail.log.append(mail.empty);
   watchSticky(mail);
   mail.compose = buildMailForm(null);
@@ -1475,12 +1777,12 @@ function buildOrch() {
     if (!task || !orch.select.value) return;
     orch.run.disabled = true;
     try { await post("/api/workflow/run", { name: orch.select.value, task }); }
-    catch (err) { addError(orch, "Не удалось запустить: " + err.message); }
+    catch (err) { addError(orch, t("Не удалось запустить: ") + err.message); }
     finally { refreshOrch(); }
   });
   orch.stop.addEventListener("click", async () => {
     try { await post("/api/workflow/stop", {}); }
-    catch (err) { addError(orch, "Не удалось остановить: " + err.message); }
+    catch (err) { addError(orch, t("Не удалось остановить: ") + err.message); }
   });
   refreshOrch();
 }
@@ -1501,7 +1803,7 @@ function selectOrchTab(tab) {
     requestAnimationFrame(refreshMailBodies);
   }
 }
-function agentName(agent) { return agent === "orchestrator" ? "вы (оркестратор)" : agent; }
+function agentName(agent) { return agent === "orchestrator" ? t("вы (оркестратор)") : agent; }
 function updateRecipients(form, thread) {
   const current = form.to.value;
   const allowed = team.filter(a => mail.agentsKnown && panes[a.id] && panes[a.id].enabled && (!thread || thread.participants.has(a.id)));
@@ -1513,9 +1815,9 @@ function updateRecipients(form, thread) {
   if (allowed.some(a => a.id === current)) form.to.value = current;
   form.to.disabled = !mail.agentsKnown || !allowed.length || form.sending;
   form.send.disabled = form.to.disabled;
-  if (!mail.agentsKnown) form.error.textContent = "Загрузка списка агентов…";
-  else if (!allowed.length) form.error.textContent = "Нет доступных получателей";
-  else if (form.error.textContent === "Нет доступных получателей" || form.error.textContent === "Загрузка списка агентов…") form.error.textContent = "";
+  if (!mail.agentsKnown) form.error.textContent = t("Загрузка списка агентов…");
+  else if (!allowed.length) form.error.textContent = t("Нет доступных получателей");
+  else if (form.error.textContent === t("Нет доступных получателей") || form.error.textContent === t("Загрузка списка агентов…")) form.error.textContent = "";
 }
 function revealSentThread(id) {
   const thread = mail.threads.get(id);
@@ -1530,21 +1832,21 @@ function revealSentThread(id) {
 function buildMailForm(thread) {
   const form = el("form", "mail-form" + (thread ? " reply" : ""));
   form.noValidate = true;
-  if (!thread) form.append(el("h3", "", "Новое письмо"));
+  if (!thread) form.append(el("h3", "", t("Новое письмо")));
   const fields = el("div", "mail-fields");
   const to = el("select");
-  to.setAttribute("aria-label", "Получатель");
+  to.setAttribute("aria-label", t("Получатель"));
   const subject = el("input");
   subject.type = "text";
-  subject.placeholder = "Тема";
-  subject.setAttribute("aria-label", "Тема");
+  subject.placeholder = t("Тема");
+  subject.setAttribute("aria-label", t("Тема"));
   if (thread) subject.value = "Re: " + thread.subject;
   fields.append(to, subject);
   const body = el("textarea");
-  body.placeholder = "Текст письма (Ctrl+Enter — отправить)";
-  body.setAttribute("aria-label", "Текст письма");
+  body.placeholder = t("Текст письма (Ctrl+Enter — отправить)");
+  body.setAttribute("aria-label", t("Текст письма"));
   const actions = el("div", "mail-actions");
-  const send = el("button", "send", "Отправить");
+  const send = el("button", "send", t("Отправить"));
   send.type = "submit";
   const error = el("span", "mail-error");
   error.setAttribute("role", "alert");
@@ -1564,15 +1866,15 @@ function buildMailForm(thread) {
     const title = subject.value.trim();
     const text = body.value;
     if (!mail.agentsKnown || !to.value || !panes[to.value] || !panes[to.value].enabled) {
-      error.textContent = "Выберите доступного получателя";
+      error.textContent = t("Выберите доступного получателя");
       return;
     }
     if (!title || Array.from(title).length > 200) {
-      error.textContent = "Тема обязательна и должна содержать не более 200 символов";
+      error.textContent = t("Тема обязательна и должна содержать не более 200 символов");
       return;
     }
     if (!text.trim() || new TextEncoder().encode(text).length > 65536) {
-      error.textContent = "Текст обязателен и должен занимать не более 65536 байт UTF-8";
+      error.textContent = t("Текст обязателен и должен занимать не более 65536 байт UTF-8");
       return;
     }
     const payload = { from: "orchestrator", to: to.value, subject: title, body: text };
@@ -1625,7 +1927,7 @@ function updateMailBadge() {
   orch.badge.hidden = unread === 0;
   if (navMail) { navMail.badge.textContent = String(unread); navMail.badge.hidden = unread === 0; }
   scheduleOverview();
-  orch.mailTab.title = "для вас: " + forYou;
+  orch.mailTab.title = t("для вас: ") + forYou;
 }
 function refreshMailBodies() {
   for (const message of mail.messages.values()) {
@@ -1647,7 +1949,7 @@ function handleMail(env) {
     summary.append(title, meta);
     card.append(summary, items);
     thread = { id: ev.thread, card, summary, meta, items, subject: ev.subject, participants: new Set(), messageIds: [], count: 0, manual: false };
-    const reply = el("button", "mail-reply-button", "Ответить");
+    const reply = el("button", "mail-reply-button", t("Ответить"));
     reply.type = "button";
     thread.reply = buildMailForm(thread);
     thread.reply.form.hidden = true;
@@ -1670,23 +1972,23 @@ function handleMail(env) {
   thread.participants.add(ev.to);
   updateRecipients(thread.reply, thread);
   thread.count++;
-  thread.meta.textContent = [...thread.participants].map(agentName).join(" ⇄ ") + " · " + thread.count + " писем · " + mailTime(env.ts_ms);
+  thread.meta.textContent = [...thread.participants].map(agentName).join(" ⇄ ") + " · " + tn(thread.count, { ru: { one: "{n} писем", few: "{n} писем", many: "{n} писем", other: "{n} писем" }, en: { one: "{n} message", other: "{n} messages" } }) + " · " + mailTime(env.ts_ms);
   const item = el("div", "mail-item");
   const meta = el("div", "mail-meta");
-  const unread = el("span", "mail-unread", ev.to === "orchestrator" ? "не просмотрено" : "не прочитано");
+  const unread = el("span", "mail-unread", ev.to === "orchestrator" ? t("не просмотрено") : t("не прочитано"));
   unread.hidden = ev.to === "orchestrator" ? mail.viewed.has(ev.id) : mail.read.has(ev.id);
   meta.append(el("span", "mail-route", agentName(ev.from) + " → " + agentName(ev.to)), el("span", "", mailTime(env.ts_ms)));
-  if (ev.to === "orchestrator") meta.append(el("span", "", "для вас"));
+  if (ev.to === "orchestrator") meta.append(el("span", "", t("для вас")));
   meta.append(unread);
   item.append(meta);
   if (ev.subject !== thread.subject) item.append(el("div", "mail-subject", ev.subject));
   const body = el("div", "mail-body", ev.body);
-  const more = el("button", "mail-more", "показать полностью");
+  const more = el("button", "mail-more", t("показать полностью"));
   more.type = "button";
   more.hidden = true;
   more.onclick = () => {
     body.classList.toggle("expanded");
-    more.textContent = body.classList.contains("expanded") ? "свернуть" : "показать полностью";
+    more.textContent = body.classList.contains("expanded") ? t("свернуть") : t("показать полностью");
   };
   item.append(body, more);
   thread.items.append(item);
@@ -1699,7 +2001,7 @@ function handleMail(env) {
   updateMailBadge();
   stickToBottom(mail);
   requestAnimationFrame(refreshMailBodies);
-  const line = "✉ " + (ev.from === "orchestrator" ? "вы (оркестратор) " : "") + "→ " + agentName(ev.to) + ": " + ev.subject;
+  const line = "✉ " + (ev.from === "orchestrator" ? t("вы (оркестратор) ") : "") + "→ " + agentName(ev.to) + ": " + ev.subject;
   if (ev.from !== "orchestrator") push(ensurePane(ev.from), el("div", "mailline", line));
   push(orch, el("div", "mailline", line));
 }
@@ -1714,12 +2016,12 @@ function handleMailRead(ev) {
 window.addEventListener("resize", () => requestAnimationFrame(refreshMailBodies));
 function showSteps() {
   const w = orch.workflows.find(x => x.name === orch.select.value);
-  orch.steps.textContent = w ? w.steps.map(s => s.id + "(" + s.agent + ")").join(" → ") + (w.agents && w.agents.length ? " · участники: " + w.agents.join(", ") : "") : "";
+  orch.steps.textContent = w ? w.steps.map(s => s.id + "(" + s.agent + ")").join(" → ") + (w.agents && w.agents.length ? t(" · участники: ") + w.agents.join(", ") : "") : "";
   orch.steps.title = (w && w.description) || "";
 }
 function refreshOrch() {
   orch.chip.className = "chip" + (orch.running ? " working" : "");
-  orch.chip.textContent = orch.running ? "выполняется" : "свободен";
+  orch.chip.textContent = orch.running ? t("выполняется") : t("свободен");
   orch.run.disabled = orch.running || !orch.workflows.length;
   orch.stop.disabled = !orch.running;
   orch.select.disabled = orch.running;
@@ -1743,12 +2045,12 @@ function handleOrch(ev) {
   if (ev.type === "workflow") {
     const step = ev.step || "";
     switch (ev.status) {
-      case "started": orch.running = true; push(orch, wfLine("", "▶", "Запуск «" + ev.name + "»", ev.detail)); break;
-      case "step_started": push(orch, wfLine("", "•", "шаг " + step)); break;
-      case "step_done": push(orch, wfLine("ok", "✓", "шаг " + step, ev.detail)); break;
-      case "looped": push(orch, wfLine("", "↻", "возврат из " + step, ev.detail)); break;
-      case "finished": orch.running = false; push(orch, wfLine("ok", "■", "Завершён", ev.detail)); break;
-      case "failed": orch.running = false; push(orch, wfLine("bad", "✕", "Ошибка", ev.detail)); break;
+      case "started": orch.running = true; push(orch, wfLine("", "▶", t("Запуск «") + ev.name + "»", ev.detail)); break;
+      case "step_started": push(orch, wfLine("", "•", t("шаг ") + step)); break;
+      case "step_done": push(orch, wfLine("ok", "✓", t("шаг ") + step, ev.detail)); break;
+      case "looped": push(orch, wfLine("", "↻", t("возврат из ") + step, ev.detail)); break;
+      case "finished": orch.running = false; push(orch, wfLine("ok", "■", t("Завершён"), ev.detail)); break;
+      case "failed": orch.running = false; push(orch, wfLine("bad", "✕", t("Ошибка"), ev.detail)); break;
     }
     refreshOrch();
   } else if (ev.type === "handoff") {
@@ -1759,9 +2061,9 @@ function handleOrch(ev) {
     hh.append(el("span", "a-" + ev.from, ev.from), el("span", "", "→"), el("span", "a-" + ev.to, ev.to), el("span", "step", ev.step));
     card.append(hh, el("div", "ht", ev.text));
     if (ev.text.length > 220 || ev.text.split("\n").length > 5) {
-      const more = el("button", "more", "показать полностью");
+      const more = el("button", "more", t("показать полностью"));
       more.type = "button";
-      more.onclick = () => { card.classList.toggle("open"); more.textContent = card.classList.contains("open") ? "свернуть" : "показать полностью"; };
+      more.onclick = () => { card.classList.toggle("open"); more.textContent = card.classList.contains("open") ? t("свернуть") : t("показать полностью"); };
       card.append(more);
     }
     push(orch, card);
@@ -1775,9 +2077,9 @@ function setConn(state, text) {
   sceneConn(state, text);
 }
 function connect() {
-  if (!TOKEN) { setConn("bad", "нет токена"); return; }
+  if (!TOKEN) { setConn("bad", t("нет токена")); return; }
   es = new EventSource(api("/api/events"));
-  es.onopen = () => setConn("on", "подключено");
+  es.onopen = () => setConn("on", t("подключено"));
   es.onmessage = (e) => {
     let env;
     try { env = JSON.parse(e.data); } catch (_) { return; }
@@ -1791,8 +2093,8 @@ function connect() {
       if (draft.scene) draft.scene.node.remove();
     }
     streamDrafts.clear(); streamEnds.clear();
-    if (es.readyState === EventSource.CLOSED) setConn("bad", "отключено (проверьте токен)");
-    else setConn("", "переподключение…");
+    if (es.readyState === EventSource.CLOSED) setConn("bad", t("отключено (проверьте токен)"));
+    else setConn("", t("переподключение…"));
   };
 }
 async function loadState() {
@@ -1800,9 +2102,9 @@ async function loadState() {
     const r = await fetch(api("/api/state"));
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
-    if (!Array.isArray(s.team) || !s.agents || typeof s.agents !== "object") throw new Error("неверное состояние команды");
+    if (!Array.isArray(s.team) || !s.agents || typeof s.agents !== "object") throw new Error(t("неверное состояние команды"));
     team = s.team;
-    $("#team-summary").textContent = "Команда: " + team.map(a => a.id + (a.lead ? " (лидер)" : "")).join(" · ");
+    $("#team-summary").textContent = t("Команда: ") + team.map(a => a.id + (a.lead ? t(" (лидер)") : "")).join(" · ");
     $("#cwd").textContent = s.cwd || "";
     $("#cwd").title = s.cwd || "";
     $("#cwd").hidden = !!s.projects_enabled;
@@ -1825,7 +2127,7 @@ async function loadState() {
       pane.pending = new Set(st && Array.isArray(st.pending) ? st.pending : []);
       pane.lastError = st && st.last_error || null;
       pane.failure.hidden = !pane.lastError;
-      pane.failureText.textContent = pane.lastError ? "Ошибка: " + pane.lastError + " " : "";
+      pane.failureText.textContent = pane.lastError ? t("Ошибка: ") + pane.lastError + " " : "";
       refreshStatus(pane);
       $("#panes").insertBefore(pane.col, orch.col);
     }
@@ -1840,7 +2142,7 @@ async function loadState() {
 
 const taskCards = new Map();
 const recentEvents = new Map();
-const statuses = { backlog: "Очередь", todo: "К выполнению", in_progress: "В работе", review: "На проверке", done: "Готово", blocked: "Застряла", archived: "Архив" };
+const statuses = { backlog: t("Очередь"), todo: t("К выполнению"), in_progress: t("В работе"), review: t("На проверке"), done: t("Готово"), blocked: t("Застряла"), archived: t("Архив") };
 let activeView = "overview", statsTimer = null, statsData = null, tasksLoaded = false;
 function taskSnapshot(task) {
   const previous = taskCards.get(task.id);
@@ -1848,14 +2150,14 @@ function taskSnapshot(task) {
 }
 function eventPhrase(ev) {
   switch (ev.type) {
-    case "message": return ev.role === "user" ? "получил задание" : "отвечает";
-    case "tool_call": return "выполняет: " + ev.name;
-    case "tool_result": return ev.is_error ? "команда закончилась ошибкой" : "получил результат команды";
-    case "diff": return "правит файл: " + clip(ev.path, 40);
-    case "permission_request": return "ждёт разрешения: " + ev.tool;
-    case "permission_resolved": return ev.allow ? "разрешение получено" : "запрос отклонён";
-    case "done": return "закончил ход";
-    case "error": return "ошибка";
+    case "message": return ev.role === "user" ? t("получил задание") : t("отвечает");
+    case "tool_call": return t("выполняет: ") + ev.name;
+    case "tool_result": return ev.is_error ? t("команда закончилась ошибкой") : t("получил результат команды");
+    case "diff": return t("правит файл: ") + clip(ev.path, 40);
+    case "permission_request": return t("ждёт разрешения: ") + ev.tool;
+    case "permission_resolved": return ev.allow ? t("разрешение получено") : t("запрос отклонён");
+    case "done": return t("закончил ход");
+    case "error": return t("ошибка");
     default: return null;
   }
 }
@@ -1901,7 +2203,7 @@ function setView(view) {
   if (view === "home") { renderHome(); refreshHome(); }
   if (view === "scene") openScene();
 }
-const NAV = { scene: ["scene", "Сцена"], home: ["home", "Отделы"], overview: ["overview", "Обзор"], chat: ["chat", "Чаты"], board: ["board", "Доска"], dash: ["dash", "Статистика"] };
+const NAV = { scene: ["scene", t("Сцена")], home: ["home", t("Отделы")], overview: ["overview", t("Обзор")], chat: ["chat", t("Чаты")], board: ["board", t("Доска")], dash: ["dash", t("Статистика")] };
 for (const button of document.querySelectorAll("[data-view-button]")) {
   const [ic, label] = NAV[button.dataset.viewButton];
   button.append(icon(ic), el("span", "", label));
@@ -1916,7 +2218,7 @@ const navMail = (() => {
   const button = $("#nav-mail");
   const badge = el("span", "count", "0");
   badge.hidden = true;
-  button.append(icon("mail"), el("span", "", "Почта"), badge);
+  button.append(icon("mail"), el("span", "", t("Почта")), badge);
   button.onclick = () => { setView("chat"); selectOrchTab("mail"); };
   return { button, badge };
 })();
@@ -1927,39 +2229,43 @@ async function refreshStats() {
     statsData = await response.json();
     if (activeView === "dash") renderDash();
     scheduleOverview();
-  } catch (_) { if (activeView === "dash") $(".dash-connection").textContent = "нет связи"; }
+  } catch (_) { if (activeView === "dash") $(".dash-connection").textContent = t("нет связи"); }
 }
 function ago(ms) {
   const minutes = Math.floor(ms / 60000);
-  if (minutes < 1) return "только что";
-  if (minutes < 60) return minutes + " мин назад";
-  return Math.floor(minutes / 60) + " ч назад";
+  if (language === "en") {
+    if (minutes < 1) return "just now";
+    return minutes < 60 ? new Intl.RelativeTimeFormat(language, { numeric: "auto" }).format(-minutes, "minute") : new Intl.RelativeTimeFormat(language, { numeric: "auto" }).format(-Math.floor(minutes / 60), "hour");
+  }
+  if (minutes < 1) return t("только что");
+  if (minutes < 60) return minutes + t(" мин назад");
+  return Math.floor(minutes / 60) + t(" ч назад");
 }
-function duration(ms) { const seconds = Math.floor(ms / 1000); return Math.floor(seconds / 60) + " мин " + (seconds % 60) + " с"; }
+function duration(ms) { const seconds = Math.floor(ms / 1000); return language === "ru" ? Math.floor(seconds / 60) + t(" мин ") + (seconds % 60) + t(" с") : new Intl.NumberFormat(language, { style: "unit", unit: "minute", unitDisplay: "short" }).format(Math.floor(seconds / 60)) + " " + new Intl.NumberFormat(language, { style: "unit", unit: "second", unitDisplay: "short" }).format(seconds % 60); }
 function progressBar(value) { const p = el("progress"); p.max = 100; p.value = value || 0; return p; }
 function renderDash() {
   const root = $('[data-view="dash"]');
-  const connection = el("div", "dash-connection dash-muted", statsData ? "" : "Загрузка…");
+  const connection = el("div", "dash-connection dash-muted", statsData ? "" : t("Загрузка…"));
   const summary = el("div", "dash-summary");
   if (statsData) {
     for (const [status, label] of Object.entries(statuses)) summary.append(el("span", "chip", label + ": " + (statsData.tasks[status] || 0)));
-    const t = statsData.totals;
-    summary.append(el("span", "chip", `Workflow: ${t.workflows_total} / ${t.workflows_finished} успешно / ${t.workflows_failed} ошибок`), el("span", "chip", "Писем: " + t.mails_total));
+    const totalsData = statsData.totals;
+    summary.append(el("span", "chip", t(t("Workflow: {total} / {finished} успешно / {failed} ошибок"), { total: totalsData.workflows_total, finished: totalsData.workflows_finished, failed: totalsData.workflows_failed })), el("span", "chip", t("Писем: ") + totalsData.mails_total));
     const totals = team.reduce((sum, member) => { const stats = statsData.agents[member.id] || {}; sum.input += stats.input_tokens || 0; sum.output += stats.output_tokens || 0; sum.cost += stats.cost_usd || 0; return sum; }, { input: 0, output: 0, cost: 0 });
-    summary.append(el("span", "chip", "Токены: " + totals.input + " / " + totals.output), el("span", "chip", "Стоимость (только Claude): " + (totals.cost > 0 ? "$" + totals.cost.toFixed(2) : "нет данных")));
+    summary.append(el("span", "chip", t("Токены: ") + totals.input + " / " + totals.output), el("span", "chip", t("Стоимость (только Claude): ") + (totals.cost > 0 ? "$" + totals.cost.toFixed(2) : t("нет данных"))));
   }
   const grid = el("div", "dash-grid");
   for (const member of team) {
     const card = el("article", "dash-card"); card.dataset.agent = member.id; card.style.setProperty("--c", lineColor(member.id));
     const pane = panes[member.id], stats = statsData && statsData.agents[member.id] || {};
-    card.append(el("h2", "", member.id), el("div", "dash-muted", [member.kind, member.model || "по умолчанию", member.effort || "по умолчанию", member.mode].join(" · ")));
-    card.append(el("span", "chip", pane ? pane.chip.textContent : "свободен"));
+    card.append(el("h2", "", member.id), el("div", "dash-muted", [member.kind, member.model || t("по умолчанию"), member.effort || t("по умолчанию"), member.mode].join(" · ")));
+    card.append(el("span", "chip", pane ? pane.chip.textContent : t("свободен")));
     const list = el("dl");
-    list.append(el("dt", "", "Токены"), el("dd", "", (stats.input_tokens || 0) + " / " + (stats.output_tokens || 0)), el("dt", "", "Стоимость"), el("dd", "", stats.cost_usd > 0 ? "$" + stats.cost_usd.toFixed(2) : "нет данных"));
-    for (const [label, value] of [["Ходы", stats.turns || 0], ["Ошибки", stats.turn_errors || 0], ["Остановки", stats.interrupted || 0], ["Время работы", duration(stats.busy_ms || 0)], ["Инструменты", stats.tool_calls || 0], ["Разрешения", stats.permission_requests || 0], ["Отказы guard", stats.guard_denied || 0], ["Писем отправлено / получено", (stats.mails_sent || 0) + " / " + (stats.mails_received || 0)], ["Последняя активность", stats.last_activity_ms ? duration(Math.max(0, Date.now() - stats.last_activity_ms)) + " назад" : "нет"]]) list.append(el("dt", "", label), el("dd", "", String(value)));
+    list.append(el("dt", "", t("Токены")), el("dd", "", (stats.input_tokens || 0) + " / " + (stats.output_tokens || 0)), el("dt", "", t("Стоимость")), el("dd", "", stats.cost_usd > 0 ? "$" + stats.cost_usd.toFixed(2) : t("нет данных")));
+    for (const [label, value] of [[t("Ходы"), stats.turns || 0], [t("Ошибки"), stats.turn_errors || 0], [t("Остановки"), stats.interrupted || 0], [t("Время работы"), duration(stats.busy_ms || 0)], [t("Инструменты"), stats.tool_calls || 0], [t("Разрешения"), stats.permission_requests || 0], [t("Отказы guard"), stats.guard_denied || 0], [t("Писем отправлено / получено"), (stats.mails_sent || 0) + " / " + (stats.mails_received || 0)], [t("Последняя активность"), stats.last_activity_ms ? duration(Math.max(0, Date.now() - stats.last_activity_ms)) + t(" назад") : t("нет")]]) list.append(el("dt", "", label), el("dd", "", String(value)));
     const more = el("details", "dash-more");
-    more.append(el("summary", "", "Все показатели"), list);
-    card.append(el("div", "dash-muted", "Ходов: " + (stats.turns || 0) + " · активность: " + (stats.last_activity_ms ? ago(Math.max(0, Date.now() - stats.last_activity_ms)) : "нет")), more);
+    more.append(el("summary", "", t("Все показатели")), list);
+    card.append(el("div", "dash-muted", t("Ходов: ") + (stats.turns || 0) + t(" · активность: ") + (stats.last_activity_ms ? ago(Math.max(0, Date.now() - stats.last_activity_ms)) : t("нет"))), more);
     const current = [...taskCards.values()].find(t => t.assignee === member.id && t.status === "in_progress");
     if (current) card.append(el("div", "", current.title + " · " + current.progress + "%"), progressBar(current.progress));
     for (const event of recentEvents.get(member.id) || []) card.append(el("div", "dash-muted", event));
@@ -1974,7 +2280,7 @@ async function patchTask(id, body) {
 }
 function agentSelect(selected) {
   const select = el("select");
-  const empty = el("option", "", "Не назначен"); empty.value = ""; select.append(empty);
+  const empty = el("option", "", t("Не назначен")); empty.value = ""; select.append(empty);
   for (const member of team) { const option = el("option", "", member.id); option.value = member.id; select.append(option); }
   select.value = selected || ""; return select;
 }
@@ -1990,38 +2296,38 @@ function renderTask(task) {
   const editor = el("form", "board-editor"); editor.hidden = true;
   const editTitle = el("input"); editTitle.value = task.title;
   const description = el("textarea"); description.value = task.description;
-  const save = el("button", "", "Сохранить"); save.type = "submit";
-  const cancel = el("button", "", "Отмена"); cancel.type = "button"; cancel.onclick = () => { editor.hidden = true; };
+  const save = el("button", "", t("Сохранить")); save.type = "submit";
+  const cancel = el("button", "", t("Отмена")); cancel.type = "button"; cancel.onclick = () => { editor.hidden = true; };
   const error = el("div", "board-error");
   editor.append(editTitle, description, save, cancel);
   const more = el("div", "board-more"); more.hidden = true;
   title.onclick = () => { more.hidden = !more.hidden; title.setAttribute("aria-expanded", String(!more.hidden)); };
-  const editBtn = el("button", "", "Править"); editBtn.type = "button"; editBtn.onclick = () => { editor.hidden = false; };
+  const editBtn = el("button", "", t("Править")); editBtn.type = "button"; editBtn.onclick = () => { editor.hidden = false; };
   editor.onsubmit = async e => { e.preventDefault(); try { await patchTask(task.id, { title: editTitle.value, description: description.value }); editor.hidden = true; } catch (err) { error.textContent = err.message; } };
   const status = statusSelect(task.status), assignee = agentSelect(task.assignee);
-  status.setAttribute("aria-label", "Статус"); assignee.setAttribute("aria-label", "Исполнитель");
+  status.setAttribute("aria-label", t("Статус")); assignee.setAttribute("aria-label", t("Исполнитель"));
   status.onchange = async () => { try { await patchTask(task.id, { status: status.value }); } catch (err) { error.textContent = err.message; status.value = task.status; } };
   assignee.onchange = async () => { try { await patchTask(task.id, { assignee: assignee.value || null }); } catch (err) { error.textContent = err.message; assignee.value = task.assignee || ""; } };
   const who = el("div", "board-meta who");
   if (task.assignee) { const chip = el("span", "linechip"); chip.style.setProperty("--c", lineColor(task.assignee)); who.append(chip); }
-  who.append(el("span", "", task.assignee || "Не назначен"));
+  who.append(el("span", "", task.assignee || t("Не назначен")));
   card.append(title, who, progressBar(task.progress), el("div", "board-meta", task.progress + "%" + (task.labels.length ? " · " + task.labels.join(", ") : "")), el("div", "board-note", task.note), more, editor);
-  more.append(el("div", "board-meta", "Обновлено " + new Date(task.updated_ms).toLocaleTimeString()), status, assignee, editBtn);
+  more.append(el("div", "board-meta", t("Обновлено ") + new Date(task.updated_ms).toLocaleTimeString(language)), status, assignee, editBtn);
   if (task.assignee && ["backlog", "todo", "blocked"].includes(task.status)) {
-    const dispatch = el("button", "", "Запустить"); dispatch.type = "button";
+    const dispatch = el("button", "", t("Запустить")); dispatch.type = "button";
     dispatch.onclick = async () => { dispatch.disabled = true; try { await post("/api/tasks/" + encodeURIComponent(task.id) + "/dispatch", {}); } catch (err) { error.textContent = err.message; } finally { dispatch.disabled = false; } };
     more.append(dispatch);
   }
-  const archive = el("button", "", "В архив"); archive.type = "button";
+  const archive = el("button", "", t("В архив")); archive.type = "button";
   archive.onclick = async () => { try { await patchTask(task.id, { status: "archived" }); } catch (err) { error.textContent = err.message; } };
   more.append(archive); card.append(error); return card;
 }
 function renderBoard() {
   const root = $('[data-view="board"]');
   const form = el("form", "board-form");
-  const title = el("input"); title.placeholder = "Новая задача"; title.required = true;
-  const description = el("textarea"); description.placeholder = "Описание";
-  const assignee = agentSelect(null), submit = el("button", "", "Создать"), error = el("span", "board-error"); submit.type = "submit";
+  const title = el("input"); title.placeholder = t("Новая задача"); title.required = true;
+  const description = el("textarea"); description.placeholder = t("Описание");
+  const assignee = agentSelect(null), submit = el("button", "", t("Создать")), error = el("span", "board-error"); submit.type = "submit";
   form.append(title, description, assignee, submit, error);
   form.onsubmit = async e => { e.preventDefault(); submit.disabled = true; try { await post("/api/tasks", { title: title.value, description: description.value, assignee: assignee.value || null }); title.value = ""; description.value = ""; } catch (err) { error.textContent = err.message; } finally { submit.disabled = false; } };
   const columns = el("div", "board-columns");
@@ -2030,9 +2336,9 @@ function renderBoard() {
     const column = el("section", "board-column"); column.dataset.status = id;
     const head = el("h2"); const mk = svg("svg", { width: 20, height: 20, viewBox: "0 0 24 24" }); mk.append(stationMark({ status: id === "backlog" ? "todo" : id, title: "" }, 12, 12, "var(--ink)")); head.append(mk, el("span", "", label)); column.append(head);
     const items = [...taskCards.values()].filter(t => t.status === id);
-    if (!items.length) column.append(el("div", "board-meta", "пусто"));
+    if (!items.length) column.append(el("div", "board-meta", t("пусто")));
     for (const item of items.slice(0, 200)) column.append(renderTask(item));
-    if (items.length > 200) column.append(el("div", "board-meta", "ещё " + (items.length - 200)));
+    if (items.length > 200) column.append(el("div", "board-meta", t("ещё ") + (items.length - 200)));
     column.ondragover = e => e.preventDefault();
     column.ondrop = async e => { e.preventDefault(); const taskId = e.dataTransfer.getData("text/plain"); if (taskCards.has(taskId)) try { await patchTask(taskId, { status: id }); } catch (err) { column.append(el("div", "board-error", err.message)); } };
     columns.append(column);
@@ -2041,8 +2347,8 @@ function renderBoard() {
 }
 
 // ---- Обзор: схема команды, «Ждёт вас», расписание ----
-const STATE_LABEL = { off: "Отключён", wait: "Ждёт вас", work: "Работает", idle: "Свободен" };
-const MODE_LABEL = { ask: "спрашивает", auto: "авто", smart: "умный", bypass: "BYPASS" };
+const STATE_LABEL = { off: t("Отключён"), wait: t("Ждёт вас"), work: t("Работает"), idle: t("Свободен") };
+const MODE_LABEL = { ask: t("спрашивает"), auto: t("авто"), smart: t("умный"), bypass: "BYPASS" };
 const TASK_ORDER = { done: 0, review: 1, in_progress: 2, blocked: 3, todo: 4, backlog: 5 };
 const ov = { focus: null, drawn: false };
 function agentState(id) {
@@ -2100,18 +2406,18 @@ function buildDiagram(width) {
     return [text.slice(0, cut).trim(), clip(text.slice(cut).trim(), max)];
   };
   const stationX = {};
-  const s = svg("svg", { viewBox: `0 0 ${width} ${H}`, role: "group", "aria-label": "Схема команды: линия на агента, станции — его задачи" });
+  const s = svg("svg", { viewBox: `0 0 ${width} ${H}`, role: "group", "aria-label": t("Схема команды: линия на агента, станции — его задачи") });
   const rowY = i => TOP + i * ROW + 34;
   const waiting = rows.map((r, i) => ({ r, i })).filter(({ r }) => !r.orch && agentState(r.id) === "wait");
   rows.forEach((row, i) => {
     const y = rowY(i);
     const color = row.orch ? "var(--ink)" : lineColor(row.id);
-    const g = svg("g", { class: "row" + (ov.focus === row.id ? " on" : ""), tabindex: 0, role: "button", "aria-pressed": String(ov.focus === row.id), "aria-label": row.orch ? "Линия владельца" : "Агент " + row.id });
+    const g = svg("g", { class: "row" + (ov.focus === row.id ? " on" : ""), tabindex: 0, role: "button", "aria-pressed": String(ov.focus === row.id), "aria-label": row.orch ? t("Линия владельца") : t("Агент ") + row.id });
     g.dataset.row = row.id;
     g.append(svg("rect", { class: "hit", x: 2, y: y - 40, width: width - 4, height: ROW - 8, rx: 8 }));
     let stations = [];
     if (row.orch) {
-      for (const w of sortedPerms()) stations.push({ title: (w.guard ? "Опасная команда" : "Запрос") + " · " + w.agent, status: "blocked", progress: 0, label: w.agent + ": " + (w.guard ? "опасная команда" : "запрос " + w.tool), ink: lineColor(w.agent), from: w.agent });
+      for (const w of sortedPerms()) stations.push({ title: (w.guard ? t("Опасная команда") : t("Запрос")) + " · " + w.agent, status: "blocked", progress: 0, label: w.agent + ": " + (w.guard ? t("опасная команда") : t("запрос ") + w.tool), ink: lineColor(w.agent), from: w.agent });
       for (const t of reviewTasks()) stations.push({ title: t.title, status: "review", progress: t.progress, label: t.title });
     } else stations = agentTasks(row.id).map(t => ({ ...t, label: t.title }));
     let hidden = 0;
@@ -2139,15 +2445,15 @@ function buildDiagram(width) {
       if (row.orch && t.from) (stationX[t.from] = stationX[t.from] || x);
       if (!row.orch && (t.status === "in_progress" || t.status === "blocked") && stationX["_a" + row.id] === undefined) stationX["_a" + row.id] = x;
     });
-    if (hidden) g.append(svg("text", { class: "st", x: X0 + 4, y: y - 16 }, "ещё " + hidden + " ранее"));
-    if (!stations.length) g.append(svg("text", { class: "st", x: X0 + 40, y: y + 30 }, row.orch ? "ничего не ждёт вас" : "нет задач"));
+    if (hidden) g.append(svg("text", { class: "st", x: X0 + 4, y: y - 16 }, t("ещё ") + hidden + t(" ранее")));
+    if (!stations.length) g.append(svg("text", { class: "st", x: X0 + 40, y: y + 30 }, row.orch ? t("ничего не ждёт вас") : t("нет задач")));
     const state = row.orch ? (waits.perms.size || reviewTasks().length ? "wait" : "idle") : agentState(row.id);
     g.append(stateMark(state, color, 22, y));
-    g.append(svg("text", { class: "name", x: 42, y: y - 1 }, row.orch ? "вы" : row.id));
-    g.append(svg("text", { class: "sub", x: 42, y: y + 15 }, row.orch ? "владелец" : STATE_LABEL[state]));
+    g.append(svg("text", { class: "name", x: 42, y: y - 1 }, row.orch ? t("вы") : row.id));
+    g.append(svg("text", { class: "sub", x: 42, y: y + 15 }, row.orch ? t("владелец") : STATE_LABEL[state]));
     if (!row.orch && row.member.mode === "bypass") g.append(svg("rect", { class: "tag", x: 42, y: y + 21, width: 50, height: 14, rx: 3 }), svg("text", { class: "tagtext", x: 67, y: y + 31, "text-anchor": "middle" }, "BYPASS"));
     const unread = row.orch ? 0 : unreadFrom(row.id);
-    if (unread) g.append(svg("text", { class: "sub", x: 100, y: y + 31 }, "писем вам: " + unread));
+    if (unread) g.append(svg("text", { class: "sub", x: 100, y: y + 31 }, t("писем вам: ") + unread));
     const choose = () => {
       ov.focus = ov.focus === row.id ? null : row.id;
       renderOverview(true);
@@ -2173,39 +2479,39 @@ function buildDiagram(width) {
 function sortedPerms() { return [...waits.perms.values()].sort((a, b) => (b.guard ? 1 : 0) - (a.guard ? 1 : 0)); }
 function waitsPanel() {
   const root = el("aside", "waits");
-  root.setAttribute("aria-label", "Ждёт вас");
+  root.setAttribute("aria-label", t("Ждёт вас"));
   const total = waits.perms.size + reviewTasks().length;
-  const h = el("h2", "section-title big", "Ждёт вас");
+  const h = el("h2", "section-title big", t("Ждёт вас"));
   h.append(el("span", "count", String(total)));
   root.append(h);
   if (!total) {
     const empty = el("div", "wait-empty");
-    empty.append(icon("check", 22), el("span", "", "Ничего не ждёт вашего решения"));
+    empty.append(icon("check", 22), el("span", "", t("Ничего не ждёт вашего решения")));
     root.append(empty);
   }
   for (const w of sortedPerms()) {
     const card = el("div", "wait-card" + (w.guard ? " danger" : ""));
     card.dataset.perm = w.id;
-    card.append(el("h3", "", (w.guard ? "Опасная команда" : "Запрос разрешения") + " · " + w.agent));
-    if (w.guard) card.append(el("p", "guard-warning", "Правило " + w.guard.rule + ": " + w.guard.reason));
-    else card.append(el("p", "", "Инструмент: " + w.tool));
+    card.append(el("h3", "", (w.guard ? t("Опасная команда") : t("Запрос разрешения")) + " · " + w.agent));
+    if (w.guard) card.append(el("p", "guard-warning", t("Правило ") + w.guard.rule + ": " + w.guard.reason));
+    else card.append(el("p", "", t("Инструмент: ") + w.tool));
     card.append(el("pre", "", clip(fmtInput(w.input), 700)));
     const err = el("div", "err", permErrors.get(w.agent + "\u0000" + w.id) || "");
     const { row } = permButtons(w.agent, w, m => { err.textContent = m; });
     card.append(row, err);
     root.append(card);
   }
-  for (const t of reviewTasks()) {
+  for (const task of reviewTasks()) {
     const card = el("div", "wait-card");
-    card.dataset.taskId = t.id;
-    card.append(el("h3", "", "На проверке · " + (t.assignee || "не назначена")));
-    card.append(el("p", "", t.title + (t.note ? " — " + clip(t.note, 160) : "")));
+    card.dataset.taskId = task.id;
+    card.append(el("h3", "", t("На проверке · ") + (task.assignee || t("не назначена"))));
+    card.append(el("p", "", task.title + (task.note ? " — " + clip(task.note, 160) : "")));
     const err = el("div", "err");
-    const accept = el("button", "allow", "Принять"), back = el("button", "", "Вернуть в работу");
+    const accept = el("button", "allow", t("Принять")), back = el("button", "", t("Вернуть в работу"));
     accept.type = back.type = "button";
     const move = async (status) => {
       accept.disabled = back.disabled = true;
-      try { await patchTask(t.id, { status }); } catch (e) { err.textContent = e.message; accept.disabled = back.disabled = false; }
+      try { await patchTask(task.id, { status }); } catch (e) { err.textContent = e.message; accept.disabled = back.disabled = false; }
     };
     accept.onclick = () => move("done");
     back.onclick = () => move("in_progress");
@@ -2220,7 +2526,7 @@ function focusPanel(id) {
   const box = el("section", "focus-panel");
   if (id === "orchestrator") {
     const g = el("div", "grow");
-    g.append(el("h3", "", "Вы"), el("div", "muted", "Станции на вашей линии: то, что ждёт вашего решения."));
+    g.append(el("h3", "", t("Вы")), el("div", "muted", t("Станции на вашей линии: то, что ждёт вашего решения.")));
     box.append(g);
     return box;
   }
@@ -2229,27 +2535,27 @@ function focusPanel(id) {
   const p = panes[id], cur = agentTasks(id).find(t => t.status === "in_progress");
   const g = el("div", "grow");
   g.append(el("h3", "", id + " — " + STATE_LABEL[agentState(id)]));
-  g.append(el("div", "muted", [m.kind, m.model || "по умолчанию", m.effort || "по умолчанию", MODE_LABEL[m.mode], m.guard === true && m.mode !== "bypass" ? "guard включён" : null].filter(Boolean).join(" · ")));
-  g.append(el("div", "", cur ? cur.title + " · " + cur.progress + "%" : "Нет задачи в работе"));
+  g.append(el("div", "muted", [m.kind, m.model || t("по умолчанию"), m.effort || t("по умолчанию"), MODE_LABEL[m.mode], m.guard === true && m.mode !== "bypass" ? t("guard включён") : null].filter(Boolean).join(" · ")));
+  g.append(el("div", "", cur ? cur.title + " · " + cur.progress + "%" : t("Нет задачи в работе")));
   for (const ev of recentEvents.get(id) || []) g.append(el("div", "muted", ev));
-  const open = el("button", "primary", "Открыть чат");
+  const open = el("button", "primary", t("Открыть чат"));
   open.type = "button";
   open.onclick = () => { setView("chat"); if (p) p.col.scrollIntoView({ inline: "center", block: "nearest" }); };
-  const stop = el("button", "deny", "Стоп");
+  const stop = el("button", "deny", t("Стоп"));
   stop.type = "button";
   stop.disabled = !p || !p.busy || p.stopping;
   stop.onclick = async () => {
     stop.disabled = true;
-    try { await post("/api/agent/interrupt", { agent: id }); } catch (e) { box.append(el("div", "err", "Не удалось остановить: " + e.message)); }
+    try { await post("/api/agent/interrupt", { agent: id }); } catch (e) { box.append(el("div", "err", t("Не удалось остановить: ") + e.message)); }
   };
   box.append(g, open, stop);
   return box;
 }
 function timetable() {
   const table = el("table", "timetable");
-  table.setAttribute("aria-label", "Расписание команды");
+  table.setAttribute("aria-label", t("Расписание команды"));
   const head = el("tr");
-  for (const h of ["Агент", "Состояние", "Режим", "Над чем работает", "Ходов", "Последняя активность"]) head.append(el("th", "", h));
+  for (const h of [t("Агент"), t("Состояние"), t("Режим"), t("Над чем работает"), t("Ходов"), t("Последняя активность")]) head.append(el("th", "", h));
   table.append(head);
   for (const m of team) {
     const stats = statsData && statsData.agents[m.id] || {};
@@ -2258,7 +2564,7 @@ function timetable() {
     const who = el("td"), w = el("div", "who"), sw = el("span", "linechip");
     sw.style.setProperty("--c", lineColor(m.id));
     w.append(sw, el("span", "", m.id));
-    who.append(w, el("div", "dash-muted", [m.kind, m.model || "по умолчанию"].join(" · ")));
+    who.append(w, el("div", "dash-muted", [m.kind, m.model || t("по умолчанию")].join(" · ")));
     const st = el("td");
     const badge = el("span", "statebadge"), mark = svg("svg", { width: 20, height: 20, viewBox: "0 0 24 24" });
     mark.append(stateMark(agentState(m.id), lineColor(m.id), 12, 12));
@@ -2270,8 +2576,8 @@ function timetable() {
     const live = (recentEvents.get(m.id) || []).slice(-1)[0];
     if (cur) task.append(el("div", "", cur.title), progressBar(cur.progress));
     else if (agentState(m.id) !== "idle" && agentState(m.id) !== "off" && live) task.append(el("span", "", live));
-    else task.append(el("span", "dash-muted", "нет задачи"));
-    tr.append(who, st, mode, task, el("td", "", String(stats.turns || 0)), el("td", "", stats.last_activity_ms ? ago(Math.max(0, Date.now() - stats.last_activity_ms)) : "нет"));
+    else task.append(el("span", "dash-muted", t("нет задачи")));
+    tr.append(who, st, mode, task, el("td", "", String(stats.turns || 0)), el("td", "", stats.last_activity_ms ? ago(Math.max(0, Date.now() - stats.last_activity_ms)) : t("нет")));
     table.append(tr);
   }
   return table;
@@ -2307,21 +2613,21 @@ function renderOverview(force) {
   const diagBox = el("section", "diagram" + (ov.focus ? " focused" : ""));
   diagBox.append(buildDiagram(width - 14));
   const legend = el("div", "legend");
-  for (const [status, text] of [["done", "Готово"], ["in_progress", "В работе"], ["review", "На проверке"], ["todo", "Впереди"], ["blocked", "Застряла или ждёт вас"]]) {
+  for (const [status, text] of [["done", t("Готово")], ["in_progress", t("В работе")], ["review", t("На проверке")], ["todo", t("Впереди")], ["blocked", t("Застряла или ждёт вас")]]) {
     const s = el("span"), mini = svg("svg", { width: 22, height: 20, viewBox: "0 0 22 20" });
     mini.append(stationMark({ status, title: "", progress: 0 }, 11, 10, "var(--ink)"));
     s.append(mini, el("span", "", text));
     legend.append(s);
   }
   diagBox.append(legend);
-  main.append(el("h1", "page-title", "Обзор команды"), diagBox);
+  main.append(el("h1", "page-title", t("Обзор команды")), diagBox);
   for (const member of team) {
     const pane = panes[member.id];
     if (!pane || !pane.lastError) continue;
     const row = el("div", "errline"); row.setAttribute("aria-live", "polite");
-    const button = el("button", "", "Перезапустить"); button.type = "button";
+    const button = el("button", "", t("Перезапустить")); button.type = "button";
     button.onclick = () => pane.restart.click();
-    row.append(el("span", "", member.id + " - Ошибка: " + pane.lastError + " "), button);
+    row.append(el("span", "", member.id + t(" - Ошибка: ") + pane.lastError + " "), button);
     main.append(row);
   }
   if (ov.focus) main.append(focusPanel(ov.focus));
@@ -2334,7 +2640,7 @@ function renderOverview(force) {
     if (id === "blocked" && n) {
       const link = el("button", "chip bypass", label + ": " + n);
       link.type = "button";
-      link.title = "Открыть доску";
+      link.title = t("Открыть доску");
       link.onclick = () => setView("board");
       strip.append(link);
     } else strip.append(el("span", "chip", label + ": " + n));
@@ -2356,7 +2662,7 @@ window.addEventListener("resize", scheduleOverview);
 // Departments view (serve --home): what waits for the owner, what runs, departments, schedules, rules.
 let homeMode = false, homeTimer = 0;
 const homeData = { departments: [], schedules: [], proposals: [], recent: [], spend: null, error: "" };
-const workStates = { queued: "в очереди", waiting: "ждёт вас", running: "в работе", stuck: "застряла", review: "на приёмке", done: "готово", cancelled: "отменена" };
+const workStates = { queued: t("в очереди"), waiting: t("ждёт вас"), running: t("в работе"), stuck: t("застряла"), review: t("на приёмке"), done: t("готово"), cancelled: t("отменена") };
 async function getJson(path) {
   const response = await fetch(api(path));
   let data = null;
@@ -2374,7 +2680,7 @@ async function refreshHome() {
     homeData.recent = r.recent || [];
     homeData.spend = sp;
     homeData.error = "";
-  } catch (err) { homeData.error = "Не удалось загрузить отделы: " + err.message; }
+  } catch (err) { homeData.error = t("Не удалось загрузить отделы: ") + err.message; }
   scheduleHome();
   scDirty();
 }
@@ -2385,7 +2691,7 @@ function scheduleHome() {
 function money(usd) { return "$" + (usd || 0).toFixed(2); }
 function tokens(n) { n = n || 0; return n < 1000 ? String(n) : n < 1e6 ? Math.round(n / 1000) + "k" : (n / 1e6).toFixed(1) + "M"; }
 // "$0.25 · 340k → 3k токенов": dollars and the tokens behind them.
-function spent(usd, input, output) { return money(usd) + (input || output ? " · " + tokens(input) + " → " + tokens(output) + " токенов" : ""); }
+function spent(usd, input, output) { return money(usd) + (input || output ? " · " + tokens(input) + " → " + tokens(output) + t(" токенов") : ""); }
 function workSpent(work) { return spent(work.cost_usd, work.input_tokens, work.output_tokens); }
 function taskPath(task, tail) { return "/api/tasks/" + encodeURIComponent(task.id) + tail; }
 function showError(card, err) { const node = card.querySelector(".board-error"); if (node) node.textContent = err.message; }
@@ -2426,7 +2732,7 @@ function workLinks(work) {
     const a = el("a", "", label); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer";
     nodes.push(a);
   };
-  if (work.event) add("Источник: " + eventLabel(work.event), work.event.url);
+  if (work.event) add(t("Источник: ") + eventLabel(work.event), work.event.url);
   if (work.pr_url) add("Pull request", work.pr_url);
   return nodes;
 }
@@ -2443,54 +2749,54 @@ function waitCard(task) {
   const head = el("h3", "", task.title);
   head.prepend(el("span", "chip", work.department));
   const silent = silentRun(work);
-  card.append(head, el("p", "", [silent ? "молчит " + silentMins(work) + " мин" : workStates[work.state] || work.state, work.risk === "external" ? "уйдёт наружу" : "внутреннее", workSpent(work)].join(" · ")));
+  card.append(head, el("p", "", [silent ? t("молчит ") + silentMins(work) + t(" мин") : workStates[work.state] || work.state, work.risk === "external" ? t("уйдёт наружу") : t("внутреннее"), workSpent(work)].join(" · ")));
   const links = workLinks(work);
   if (links.length) { const row = el("p", "board-meta"); links.forEach((a, i) => { if (i) row.append(" · "); row.append(a); }); card.append(row); }
   const btns = el("div", "btns");
   if (silent) {
-    card.append(el("p", "home-reason", "Агенты ничего не делают дольше, чем разрешено отделу. Подождать, перезапустить шаг в новой сессии или остановить запуск?"));
+    card.append(el("p", "home-reason", t("Агенты ничего не делают дольше, чем разрешено отделу. Подождать, перезапустить шаг в новой сессии или остановить запуск?")));
     btns.append(
-      act("Подождать ещё", "", supervise(task, "wait"), card),
-      act("Перезапустить шаг", "primary", supervise(task, "restart"), card),
-      act("Остановить", "deny", supervise(task, "stop"), card));
+      act(t("Подождать ещё"), "", supervise(task, "wait"), card),
+      act(t("Перезапустить шаг"), "primary", supervise(task, "restart"), card),
+      act(t("Остановить"), "deny", supervise(task, "stop"), card));
     card.append(btns);
   } else if (work.state === "waiting" && work.proposal) {
     const p = work.proposal;
-    card.append(el("p", "", "Оркестратор предлагает новый отдел «" + p.title + "» (" + p.id + "): " + p.description));
+    card.append(el("p", "", t("Оркестратор предлагает новый отдел «") + p.title + "» (" + p.id + "): " + p.description));
     btns.append(
-      act("Создать отдел", "primary", () => post(taskPath(task, "/proposal"), { create: true }), card),
-      act("В общий отдел", "", () => post(taskPath(task, "/proposal"), { create: false }), card));
+      act(t("Создать отдел"), "primary", () => post(taskPath(task, "/proposal"), { create: true }), card),
+      act(t("В общий отдел"), "", () => post(taskPath(task, "/proposal"), { create: false }), card));
     card.append(btns);
   } else if (work.state === "waiting") {
     const list = el("ul", "home-questions");
     for (const q of work.questions || []) if (q.answer == null) list.append(el("li", "", q.text));
-    card.append(list, replyForm("Ответ на все вопросы одним сообщением", "Ответить", text => post(taskPath(task, "/answer"), { text }), card));
+    card.append(list, replyForm(t("Ответ на все вопросы одним сообщением"), t("Ответить"), text => post(taskPath(task, "/answer"), { text }), card));
   } else if (work.state === "review") {
     if (work.result_summary) card.append(el("pre", "", work.result_summary));
     const full = el("pre", "home-result"); full.hidden = true;
-    const show = el("button", "", "Весь результат"); show.type = "button";
+    const show = el("button", "", t("Весь результат")); show.type = "button";
     show.onclick = async () => {
       if (!full.hidden) { full.hidden = true; return; }
       try { full.textContent = (await getJson(taskPath(task, "/result"))).text; full.hidden = false; } catch (err) { showError(card, err); }
     };
     btns.append(
-      act("Принять", "primary", () => patchTask(task.id, { status: "done" }), card),
-      act("Ещё круг", "", () => post(taskPath(task, "/retry"), {}), card),
+      act(t("Принять"), "primary", () => patchTask(task.id, { status: "done" }), card),
+      act(t("Ещё круг"), "", () => post(taskPath(task, "/retry"), {}), card),
       show);
-    card.append(btns, full, replyForm("Что исправить", "Вернуть с замечанием", text => post(taskPath(task, "/return"), { text }), card));
+    card.append(btns, full, replyForm(t("Что исправить"), t("Вернуть с замечанием"), text => post(taskPath(task, "/return"), { text }), card));
   } else if (work.state === "stuck") {
-    card.append(el("p", "home-reason", "Причина: " + (work.stuck_reason || "не указана")));
+    card.append(el("p", "home-reason", t("Причина: ") + (work.stuck_reason || t("не указана"))));
     if (work.result_summary) card.append(el("pre", "", work.result_summary));
     btns.append(
-      act("Ещё круг", "primary", () => post(taskPath(task, "/retry"), {}), card),
-      act("Принять как есть", "", () => patchTask(task.id, { status: "done" }), card),
-      act("Закрыть", "deny", () => patchTask(task.id, { status: "archived" }), card));
-    card.append(btns, replyForm("Что поменять в новом круге", "Ещё круг с замечанием", text => post(taskPath(task, "/return"), { text }), card));
+      act(t("Ещё круг"), "primary", () => post(taskPath(task, "/retry"), {}), card),
+      act(t("Принять как есть"), "", () => patchTask(task.id, { status: "done" }), card),
+      act(t("Закрыть"), "deny", () => patchTask(task.id, { status: "archived" }), card));
+    card.append(btns, replyForm(t("Что поменять в новом круге"), t("Ещё круг с замечанием"), text => post(taskPath(task, "/return"), { text }), card));
   }
   if (work.comment_draft) {
     const box = el("div", "home-comment"), row = el("div", "btns");
-    box.append(el("p", "", "Закрывающий комментарий" + (work.event ? " в " + eventLabel(work.event) : "") + " ждёт вашего слова:"), el("pre", "", work.comment_draft));
-    row.append(act("Опубликовать комментарий", "primary", supervise(task, "publish"), card), act("Не нужно", "", supervise(task, "drop"), card));
+    box.append(el("p", "", t("Закрывающий комментарий") + (work.event ? t(" в ") + eventLabel(work.event) : "") + t(" ждёт вашего слова:")), el("pre", "", work.comment_draft));
+    row.append(act(t("Опубликовать комментарий"), "primary", supervise(task, "publish"), card), act(t("Не нужно"), "", supervise(task, "drop"), card));
     box.append(row);
     card.append(box);
   }
@@ -2499,10 +2805,10 @@ function waitCard(task) {
 }
 function ruleCard(proposal) {
   const card = el("article", "wait-card");
-  card.append(el("h3", "", "Правило для «" + proposal.target + "»"), el("pre", "", proposal.text));
+  card.append(el("h3", "", t("Правило для «") + proposal.target + "»"), el("pre", "", proposal.text));
   const path = "/api/rules/" + encodeURIComponent(proposal.target) + "/" + encodeURIComponent(proposal.id);
   const btns = el("div", "btns");
-  btns.append(act("Добавить", "primary", () => post(path + "/approve", {}), card), act("Отклонить", "deny", () => post(path + "/reject", {}), card));
+  btns.append(act(t("Добавить"), "primary", () => post(path + "/approve", {}), card), act(t("Отклонить"), "deny", () => post(path + "/reject", {}), card));
   card.append(btns, el("div", "board-error"));
   return card;
 }
@@ -2510,17 +2816,17 @@ let homeCompose = null;
 function buildHomeCompose() {
   const form = el("form", "home-compose");
   const text = el("textarea"); text.rows = 3; text.id = "home-message";
-  text.placeholder = "Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…";
-  const label = el("label", "", "Сообщение оркестратору"); label.htmlFor = text.id;
-  const send = el("button", "primary", "Отправить"); send.type = "submit";
+  text.placeholder = t("Несколько задач одним сообщением: сделай пост про запуск, проверь остатки, посмотри, что пишут про рынок…");
+  const label = el("label", "", t("Сообщение оркестратору")); label.htmlFor = text.id;
+  const send = el("button", "primary", t("Отправить")); send.type = "submit";
   const status = el("span", "board-meta"); status.setAttribute("aria-live", "polite");
   const row = el("div", "btns"); row.append(send, status);
   form.onsubmit = async e => {
     e.preventDefault();
     if (!text.value.trim()) return;
     send.disabled = true; status.textContent = "";
-    try { await post("/api/orchestrator", { text: text.value }); text.value = ""; status.textContent = "Принято. Задачи появятся ниже, ответ придёт в почту и Telegram."; }
-    catch (err) { status.textContent = "Ошибка: " + err.message; }
+    try { await post("/api/orchestrator", { text: text.value }); text.value = ""; status.textContent = t("Принято. Задачи появятся ниже, ответ придёт в почту и Telegram."); }
+    catch (err) { status.textContent = t("Ошибка: ") + err.message; }
     finally { send.disabled = false; }
   };
   form.append(label, text, row);
@@ -2541,92 +2847,92 @@ function renderHome() {
   root.append(grid);
 
   const tasks = [...taskCards.values()].filter(t => t.work && t.status !== "archived").sort((a, b) => b.updated_ms - a.updated_ms);
-  const waits = homeSection("Ждёт вас");
+  const waits = homeSection(t("Ждёт вас"));
   const mine = tasks.filter(t => ownerWaits(t.work));
   if (!mine.length && !homeData.proposals.length) {
-    const empty = el("div", "wait-empty"); empty.append(icon("check"), el("span", "", "Ничего не ждёт вашего решения."));
+    const empty = el("div", "wait-empty"); empty.append(icon("check"), el("span", "", t("Ничего не ждёт вашего решения.")));
     waits.append(empty);
   }
   for (const task of mine) waits.append(waitCard(task));
   for (const proposal of homeData.proposals) waits.append(ruleCard(proposal));
   left.append(waits);
 
-  const work = homeSection("В работе");
+  const work = homeSection(t("В работе"));
   const active = tasks.filter(t => !mine.includes(t) && !["done", "cancelled"].includes(t.work.state));
-  if (!active.length) work.append(el("div", "board-meta", "Сейчас ничего не идёт."));
+  if (!active.length) work.append(el("div", "board-meta", t("Сейчас ничего не идёт.")));
   for (const task of active) {
     const card = el("article", "board-card");
     const head = el("div", "home-line");
     head.append(el("span", "chip", task.work.department), el("strong", "", task.title));
     const meta = [workStates[task.work.state] || task.work.state, workSpent(task.work)];
-    if (task.work.parent) meta.push("заказ для " + task.work.parent);
-    if (task.work.state === "review") meta.push("проверяет оркестратор");
+    if (task.work.parent) meta.push(t("заказ для ") + task.work.parent);
+    if (task.work.state === "review") meta.push(t("проверяет оркестратор"));
     card.append(head, el("div", "board-meta", meta.join(" · ")));
-    if (task.work.state === "running") card.append(act("Стоп", "deny", () => post(taskPath(task, "/stop"), {}), card));
+    if (task.work.state === "running") card.append(act(t("Стоп"), "deny", () => post(taskPath(task, "/stop"), {}), card));
     card.append(el("div", "board-error"));
     work.append(card);
   }
   const done = tasks.filter(t => t.work.state === "done").slice(0, 10);
   if (done.length) {
     const more = el("details", "dash-more");
-    more.append(el("summary", "", "Готово недавно: " + done.length));
+    more.append(el("summary", "", t("Готово недавно: ") + done.length));
     for (const task of done) more.append(el("div", "board-meta", task.work.department + " · " + task.title + " · " + workSpent(task.work)));
     work.append(more);
   }
   left.append(work);
 
-  const depts = homeSection("Отделы");
+  const depts = homeSection(t("Отделы"));
   if (homeData.spend) {
     const all = Object.values(homeData.spend.tokens || {});
     const sum = key => all.reduce((s, t) => s + (t[key] || 0), 0);
     const orch = homeData.spend.month && homeData.spend.month.orchestrator;
-    depts.append(el("div", "board-meta", "Расход за месяц: " + spent(homeData.spend.total_usd, sum("input"), sum("output"))
-      + (orch ? ", из них оркестратор " + money(orch) : "")));
+    depts.append(el("div", "board-meta", t("Расход за месяц: ") + spent(homeData.spend.total_usd, sum("input"), sum("output"))
+      + (orch ? t(", из них оркестратор ") + money(orch) : "")));
     if (sum("unpriced_input") || sum("unpriced_output"))
-      depts.append(el("div", "board-meta", "Без цены (Codex, нет [prices.codex]): " + tokens(sum("unpriced_input")) + " → " + tokens(sum("unpriced_output")) + " токенов, в долларах не учтены."));
+      depts.append(el("div", "board-meta", t("Без цены (Codex, нет [prices.codex]): ") + tokens(sum("unpriced_input")) + " → " + tokens(sum("unpriced_output")) + t(" токенов, в долларах не учтены.")));
   }
   for (const dept of homeData.departments) {
     const card = el("article", "dash-card home-dept");
     card.append(el("h2", "", dept.title + " · " + dept.id), el("div", "board-meta", dept.description));
     const dl = el("dl");
     const row = (k, v) => dl.append(el("dt", "", k), el("dd", "", v));
-    row("Состав", dept.agents.map(a => a.id + " (" + a.kind + (a.roles.length ? ", " + a.roles.join(", ") : "") + ")").join(" · "));
-    row("Идёт", dept.running + " из " + dept.max_parallel);
+    row(t("Состав"), dept.agents.map(a => a.id + " (" + a.kind + (a.roles.length ? ", " + a.roles.join(", ") : "") + ")").join(" · "));
+    row(t("Идёт"), dept.running + t(" из ") + dept.max_parallel);
     const used = dept.month_tokens || {};
-    row("За месяц", money(dept.month_spent_usd) + (dept.limits.month_usd ? " из " + money(dept.limits.month_usd) : ""));
-    row("Токены", tokens(used.input) + " → " + tokens(used.output) + (used.unpriced_input ? ", из них без цены " + tokens(used.unpriced_input) + " → " + tokens(used.unpriced_output) : ""));
-    row("Задача", "до " + money(dept.limits.task_usd) + ", " + dept.limits.timeout_mins + " мин, кругов " + dept.limits.max_loops);
+    row(t("За месяц"), money(dept.month_spent_usd) + (dept.limits.month_usd ? t(" из ") + money(dept.limits.month_usd) : ""));
+    row(t("Токены"), tokens(used.input) + " → " + tokens(used.output) + (used.unpriced_input ? t(", из них без цены ") + tokens(used.unpriced_input) + " → " + tokens(used.unpriced_output) : ""));
+    row(t("Задача"), t("до ") + money(dept.limits.task_usd) + ", " + dept.limits.timeout_mins + t(" мин, кругов ") + dept.limits.max_loops);
     card.append(dl);
     if (dept.limits.month_usd) {
       const bar = el("progress"); bar.max = dept.limits.month_usd; bar.value = Math.min(dept.month_spent_usd, dept.limits.month_usd);
-      bar.setAttribute("aria-label", "Месячный лимит"); card.append(bar);
+      bar.setAttribute("aria-label", t("Месячный лимит")); card.append(bar);
     }
     depts.append(card);
   }
   right.append(depts);
 
   if (homeData.schedules.length) {
-    const sched = homeSection("Расписания");
+    const sched = homeSection(t("Расписания"));
     for (const item of homeData.schedules) {
       const card = el("article", "board-card");
-      const next = item.paused ? "на паузе" : item.next_ms ? "следующий запуск " + new Date(item.next_ms).toLocaleString() : "не запланировано";
+      const next = item.paused ? t("на паузе") : item.next_ms ? t("следующий запуск ") + new Date(item.next_ms).toLocaleString(language) : t("не запланировано");
       card.append(el("strong", "", item.title), el("div", "board-meta", item.department + " · " + item.cron + " · " + next));
       const path = "/api/schedules/" + encodeURIComponent(item.key);
       const btns = el("div", "btns");
       btns.append(
-        act(item.paused ? "Возобновить" : "Пауза", "", () => post(path + (item.paused ? "/resume" : "/pause"), {}), card),
-        act("Запустить сейчас", "", () => post(path + "/run", {}), card));
+        act(item.paused ? t("Возобновить") : t("Пауза"), "", () => post(path + (item.paused ? "/resume" : "/pause"), {}), card),
+        act(t("Запустить сейчас"), "", () => post(path + "/run", {}), card));
       card.append(btns, el("div", "board-error"));
       sched.append(card);
     }
     right.append(sched);
   }
   if (homeData.recent.length) {
-    const rules = homeSection("Последние правила");
+    const rules = homeSection(t("Последние правила"));
     for (const rule of homeData.recent) {
       const card = el("article", "board-card");
       card.append(el("div", "", rule.subject), el("div", "board-meta", rule.date + " · " + rule.commit.slice(0, 7)),
-        act("Отменить", "", () => post("/api/rules/revert/" + encodeURIComponent(rule.commit), {}), card), el("div", "board-error"));
+        act(t("Отменить"), "", () => post("/api/rules/revert/" + encodeURIComponent(rule.commit), {}), card), el("div", "board-error"));
       rules.append(card);
     }
     right.append(rules);
@@ -2657,24 +2963,32 @@ function scImg(name, size) {
   img.src = SC_IMG[name]; img.alt = ""; img.width = img.height = size || 16;
   return img;
 }
-function scPlural(n, one, few, many) {
-  const a = Math.abs(n) % 100, b = a % 10;
-  return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
-}
+const pluralWords = {
+  command: { ru: { one: "{n} команда", few: "{n} команды", many: "{n} команд", other: "{n} команды" }, en: { one: "{n} command", other: "{n} commands" } },
+  file: { ru: { one: "{n} файл", few: "{n} файла", many: "{n} файлов", other: "{n} файла" }, en: { one: "{n} file", other: "{n} files" } },
+  round: { ru: { one: "{n} круг", few: "{n} круга", many: "{n} кругов", other: "{n} круга" }, en: { one: "{n} round", other: "{n} rounds" } }
+};
 function scSecs(ms) {
   const s = Math.max(1, Math.round((ms || 0) / 1000));
-  if (s < 60) return s + " с";
+  if (language === "en") {
+    const unit = (n, name) => new Intl.NumberFormat(language, { style: "unit", unit: name, unitDisplay: "short" }).format(n);
+    if (s < 60) return unit(s, "second");
+    const m = Math.floor(s / 60), r = s % 60;
+    if (m < 60) return unit(m, "minute") + (r ? " " + unit(r, "second") : "");
+    return unit(Math.floor(m / 60), "hour") + " " + unit(m % 60, "minute");
+  }
+  if (s < 60) return s + t(" с");
   const m = Math.floor(s / 60), r = s % 60;
-  if (m < 60) return m + " мин" + (r ? " " + r + " с" : "");
-  return Math.floor(m / 60) + " ч " + (m % 60) + " мин";
+  if (m < 60) return m + t(" мин") + (r ? " " + r + t(" с") : "");
+  return Math.floor(m / 60) + t(" ч ") + (m % 60) + t(" мин");
 }
 function scWhen(ms) {
   if (!ms) return "";
   const d = new Date(ms), now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit" });
   const y = new Date(now); y.setDate(now.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return "вчера";
-  return d.toLocaleDateString("ru", { day: "numeric", month: "short" });
+  if (d.toDateString() === y.toDateString()) return t("вчера");
+  return d.toLocaleDateString(language, { day: "numeric", month: "short" });
 }
 function scToast(text) {
   const t = $("#sc-toast"); t.textContent = text; t.classList.add("sc-show");
@@ -2704,7 +3018,7 @@ function scRole(lane) {
   const m = scMember(lane);
   if (m && m.title) return m.title;
   const roles = m ? m.roles || [] : [];
-  const map = { doer: "исполнитель", reviewer: "ревьюер", small: "мелкие задачи", fallback: "запасной исполнитель" };
+  const map = { doer: t("исполнитель"), reviewer: t("ревьюер"), small: t("мелкие задачи"), fallback: t("запасной исполнитель") };
   for (const r of roles) if (map[r]) return map[r];
   return lane.member;
 }
@@ -2720,7 +3034,7 @@ function scModelLabel(m) {
   }
   return out;
 }
-const SC_EFFORT = { low: "Низкое", medium: "Среднее", high: "Высокое", xhigh: "Очень высокое", max: "Максимум" };
+const SC_EFFORT = { low: t("Низкое"), medium: t("Среднее"), high: t("Высокое"), xhigh: t("Очень высокое"), max: t("Максимум") };
 function scAgentIcon(lane, size) {
   const kind = lane ? scKind(lane) : "";
   if (kind === "codex") return scImg("openai", size);
@@ -2813,8 +3127,8 @@ function scToolLine(name, input) {
 }
 function scResLine(output, err) {
   const line = String(output || "").split("\n").map(s => s.trim()).find(Boolean) || "";
-  if (err) return "ошибка" + (line ? ": " + clip(line, 90) : "");
-  return line ? clip(line, 110) : "готово";
+  if (err) return t("ошибка") + (line ? ": " + clip(line, 90) : "");
+  return line ? clip(line, 110) : t("готово");
 }
 function scFileIcon(path) {
   const ext = String(path).split(".").pop().toLowerCase();
@@ -2822,7 +3136,7 @@ function scFileIcon(path) {
 }
 function scBase(path) { return String(path).split(/[\\/]/).pop(); }
 function scStepName(step, n) {
-  const names = { plan: "План", do: "Исполнение", review: "Ревью", fix: "Исправление" };
+  const names = { plan: t("План"), do: t("Исполнение"), review: t("Ревью"), fix: t("Исправление") };
   return (names[step] || step) + (n > 1 ? " " + n : "");
 }
 function scTag(cls, iconName, text) { const t = el("span", "sc-tag sc-" + cls); t.append(scG(iconName, 13), el("span", "", text)); return t; }
@@ -2843,8 +3157,8 @@ function scText(text) {
   const lines = String(text).replace(/\r/g, "").split("\n");
   while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
   const last = (lines[lines.length - 1] || "").trim().replace(/^\*+|\*+$/g, "");
-  if (/^VERDICT:\s*APPROVED$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", "Одобрено")); }
-  else if (/^PLAN:\s*DONE$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", "Разобрался, править не нужно")); }
+  if (/^VERDICT:\s*APPROVED$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", t("Одобрено"))); }
+  else if (/^PLAN:\s*DONE$/i.test(last)) { lines.pop(); box.append(scTag("ok", "check", t("Разобрался, править не нужно"))); }
   let list = null, para = null, pre = null;
   for (const raw of lines) {
     if (/^\s*```/.test(raw)) { if (pre) pre = null; else { pre = el("pre", "sc-code"); box.append(pre); list = para = null; } continue; }
@@ -2869,8 +3183,8 @@ function scText(text) {
 }
 function scClampable(node) {
   node.classList.add("sc-clamp");
-  const more = el("button", "sc-link sc-more", "Показать полностью"); more.type = "button";
-  more.onclick = () => { const open = node.classList.toggle("sc-clamp"); more.textContent = open ? "Показать полностью" : "Свернуть"; };
+  const more = el("button", "sc-link sc-more", t("Показать полностью")); more.type = "button";
+  more.onclick = () => { const open = node.classList.toggle("sc-clamp"); more.textContent = open ? t("Показать полностью") : t("Свернуть"); };
   const wrap = el("div"); wrap.append(node, more);
   return wrap;
 }
@@ -2885,13 +3199,13 @@ function scDom(lane) {
   const log = el("div", "sc-log");
   log.setAttribute("aria-live", "off");
   const live = el("div", "sc-liverow");
-  live.append(el("span", "sc-shimmer", "Думает…"), el("span", "sc-sec"));
+  live.append(el("span", "sc-shimmer", t("Думает…")), el("span", "sc-sec"));
   const form = el("form", "sc-cmp"), box = el("div", "sc-cmp-box"), ta = el("textarea");
   ta.rows = 1;
   const row = el("div", "sc-cmp-row"), access = el("span", "sc-pill"), model = el("span", "sc-pill sc-model");
-  const stop = el("button", "sc-send sc-stop"); stop.type = "button"; stop.append(scG("sq")); stop.title = "Остановить задачу";
-  stop.setAttribute("aria-label", "Остановить задачу");
-  const send = el("button", "sc-send"); send.type = "submit"; send.append(scG("up")); send.setAttribute("aria-label", "Отправить");
+  const stop = el("button", "sc-send sc-stop"); stop.type = "button"; stop.append(scG("sq")); stop.title = t("Остановить задачу");
+  stop.setAttribute("aria-label", t("Остановить задачу"));
+  const send = el("button", "sc-send"); send.type = "submit"; send.append(scG("up")); send.setAttribute("aria-label", t("Отправить"));
   const att = scAttacher();
   row.append(att.button, access, el("span", "sc-sp"), model, stop, send);
   box.append(att.tray, ta, row);
@@ -2908,11 +3222,11 @@ function scDom(lane) {
   form.onsubmit = async e => {
     e.preventDefault();
     const text = ta.value.trim(), files = att.paths();
-    if (att.busy()) { d.hintError = "Файлы ещё загружаются"; scLaneHead(lane); return; }
+    if (att.busy()) { d.hintError = t("Файлы ещё загружаются"); scLaneHead(lane); return; }
     if (!text && !files.length) { ta.focus(); return; }
     send.disabled = true; d.hintError = "";
     try { await post("/api/agent/note", { agent: lane.id, text: text || "Посмотри приложенные файлы.", files }); ta.value = ""; att.clear(); grow(); }
-    catch (err) { d.hintError = "Не отправлено: " + err.message; }
+    catch (err) { d.hintError = t("Не отправлено: ") + err.message; }
     finally { send.disabled = false; scLaneHead(lane); }
   };
   stop.onclick = async () => {
@@ -2920,7 +3234,7 @@ function scDom(lane) {
     if (!task) return;
     stop.disabled = true;
     try { await post(taskPath(task, "/stop"), {}); scToast("Задача остановлена. Её можно вернуть с запиской или запустить ещё раз."); }
-    catch (err) { d.hintError = "Не остановлено: " + err.message; scLaneHead(lane); }
+    catch (err) { d.hintError = t("Не остановлено: ") + err.message; scLaneHead(lane); }
     finally { stop.disabled = false; }
   };
   for (const env of lane.events) scDraw(lane, env, false);
@@ -2960,10 +3274,10 @@ function scClose(lane) {
   if (g.typing) g.typing();
 }
 function scGroupLabel(g, liveNow) {
-  if (g.kind === "think") { g.label.className = ""; g.label.textContent = "Думал " + scSecs(g.t1 - g.t0); return; }
-  const n = g.n + " " + scPlural(g.n, "команда", "команды", "команд");
-  if (g.open && liveNow) { g.label.className = "sc-shimmer"; g.label.textContent = "Работает · " + n; }
-  else { g.label.className = ""; g.label.textContent = "Работал " + scSecs(g.t1 - g.t0) + " · " + n; }
+  if (g.kind === "think") { g.label.className = ""; g.label.textContent = t("Думал ") + scSecs(g.t1 - g.t0); return; }
+  const n = tn(g.n, pluralWords.command);
+  if (g.open && liveNow) { g.label.className = "sc-shimmer"; g.label.textContent = t("Работает · ") + n; }
+  else { g.label.className = ""; g.label.textContent = t("Работал ") + scSecs(g.t1 - g.t0) + " · " + n; }
 }
 // Thinking that arrives live is typed out, then folds away when the agent acts.
 function scType(g, p, text) {
@@ -2987,23 +3301,23 @@ function scBrief(lane, h, text) {
   if (h) {
     const fl = sc.lanes.get(h.from);
     const who = fl ? scName(fl) : String(h.from).split(":")[1];
-    const label = { review: "Результат ", fix: "Замечания ", do: "План " }[h.step] || "От ";
+    const label = { review: t("Результат "), fix: t("Замечания "), do: t("План ") }[h.step] || t("От ");
     from.append(scAgentIcon(fl, 13), el("span", "", label + who));
     body = h.summary || text;
   } else {
-    from.append(scG("orch", 13), el("span", "", "Бриф от оркестратора"));
+    from.append(scG("orch", 13), el("span", "", t("Бриф от оркестратора")));
     const task = taskCards.get(lane.task);
     body = task ? task.title + (task.description && task.description.trim() !== task.title ? "\n\n" + task.description.trim() : "") : text;
   }
-  const t = el("div", "sc-in-t", clip(body.trim(), 4000));
-  b.append(from, t);
-  if (body.length > 360 || body.split("\n").length > 7) t.classList.add("sc-clamp");
-  const full = el("button", "sc-link sc-more", "Весь запрос"); full.type = "button";
+  const bodyNode = el("div", "sc-in-t", clip(body.trim(), 4000));
+  b.append(from, bodyNode);
+  if (body.length > 360 || body.split("\n").length > 7) bodyNode.classList.add("sc-clamp");
+  const full = el("button", "sc-link sc-more", t("Весь запрос")); full.type = "button";
   const pre = el("pre", "sc-pre"); pre.hidden = true;
   full.onclick = () => {
     if (!pre.textContent) pre.textContent = text;
-    pre.hidden = !pre.hidden; t.hidden = !pre.hidden;
-    full.textContent = pre.hidden ? "Весь запрос" : "Свернуть";
+    pre.hidden = !pre.hidden; bodyNode.hidden = !pre.hidden;
+    full.textContent = pre.hidden ? t("Весь запрос") : t("Свернуть");
   };
   b.append(full, pre);
   return b;
@@ -3013,27 +3327,27 @@ function scChange(path, patch) {
   const created = /^--- (\/dev\/null|a\/dev\/null)/m.test(patch) || /^new file/m.test(patch);
   const card = el("div", "sc-change"), head = el("div", "sc-change-h"), nm = el("span", "sc-nm");
   const counts = el("small"); counts.append(el("span", "sc-plus", "+" + c.add), " ", el("span", "sc-minus", "−" + c.del));
-  const title = el("b", "", (created ? "Создан " : "Изменён ") + scBase(path)); title.title = path;
+  const title = el("b", "", (created ? t("Создан ") : t("Изменён ")) + scBase(path)); title.title = path;
   nm.append(title, counts);
-  const toggle = el("button", "sc-btn", "Скрыть изменения"); toggle.type = "button";
+  const toggle = el("button", "sc-btn", t("Скрыть изменения")); toggle.type = "button";
   head.append(scImg(scFileIcon(path), 18), nm, toggle);
   const diff = el("div", "sc-diff");
   let shown = 0;
   for (const line of lines) {
     if (/^(diff |index |--- |\+\+\+ )/.test(line)) continue;
-    if (shown++ > 400) { diff.append(el("div", "sc-hk", "… ещё " + (lines.length - 400) + " строк")); break; }
+    if (shown++ > 400) { diff.append(el("div", "sc-hk", t("… ещё ") + (lines.length - 400) + t(" строк"))); break; }
     if (line.startsWith("@@")) diff.append(el("div", "sc-hk", line));
     else if (line.startsWith("+")) diff.append(el("div", "sc-a", line.slice(1)));
     else if (line.startsWith("-")) diff.append(el("div", "sc-d", line.slice(1)));
     else if (line) diff.append(el("div", "sc-c", line[0] === " " ? line.slice(1) : line));
   }
-  const set = open => { diff.hidden = !open; toggle.textContent = open ? "Скрыть изменения" : "Показать изменения"; };
+  const set = open => { diff.hidden = !open; toggle.textContent = open ? t("Скрыть изменения") : t("Показать изменения"); };
   set(c.add + c.del <= 24);
   toggle.onclick = () => set(diff.hidden);
   card.append(head, diff);
   return card;
 }
-const SC_NOTE = { queued_busy: "дойдёт после текущего шага", queued_idle: "уйдёт с его следующим шагом", delivered: "дошло", dropped: "не дошло: шаг этого агента уже не наступит" };
+const SC_NOTE = { queued_busy: t("дойдёт после текущего шага"), queued_idle: t("уйдёт с его следующим шагом"), delivered: t("дошло"), dropped: t("не дошло: шаг этого агента уже не наступит") };
 function scDraw(lane, env, live) {
   const d = lane.dom, ev = env.event, ts = env.ts_ms || Date.now();
   const prevTs = d.lastTs || ts;
@@ -3233,7 +3547,7 @@ function scSide() {
   const nodes = [], tasks = scTasks();
   const waits = tasks.filter(t => ownerWaits(t.work)).sort((a, b) => b.updated_ms - a.updated_ms);
   nodes.push(el("div", "sc-sec", "Ждёт вас"));
-  if (!waits.length && !homeData.proposals.length) nodes.push(el("div", "sc-si sc-quiet", "Ничего не ждёт вашего решения"));
+  if (!waits.length && !homeData.proposals.length) nodes.push(el("div", "sc-si sc-quiet", t("Ничего не ждёт вашего решения")));
   for (const t of waits) nodes.push(scItem(t, true));
   if (homeData.proposals.length) {
     const a = el("a", "sc-si"); a.href = "#";
@@ -3273,7 +3587,7 @@ function scSide() {
   if (homeData.spend) {
     const limit = homeData.departments.reduce((s, d) => s + (d.limits && d.limits.month_usd || 0), 0);
     const total = homeData.spend.total_usd || 0;
-    const month = new Date().toLocaleString("ru", { month: "long" });
+    const month = new Date().toLocaleString(language, { month: "long" });
     const line = el("div"); line.append(el("span", "", "Расход за " + month), el("b", "", money(total) + (limit ? " из " + money(limit) : "")));
     const nodesU = [line];
     if (limit) { const meter = el("span", "sc-meter" + (total > limit ? " sc-over" : "")); const i = el("i"); i.style.width = Math.min(100, total / limit * 100) + "%"; meter.append(i); nodesU.push(meter); }
@@ -3350,7 +3664,7 @@ function scSteps(task) {
 function scEmpty(task) {
   const box = el("div", "sc-empty");
   if (!task) {
-    box.append(el("h2", "", tasksLoaded ? "Задач пока нет" : "Загрузка…"));
+    box.append(el("h2", "", tasksLoaded ? "Задач пока нет" : t("Загрузка…")));
     if (tasksLoaded) { box.append(el("p", "sc-para", "Напишите оркестратору, что сделать: он разберёт сообщение на задачи и раздаст их отделам.")); const b = el("a", "sc-btn sc-primary", "Новая задача"); b.href = "#new"; box.append(el("div"), b); }
     return box;
   }
@@ -3430,7 +3744,7 @@ function scNoteForm(label, button, run, errBox, task) {
   const l = el("label", "", label); l.htmlFor = id;
   const ta = el("textarea"); ta.id = id; ta.placeholder = "Что поменять";
   const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
-  const cancel = el("button", "sc-btn", "Отмена"); cancel.type = "button";
+  const cancel = el("button", "sc-btn", t("Отмена")); cancel.type = "button";
   const btns = el("div", "sc-btns");
   const att = task ? scAttacher() : null;
   if (att) {
@@ -3551,7 +3865,7 @@ function scInfo(task) {
   const errBox = el("div", "sc-err-t"); errBox.setAttribute("role", "alert");
   const acts = el("div", "sc-acts");
   const back = (label, run) => {
-    const { form, ta } = scNoteForm(label, "Вернуть в работу", run, errBox, task); form.hidden = true;
+    const { form, ta } = scNoteForm(label, t("Вернуть в работу"), run, errBox, task); form.hidden = true;
     const open = el("button", "sc-btn"); open.type = "button"; open.append(scG("undo"), el("span", "", "Вернуть с запиской"));
     open.onclick = () => { form.hidden = !form.hidden; if (!form.hidden) ta.focus(); };
     acts.append(open, form);
@@ -3561,19 +3875,19 @@ function scInfo(task) {
     back("Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", text => scStopAndReturn(task, text));
     acts.append(scAct("Остановить задачу", "sc-danger", "sq", () => post(taskPath(task, "/stop"), {}), errBox));
   } else if (w.state === "review") {
-    acts.append(scAct(w.risk === "external" ? "Принять и выпустить" : "Принять", "sc-primary", "check", () => patchTask(task.id, { status: "done" }), errBox));
+    acts.append(scAct(w.risk === "external" ? "Принять и выпустить" : t("Принять"), "sc-primary", "check", () => patchTask(task.id, { status: "done" }), errBox));
     acts.append(scAct("Ещё круг", "", "run", () => post(taskPath(task, "/retry"), {}), errBox));
     back("Замечание отделу. Задача начнёт новый круг с ним в брифе.", text => post(taskPath(task, "/return"), { text }));
   } else if (w.state === "stuck") {
     acts.append(scAct("Ещё круг", "sc-primary", "run", () => post(taskPath(task, "/retry"), {}), errBox));
     back("Что поменять в новом круге.", text => post(taskPath(task, "/return"), { text }));
     acts.append(scAct("Принять как есть", "", "check", () => patchTask(task.id, { status: "done" }), errBox));
-    acts.append(scAct("Закрыть", "sc-danger", "x", () => patchTask(task.id, { status: "archived" }), errBox));
+    acts.append(scAct(t("Закрыть"), "sc-danger", "x", () => patchTask(task.id, { status: "archived" }), errBox));
   } else if (w.state === "waiting" && w.proposal) {
     acts.append(scAct("Создать отдел", "sc-primary", "check", () => post(taskPath(task, "/proposal"), { create: true }), errBox));
     acts.append(scAct("В общий отдел", "", "folder", () => post(taskPath(task, "/proposal"), { create: false }), errBox));
   } else if (w.state === "waiting" && (w.questions || []).some(q => q.answer == null)) {
-    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", "Ответить", text => post(taskPath(task, "/answer"), { text }), errBox, task);
+    const { form } = scNoteForm("Ответ на все вопросы одним сообщением.", t("Ответить"), text => post(taskPath(task, "/answer"), { text }), errBox, task);
     form.querySelector("textarea").placeholder = "Ответ";
     form.querySelector(".sc-btns .sc-btn:last-child").remove();
     acts.append(form);
@@ -3609,7 +3923,7 @@ function scDialog(title, label, button, needText, run) {
   if (needText) { ta = el("textarea"); ta.placeholder = "Что поменять"; ta.setAttribute("aria-label", label || title); form.append(ta); }
   const err = el("div", "sc-err-t");
   const send = el("button", "sc-btn sc-primary", button); send.type = "submit";
-  const cancel = el("button", "sc-btn", "Отмена"); cancel.type = "button";
+  const cancel = el("button", "sc-btn", t("Отмена")); cancel.type = "button";
   const btns = el("div", "sc-btns"); btns.append(send, cancel);
   form.append(btns, err);
   const close = () => { dlg.hidden = true; dlg.replaceChildren(); };
@@ -3636,11 +3950,11 @@ function scDrop(task, to) {
   const w = task.work, from = scColumn(task);
   if (from === to) return;
   if (to === "queue" && w.state === "running")
-    return scDialog("Вернуть задачу в очередь", "Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", "Вернуть в работу", true, text => scStopAndReturn(task, text));
+    return scDialog("Вернуть задачу в очередь", "Записка отделу. Задача остановится и начнёт новый круг с ней в брифе.", t("Вернуть в работу"), true, text => scStopAndReturn(task, text));
   if (to === "queue" && ["review", "stuck", "done"].includes(w.state))
-    return scDialog("Вернуть задачу в работу", "Записка отделу. Задача начнёт новый круг с ней в брифе.", "Вернуть в работу", true, text => post(taskPath(task, "/return"), { text }));
+    return scDialog("Вернуть задачу в работу", "Записка отделу. Задача начнёт новый круг с ней в брифе.", t("Вернуть в работу"), true, text => post(taskPath(task, "/return"), { text }));
   if (to === "done" && ["review", "stuck"].includes(w.state))
-    return scDialog(w.risk === "external" ? "Принять и выпустить?" : "Принять результат?", w.risk === "external" ? "Результат уйдёт наружу: пост, письмо или изменение в чужой системе." : "", "Принять", false, () => patchTask(task.id, { status: "done" }));
+    return scDialog(w.risk === "external" ? "Принять и выпустить?" : "Принять результат?", w.risk === "external" ? "Результат уйдёт наружу: пост, письмо или изменение в чужой системе." : "", t("Принять"), false, () => patchTask(task.id, { status: "done" }));
   scToast(w.state === "running" ? "Задача ещё идёт. Остановить её или вернуть с запиской можно перетаскиванием в очередь." : "Так перенести нельзя.");
 }
 function scBoard() {
@@ -3695,9 +4009,9 @@ function scCard(task) {
   const btns = el("div", "sc-btns"), errBox = el("div", "sc-err-t");
   if (silentRun(w)) btns.append(scAct("Подождать ещё", "", "", supervise(task, "wait"), errBox), scAct("Перезапустить шаг", "sc-primary", "", supervise(task, "restart"), errBox), scAct("Остановить", "sc-danger", "", supervise(task, "stop"), errBox));
   else if (w.comment_draft && w.state === "done") btns.append(scAct("Опубликовать комментарий", "sc-primary", "", supervise(task, "publish"), errBox), scAct("Не нужно", "", "", supervise(task, "drop"), errBox));
-  else if (w.state === "review" && ownerWaits(w)) btns.append(scAct("Принять", "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
+  else if (w.state === "review" && ownerWaits(w)) btns.append(scAct(t("Принять"), "sc-primary", "", () => patchTask(task.id, { status: "done" }), errBox), scAct("Ещё круг", "", "", () => post(taskPath(task, "/retry"), {}), errBox));
   else if (w.state === "stuck") btns.append(scAct("Ещё круг", "sc-primary", "", () => post(taskPath(task, "/retry"), {}), errBox));
-  else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? "Решить" : "Ответить"); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
+  else if (w.state === "waiting" && ownerWaits(w)) { const a = el("a", "sc-btn", w.proposal ? "Решить" : t("Ответить")); a.href = "#task=" + encodeURIComponent(task.id); btns.append(a); }
   if (btns.childNodes.length) card.append(btns, errBox);
   const open = () => { location.hash = "#task=" + encodeURIComponent(task.id); };
   card.addEventListener("click", e => { if (!e.target.closest("button, a")) open(); });
@@ -4008,7 +4322,7 @@ function scPickForTask(task) { scTaskFor = task; scTaskInput.click(); }
 async function scAttachToTask(task, files) {
   files = Array.from(files).slice(0, 20);
   if (!files.length) return;
-  scToast("Загружаю " + files.length + " " + scPlural(files.length, "файл", "файла", "файлов") + "…");
+  scToast("Загружаю " + tn(files.length, pluralWords.file) + "…");
   let batch = "";
   const paths = [], failed = [];
   for (const file of files) {
@@ -4226,7 +4540,7 @@ function scResult(task) {
   const av = el("span", "sc-ans-av"); av.append(doer ? scAgentIcon(doer, 18) : scG("folder", 16));
   who.append(av, el("b", "", d ? d.title : w.department));
   if (doer) who.append(el("span", "", scName(doer)));
-  who.append(el("small", "", [workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN > 1 ? runsN + " " + scPlural(runsN, "круг", "круга", "кругов") : ""].filter(Boolean).join(" · ")));
+  who.append(el("small", "", [workStates[w.state] || w.state, scWhen(scFinished(task)), money(w.cost_usd), runsN > 1 ? tn(runsN, pluralWords.round) : ""].filter(Boolean).join(" · ")));
   ans.append(who);
   ans.append(text ? scDoc(text) : el("p", "sc-doc-empty", cached ? "Итог не найден." : "Загружаю итог…"));
   const made = files.filter(f => f.kind === "artifact" && !f.name.startsWith("browser/"));
@@ -4362,9 +4676,9 @@ function rvPanel(model, ctx) {
   let added = 0, removed = 0;
   for (const f of files) { added += f.added || 0; removed += f.removed || 0; }
   const head = el("div", "rv-head");
-  head.append(el("b", "", files.length ? files.length + " " + scPlural(files.length, "файл", "файла", "файлов") : "Правок нет"));
+  head.append(el("b", "", files.length ? tn(files.length, pluralWords.file) : t("Правок нет")));
   if (files.length) head.append(rvCounts({ added, removed }));
-  if (ctx.reload) head.append(btn("Обновить", "rv-mini", ctx.reload));
+  if (ctx.reload) head.append(btn(t("Обновить"), "rv-mini", ctx.reload));
   head.append(el("div", "rv-src", rvSourceText(model)));
   root.append(head);
 
@@ -4380,7 +4694,7 @@ function rvPanel(model, ctx) {
     for (const n of root.querySelectorAll(".rv-note:not(.rv-form)")) n.remove();
     armed = false; clear.textContent = "Убрать все"; update();
   });
-  const send = btn(ctx.send ? ctx.send.label : "Отправить", ctx.scene ? "sc-primary" : "primary", async () => {
+  const send = btn(ctx.send ? ctx.send.label : t("Отправить"), ctx.scene ? "sc-primary" : "primary", async () => {
     if (!ctx.send || !drafts.length) return;
     send.disabled = true; status.className = "rv-hint"; status.textContent = "Отправляю…";
     try {
@@ -4422,7 +4736,7 @@ function rvPanel(model, ctx) {
     ta.setAttribute("aria-label", "Замечание: " + rvWhere(anchor));
     ta.placeholder = "Что не так и как надо";
     if (existing) { ta.value = existing.text; after.hidden = true; }
-    const save = btn(existing ? "Сохранить" : "Добавить", ctx.scene ? "sc-primary rv-mini" : "primary rv-mini", () => {
+    const save = btn(existing ? t("Сохранить") : t("Добавить"), ctx.scene ? "sc-primary rv-mini" : "primary rv-mini", () => {
       const text = ta.value.trim();
       if (!text) { ta.focus(); return; }
       let card;
@@ -4430,7 +4744,7 @@ function rvPanel(model, ctx) {
       else { const c = Object.assign({}, anchor, { text }); drafts.push(c); card = noteCard(c); form.after(card); }
       rvSave(ctx.scope); open.back = card.querySelector("button"); closeForm(); update();
     });
-    const cancel = btn("Отмена", "rv-mini", () => { if (existing) after.hidden = false; closeForm(); });
+    const cancel = btn(t("Отмена"), "rv-mini", () => { if (existing) after.hidden = false; closeForm(); });
     ta.addEventListener("keydown", e => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); save.click(); }
       else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancel.click(); }
@@ -4454,7 +4768,7 @@ function rvPanel(model, ctx) {
       const sum = el("summary");
       sum.append(el("span", "rv-fp", f.path), rvCounts(f), ...rvTags(f));
       const fileNotes = el("div");
-      const fileBtn = btn("Замечание к файлу", "rv-mini", e => {
+      const fileBtn = btn(t("Замечание к файлу"), "rv-mini", e => {
         e.preventDefault(); e.stopPropagation(); det.open = true; fill();
         openForm({ path: f.path, row: null, patch: null, line: null, side: null, quote: null }, fileNotes, fileBtn);
       });
@@ -4476,8 +4790,8 @@ function rvPanel(model, ctx) {
             const num = ln.kind === "del" ? ln.o : ln.n;
             const row = el("div", "rv-ln rv-" + ln.kind);
             const no = el("button", "rv-no", rvPad(ln.o) + " " + rvPad(ln.n)); no.type = "button";
-            no.setAttribute("aria-label", "Замечание к строке" + (num != null ? " " + num : "") + (ln.kind === "add" ? ", добавлена" : ln.kind === "del" ? ", удалена" : ""));
-            no.title = "Написать замечание к этой строке";
+            no.setAttribute("aria-label", t("Замечание к строке") + (num != null ? " " + num : "") + (ln.kind === "add" ? ", добавлена" : ln.kind === "del" ? ", удалена" : ""));
+            no.title = t("Написать замечание к этой строке");
             row.append(no, el("span", "rv-sg", ln.kind === "add" ? "+" : ln.kind === "del" ? "−" : " "), el("span", "rv-tx", ln.text || " "));
             box.append(row);
             const anchor = { path: f.path, patch: pi, row: ri, line: num == null ? null : num, side: ln.kind === "del" ? "old" : num != null ? "new" : null, quote: ln.text };
@@ -4533,10 +4847,10 @@ function rvSceneSend(task) {
     const lanes = (sc.byTask.get(task.id) || []).slice().sort((a, b) => (b.busy - a.busy) || (b.lastTs - a.lastTs));
     const lane = lanes[0];
     if (!lane) return null;
-    return { label: "Отправить агенту", hint: "Уйдёт запиской агенту " + scName(lane) + ": он получит её после текущего хода и ответит заново.", run: text => post("/api/agent/note", { agent: lane.id, text }) };
+    return { label: t("Отправить агенту"), hint: "Уйдёт запиской агенту " + scName(lane) + ": он получит её после текущего хода и ответит заново.", run: text => post("/api/agent/note", { agent: lane.id, text }) };
   }
   if (w.state === "review" || w.state === "stuck" || w.state === "done")
-    return { label: "Вернуть с замечаниями", hint: "Задача начнёт новый круг, замечания будут в её брифе.", run: text => post(taskPath(task, "/return"), { text }) };
+    return { label: t("Вернуть с замечаниями"), hint: "Задача начнёт новый круг, замечания будут в её брифе.", run: text => post(taskPath(task, "/return"), { text }) };
   return null;
 }
 function scReview(task) {
@@ -4566,7 +4880,7 @@ function scReview(task) {
   const reload = () => { rv.cache.delete(task.id); box.dataset.sig = ""; scDirty(); };
   if (cached.error) {
     const p = el("p", "rv-empty", "Правки не загрузились: " + cached.error + " ");
-    const again = el("button", "sc-btn", "Ещё раз"); again.type = "button"; again.onclick = reload;
+    const again = el("button", "sc-btn", t("Ещё раз")); again.type = "button"; again.onclick = reload;
     p.append(again);
     box.dataset.task = task.id; box.replaceChildren(p);
     return;
@@ -4597,7 +4911,7 @@ function rvAgentModel(agent) {
 }
 function rvPaneButton(agent) {
   const b = el("button", "rv-pane-btn", "Правки"); b.type = "button";
-  b.title = "Что этот агент менял в файлах за сессию";
+  b.title = t("Что этот агент менял в файлах за сессию");
   b.onclick = () => rvOpenAgent(agent);
   rv.paneBtns.set(agent, b);
   rvPaneCount(agent);
@@ -4608,7 +4922,7 @@ function rvPaneCount(agent) {
   if (!b) return;
   const n = new Set((rv.byAgent.get(agent) || []).map(d => d.path)).size;
   b.textContent = n ? "Правки · " + n : "Правки";
-  b.setAttribute("aria-label", n ? "Правки агента: " + n + " " + scPlural(n, "файл", "файла", "файлов") : "Правки агента: пока нет");
+  b.setAttribute("aria-label", n ? "Правки агента: " + tn(n, pluralWords.file) : "Правки агента: пока нет");
 }
 function rvOpenAgent(agent) {
   let dlg = $("#rv-dlg");
@@ -4622,12 +4936,12 @@ function rvOpenAgent(agent) {
   const top = el("div", "rv-dlg-top");
   const title = el("h2", "", "Правки · " + agent); title.id = "rv-dlg-title";
   dlg.setAttribute("aria-labelledby", title.id);
-  const refresh = el("button", "", "Обновить"); refresh.type = "button"; refresh.onclick = () => rvOpenAgent(agent);
-  const close = el("button", "", "Закрыть"); close.type = "button"; close.onclick = () => dlg.close();
+  const refresh = el("button", "", t("Обновить")); refresh.type = "button"; refresh.onclick = () => rvOpenAgent(agent);
+  const close = el("button", "", t("Закрыть")); close.type = "button"; close.onclick = () => dlg.close();
   top.append(title, refresh, close);
   inner.append(top, rvPanel(rvAgentModel(agent), {
     scope: "agent:" + agent, scene: false, reload: null,
-    send: { label: "Отправить агенту", hint: "Уйдёт агенту " + agent + " обычным заданием. Если он занят, дождитесь конца хода.", run: text => post("/api/prompt", { agent, text }) },
+    send: { label: t("Отправить агенту"), hint: "Уйдёт агенту " + agent + " обычным заданием. Если он занят, дождитесь конца хода.", run: text => post("/api/prompt", { agent, text }) },
   }));
   dlg.replaceChildren(inner);
   if (!dlg.open) dlg.showModal();
